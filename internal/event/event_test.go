@@ -71,6 +71,56 @@ func TestEventJSONRoundTrip(t *testing.T) {
 	}
 }
 
+func TestComputeHash(t *testing.T) {
+	base := Event{
+		SpecVersion: SpecVersion, ID: "1", Time: "2026-06-10T00:00:00Z",
+		Source: "lib", Subject: "/books/42", Type: "acquired",
+		DataContentType: JSONContentType, Data: json.RawMessage(`{"k":1}`),
+		PredecessorHash: GenesisHash,
+	}
+
+	h := ComputeHash(base)
+	if len(h) != 64 {
+		t.Fatalf("hash-länge = %d, want 64 (hex sha256)", len(h))
+	}
+	if h != ComputeHash(base) {
+		t.Fatal("ComputeHash ist nicht deterministisch")
+	}
+
+	// Hash und Signature dürfen NICHT eingehen.
+	withMeta := base
+	withMeta.Hash = "egal"
+	sig := "sig"
+	withMeta.Signature = &sig
+	if ComputeHash(withMeta) != h {
+		t.Fatal("hash/signature dürfen den Hash nicht beeinflussen")
+	}
+
+	// Jede inhaltliche Änderung muss den Hash ändern.
+	for name, mut := range map[string]func(*Event){
+		"type":            func(e *Event) { e.Type = "borrowed" },
+		"data":            func(e *Event) { e.Data = json.RawMessage(`{"k":2}`) },
+		"subject":         func(e *Event) { e.Subject = "/books/43" },
+		"predecessorhash": func(e *Event) { e.PredecessorHash = "ff" },
+	} {
+		e := base
+		mut(&e)
+		if ComputeHash(e) == h {
+			t.Fatalf("Änderung an %q ließ den Hash unverändert", name)
+		}
+	}
+}
+
+// TestComputeHashFieldBoundaries: Längenpräfixe verhindern, dass sich
+// Feldgrenzen verschieben lassen (z. B. ("ab","c") vs ("a","bc")).
+func TestComputeHashFieldBoundaries(t *testing.T) {
+	a := Event{Source: "ab", Subject: "c", PredecessorHash: GenesisHash}
+	b := Event{Source: "a", Subject: "bc", PredecessorHash: GenesisHash}
+	if ComputeHash(a) == ComputeHash(b) {
+		t.Fatal("Feldgrenzen-Kollision: ('ab','c') und ('a','bc') ergeben denselben Hash")
+	}
+}
+
 // TestDataOmittedWhenEmpty: leeres data erscheint nicht im JSON (omitempty).
 func TestDataOmittedWhenEmpty(t *testing.T) {
 	raw, err := json.Marshal(Event{SpecVersion: SpecVersion, ID: "1", Subject: "/a", Source: "s", Type: "t"})

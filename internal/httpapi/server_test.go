@@ -315,6 +315,32 @@ func TestReadEventsTypesBadRequest(t *testing.T) {
 	}
 }
 
+func TestVerifyEndpoint(t *testing.T) {
+	srv := newTestServer(t)
+	do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token",
+		`{"events":[{"source":"s","subject":"/a","type":"t1"},{"source":"s","subject":"/a","type":"t2"}]}`)
+
+	// Ohne Token -> 401.
+	if rec := do(t, srv, http.MethodGet, "/api/v1/verify", "", ""); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("ohne token: status = %d, want 401", rec.Code)
+	}
+
+	rec := do(t, srv, http.MethodGet, "/api/v1/verify", "secret-token", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var res struct {
+		OK    bool   `json:"ok"`
+		Count uint64 `json:"count"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil {
+		t.Fatalf("antwort dekodieren: %v", err)
+	}
+	if !res.OK || res.Count != 2 {
+		t.Fatalf("verify = %+v, want ok=true count=2", res)
+	}
+}
+
 func TestOpenAPISpec(t *testing.T) {
 	srv := newTestServer(t)
 	// Ohne Auth erreichbar (Doku ist nicht sensibel).

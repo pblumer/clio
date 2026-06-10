@@ -67,6 +67,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/write-events", s.requireAuth(s.handleWriteEvents))
 	s.mux.HandleFunc("POST /api/v1/read-events", s.requireAuth(s.handleReadEvents))
 	s.mux.HandleFunc("POST /api/v1/observe-events", s.requireAuth(s.handleObserveEvents))
+	s.mux.HandleFunc("GET /api/v1/verify", s.requireAuth(s.handleVerify))
 
 	// Komfort-Leseroute: GET /api/v1/events/<subject> (Subject = Pfad). Optionen
 	// als Query-Parameter (recursive, lowerBound, upperBound, type, watch).
@@ -90,6 +91,19 @@ func (s *Server) handleOpenAPISpec(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handlePing(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleVerify rechnet die Hash-Kette nach und meldet, ob die Historie
+// unverändert ist. Eine erkannte Manipulation ergibt HTTP 200 mit ok=false
+// (die Prüfung selbst war erfolgreich) — erst ein interner Fehler ergibt 500.
+func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
+	res, err := s.store.Verify()
+	if err != nil {
+		s.logger.Error("verify fehlgeschlagen", "err", err)
+		writeError(w, http.StatusInternalServerError, "interner fehler bei der prüfung")
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
 }
 
 // preconditionWire ist die Drahtdarstellung einer Precondition im
