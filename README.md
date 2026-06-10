@@ -211,6 +211,15 @@ curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:3000/api/v1/verify
 Eine optionale Signatur (Authentizität) ist als `signature`-Feld vorgesehen,
 im aktuellen Integritäts-Modus aber `null`.
 
+### Verfügbare Event-Typen
+
+```bash
+# Alle bisher geschriebenen Typen (mit Anzahl), als NDJSON
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:3000/api/v1/read-event-types
+# -> {"type":"acquired","count":2}
+#    {"type":"borrowed","count":1}
+```
+
 ## Observability
 
 Jede Anfrage wird strukturiert geloggt (Methode, Route, Status, Dauer). Unter

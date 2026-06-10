@@ -155,6 +155,22 @@ paths:
             text/plain:
               schema: { type: string }
 
+  /api/v1/read-event-types:
+    get:
+      tags: [Events]
+      summary: Alle bisher geschriebenen Event-Typen auflisten
+      description: NDJSON, ein `{type,count}`-Objekt pro Zeile (alphabetisch).
+      responses:
+        "200":
+          description: Event-Typen als NDJSON
+          content:
+            application/x-ndjson:
+              schema:
+                type: string
+                description: NDJSON von TypeInfo-Objekten
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
   /api/v1/verify:
     get:
       tags: [Events]
@@ -293,6 +309,11 @@ components:
           type: string
           nullable: true
           description: Optionale Signatur (im Integritäts-Modus null)
+    TypeInfo:
+      type: object
+      properties:
+        type: { type: string, example: "io.example.library.book-acquired" }
+        count: { type: integer, description: "Anzahl Events dieses Typs" }
     VerifyResult:
       type: object
       properties:
