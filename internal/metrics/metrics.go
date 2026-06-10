@@ -1,0 +1,131 @@
+// Package metrics stellt einen schlanken, abhängigkeitsfreien Metrik-Sammler
+// im Prometheus-Textformat bereit (kein Prometheus-Client nötig).
+package metrics
+
+import (
+	"fmt"
+	"io"
+	"sort"
+	"strconv"
+	"sync"
+	"time"
+)
+
+// durationBuckets sind die (kumulativen) le-Grenzen des Latenz-Histogramms.
+var durationBuckets = []float64{
+	0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5,
+}
+
+type reqKey struct {
+	method string
+	route  string
+	status int
+}
+
+// Gauges sind Momentaufnahmen, die beim Rendern von außen geliefert werden.
+type Gauges struct {
+	ActiveObservers int
+	EventsTotal     uint64
+}
+
+// Metrics sammelt HTTP- und Domänen-Metriken. Alle Methoden sind nebenläufig
+// sicher.
+type Metrics struct {
+	mu                   sync.Mutex
+	requests             map[reqKey]uint64
+	bucket               []uint64 // kumulativ, parallel zu durationBuckets
+	durSum               float64
+	durCount             uint64
+	eventsWritten        uint64
+	preconditionFailures uint64
+}
+
+// New erstellt einen leeren Sammler.
+func New() *Metrics {
+	return &Metrics{
+		requests: make(map[reqKey]uint64),
+		bucket:   make([]uint64, len(durationBuckets)),
+	}
+}
+
+// ObserveRequest verbucht eine abgeschlossene HTTP-Anfrage.
+func (m *Metrics) ObserveRequest(method, route string, status int, d time.Duration) {
+	secs := d.Seconds()
+	m.mu.Lock()
+	m.requests[reqKey{method, route, status}]++
+	m.durSum += secs
+	m.durCount++
+	for i, b := range durationBuckets {
+		if secs <= b {
+			m.bucket[i]++
+		}
+	}
+	m.mu.Unlock()
+}
+
+// AddEventsWritten zählt erfolgreich geschriebene Events.
+func (m *Metrics) AddEventsWritten(n int) {
+	m.mu.Lock()
+	m.eventsWritten += uint64(n)
+	m.mu.Unlock()
+}
+
+// IncPreconditionFailure zählt eine fehlgeschlagene Precondition (HTTP 409).
+func (m *Metrics) IncPreconditionFailure() {
+	m.mu.Lock()
+	m.preconditionFailures++
+	m.mu.Unlock()
+}
+
+// Write rendert alle Metriken im Prometheus-Textformat.
+func (m *Metrics) Write(w io.Writer, g Gauges) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	fmt.Fprintln(w, "# HELP clio_http_requests_total Anzahl der HTTP-Anfragen.")
+	fmt.Fprintln(w, "# TYPE clio_http_requests_total counter")
+	keys := make([]reqKey, 0, len(m.requests))
+	for k := range m.requests {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].route != keys[j].route {
+			return keys[i].route < keys[j].route
+		}
+		if keys[i].method != keys[j].method {
+			return keys[i].method < keys[j].method
+		}
+		return keys[i].status < keys[j].status
+	})
+	for _, k := range keys {
+		fmt.Fprintf(w, "clio_http_requests_total{method=%q,route=%q,status=\"%d\"} %d\n",
+			k.method, k.route, k.status, m.requests[k])
+	}
+
+	fmt.Fprintln(w, "# HELP clio_http_request_duration_seconds Antwortzeit der HTTP-Anfragen.")
+	fmt.Fprintln(w, "# TYPE clio_http_request_duration_seconds histogram")
+	for i, b := range durationBuckets {
+		fmt.Fprintf(w, "clio_http_request_duration_seconds_bucket{le=%q} %d\n", formatFloat(b), m.bucket[i])
+	}
+	fmt.Fprintf(w, "clio_http_request_duration_seconds_bucket{le=\"+Inf\"} %d\n", m.durCount)
+	fmt.Fprintf(w, "clio_http_request_duration_seconds_sum %s\n", formatFloat(m.durSum))
+	fmt.Fprintf(w, "clio_http_request_duration_seconds_count %d\n", m.durCount)
+
+	writeCounter(w, "clio_events_written_total", "Anzahl geschriebener Events.", m.eventsWritten)
+	writeCounter(w, "clio_precondition_failures_total", "Fehlgeschlagene Preconditions (HTTP 409).", m.preconditionFailures)
+
+	writeGauge(w, "clio_active_observers", "Aktuell offene observe-Verbindungen.", uint64(g.ActiveObservers))
+	writeGauge(w, "clio_events_total", "Anzahl gespeicherter Events.", g.EventsTotal)
+}
+
+func writeCounter(w io.Writer, name, help string, v uint64) {
+	fmt.Fprintf(w, "# HELP %s %s\n# TYPE %s counter\n%s %d\n", name, help, name, name, v)
+}
+
+func writeGauge(w io.Writer, name, help string, v uint64) {
+	fmt.Fprintf(w, "# HELP %s %s\n# TYPE %s gauge\n%s %d\n", name, help, name, name, v)
+}
+
+func formatFloat(f float64) string {
+	return strconv.FormatFloat(f, 'g', -1, 64)
+}

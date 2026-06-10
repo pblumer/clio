@@ -167,6 +167,16 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
+// Count liefert die Anzahl gespeicherter Events (O(1) über die bbolt-Sequenz).
+func (s *Store) Count() (uint64, error) {
+	var n uint64
+	err := s.db.View(func(tx *bolt.Tx) error {
+		n = tx.Bucket(bucketEvents).Sequence()
+		return nil
+	})
+	return n, err
+}
+
 // Append prüft die Preconditions und speichert anschließend eine oder mehrere
 // Candidates atomar (alles-oder-nichts). Schlägt eine Precondition fehl, wird
 // nichts geschrieben und ein in ErrPreconditionFailed gehüllter Fehler
