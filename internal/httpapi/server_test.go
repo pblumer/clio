@@ -315,6 +315,107 @@ func TestReadEventsTypesBadRequest(t *testing.T) {
 	}
 }
 
+func TestEventsPathRead(t *testing.T) {
+	srv := newTestServer(t)
+	do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token",
+		`{"events":[
+			{"source":"s","subject":"/books/42","type":"acquired"},
+			{"source":"s","subject":"/books/42","type":"borrowed"},
+			{"source":"s","subject":"/books/99","type":"acquired"}
+		]}`)
+
+	tests := []struct {
+		name    string
+		path    string
+		wantIDs []string
+	}{
+		{"leaf", "/api/v1/events/books/42", []string{"1", "2"}},
+		{"eltern auto-rekursiv", "/api/v1/events/books", []string{"1", "2", "3"}},
+		{"wurzel", "/api/v1/events", []string{"1", "2", "3"}},
+		{"typ-filter", "/api/v1/events/books?type=acquired", []string{"1", "3"}},
+		{"recursive=false auf eltern", "/api/v1/events/books?recursive=false", nil},
+		{"bounds", "/api/v1/events/books?lowerBound=2&upperBound=2", []string{"2"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := do(t, srv, http.MethodGet, tt.path, "secret-token", "")
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200", rec.Code)
+			}
+			got := decodeNDJSON(t, rec.Body.String())
+			if len(got) != len(tt.wantIDs) {
+				t.Fatalf("ids = %v, want %v", idsOfEvents(got), tt.wantIDs)
+			}
+			for i := range tt.wantIDs {
+				if got[i].ID != tt.wantIDs[i] {
+					t.Fatalf("ids = %v, want %v", idsOfEvents(got), tt.wantIDs)
+				}
+			}
+		})
+	}
+}
+
+func TestEventsPathAuthAndBadRequest(t *testing.T) {
+	srv := newTestServer(t)
+	tests := []struct {
+		name, token, path string
+		want              int
+	}{
+		{"kein token", "", "/api/v1/events/books", http.StatusUnauthorized},
+		{"recursive kaputt", "secret-token", "/api/v1/events/books?recursive=vielleicht", http.StatusBadRequest},
+		{"lowerBound kaputt", "secret-token", "/api/v1/events/books?lowerBound=x", http.StatusBadRequest},
+		{"leerer typ", "secret-token", "/api/v1/events/books?type=", http.StatusBadRequest},
+		{"watch kaputt", "secret-token", "/api/v1/events/books?watch=jain", http.StatusBadRequest},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := do(t, srv, http.MethodGet, tt.path, tt.token, "")
+			if rec.Code != tt.want {
+				t.Fatalf("status = %d, want %d", rec.Code, tt.want)
+			}
+		})
+	}
+}
+
+// TestEventsPathWatch: GET .../events/<subject>?watch=true streamt History + Live.
+func TestEventsPathWatch(t *testing.T) {
+	srv := newTestServer(t)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	writeViaHTTP(t, ts.URL, `{"events":[{"source":"s","subject":"/w/1","type":"h"}]}`)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL+"/api/v1/events/w?watch=true", nil)
+	req.Header.Set("Authorization", "Bearer secret-token")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("watch-request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	reader := bufio.NewReader(resp.Body)
+
+	if h := readStreamEvent(t, reader); h.Type != "h" {
+		t.Fatalf("history type = %q, want h", h.Type)
+	}
+	writeViaHTTP(t, ts.URL, `{"events":[{"source":"s","subject":"/w/2","type":"live"}]}`)
+	if l := readStreamEvent(t, reader); l.Type != "live" {
+		t.Fatalf("live type = %q, want live", l.Type)
+	}
+}
+
+func idsOfEvents(events []event.Event) []string {
+	var ids []string
+	for _, e := range events {
+		ids = append(ids, e.ID)
+	}
+	return ids
+}
+
 func TestObserveEventsBadRequest(t *testing.T) {
 	srv := newTestServer(t)
 	tests := []struct {

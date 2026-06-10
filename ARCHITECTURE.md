@@ -5,7 +5,7 @@
 >
 > **Status des Gesamtprojekts:** `IN ENTWICKLUNG` — Stufe 0–2 abgeschlossen; Stufe 3 weit fortgeschritten: **Group Commit** (Durchsatz bei voller Durability, `CLIO_SYNC`), Crash-Recovery durch bbolt-ACID, **Distribution** (statische Cross-Builds via `make dist`, Docker-Image, Release-Workflow). Offen in Stufe 3: Kompaktierung, Metrics/Observability.
 > **Letzte Aktualisierung:** 2026-06-10
-> **Dokumentversion:** 1.9
+> **Dokumentversion:** 1.10
 
 ---
 
@@ -109,6 +109,7 @@ Alle Routen nutzen **POST** (außer ggf. `ping`), weil Parameter im Request-Body
 | `POST /api/v1/write-events` | Ein oder mehrere Event-Candidates atomar schreiben, optional mit Preconditions | 0 → 1 |
 | `POST /api/v1/read-events` | Events eines Subjects lesen; Optionen: `recursive`, `lowerBound`, `upperBound`, `types` (Filter nach Event-Typ) | 0 → 1 |
 | `POST /api/v1/observe-events` | Wie read (inkl. `recursive`, `lowerBound`, `types`), aber Verbindung bleibt offen für Live-Updates; Reconnect via `lowerBound` | 2 |
+| `GET /api/v1/events/<subject>` | Komfort-Leseroute: Subject = URL-Pfad; Optionen als Query (`recursive` (Default true), `lowerBound`, `upperBound`, `type` (wiederholbar), `watch=true` für Live). `GET /api/v1/events` = Wurzel | 3 |
 | `POST /api/v1/run-eventql-query` | EventQL-Abfrage (spätes Ziel) | 4 |
 
 **Auth:** Header `Authorization: Bearer <API_TOKEN>` gegen ein konfiguriertes Einzeltoken.
@@ -243,6 +244,12 @@ Jede Stufe ist für sich lauffähig. Statusmarkierungen: `⬜ offen` · `🟡 in
 - **Kontext:** Der Schreibdurchsatz ist durch `fsync` pro Transaktion begrenzt (Durability vs. Performance). Ziel ist hoher Durchsatz *ohne* Durability aufzugeben. Storage-Engine bleibt bbolt (ADR-006 bestätigt).
 - **Entscheidung:** Writes laufen standardmäßig über bbolts `Batch` (**Group Commit**): gleichzeitige Schreibvorgänge werden zu möglichst wenigen Transaktionen mit *einem* `fsync` pro Batch gebündelt. Umschaltbar via `CLIO_SYNC`: `group` (Default), `always` (fsync pro Write, geringste Einzel-Latenz), `off` (kein fsync, maximaler Durchsatz, Crash-Verlust möglich).
 - **Konsequenzen:** Unter gleichzeitiger Last drastisch höherer Durchsatz bei voller Durability (Benchmark: ~31× gegenüber `always`, nahe an `off`). Nachteil: bei *einzelnen, sequentiellen* Schreibern erhöht die Batch-Verzögerung die Latenz — dann ist `always` (oder `off`) die bessere Wahl. Die `Batch`-Funktion kann die Schreibfunktion bei Retries mehrfach aufrufen; sie ist daher idempotent gehalten.
+
+### ADR-010: Komfort-Leseroute `GET /api/v1/events/<subject>`
+- **Status:** Akzeptiert
+- **Kontext:** Die ursprüngliche Entscheidung (Abschnitt 5) ist „alles POST mit JSON-Body" (wie beim Vorbild). Für schnelles Lesen mit `curl`/Tools ist eine pfadbasierte GET-Route deutlich ergonomischer, da Subjects ohnehin hierarchische URL-Pfade sind.
+- **Entscheidung:** Zusätzliche, schreibgeschützte Route `GET /api/v1/events/<subject>` (namespaced unter `/events/`, um Kollisionen mit reservierten Routen zu vermeiden). Subject = Pfad; Optionen als Query (`recursive`, Default `true` für natürliches „alles unterhalb"; `lowerBound`/`upperBound`; `type` wiederholbar; `watch=true` für Live-Streaming). `GET /api/v1/events` ohne Subject = Wurzel. Die POST-Routen bleiben unverändert; Read/Observe teilen denselben Kern (`doRead`/`doObserve`).
+- **Konsequenzen:** Bequemes Lesen/Beobachten ohne Body. Auth weiterhin per Bearer-Header — direktes Öffnen im Browser (ohne Header) ist damit nicht vorgesehen. `recursive` defaultet hier auf `true` (abweichend von `read-events`), passend zum Pfad-Browsing.
 
 ---
 
