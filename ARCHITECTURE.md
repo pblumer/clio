@@ -3,9 +3,9 @@
 > **Zweck dieses Dokuments**
 > Dieses Dokument ist die *Single Source of Truth* für das Projekt. Es ist so geschrieben, dass eine KI oder eine Person ohne Vorwissen nach dem Lesen vollständig versteht: **Was** gebaut wird, **warum**, **welche Ziele** verfolgt werden, **welche Entscheidungen** getroffen wurden und **wo das Projekt aktuell steht**. Es kombiniert ein Kontextdokument mit eingebetteten Architecture Decision Records (ADRs).
 >
-> **Status des Gesamtprojekts:** `KONZEPT` — noch kein Code geschrieben. Dies ist das Gründungsdokument.
+> **Status des Gesamtprojekts:** `IN ENTWICKLUNG` — Stufe 0 begonnen (Walking Skeleton: HTTP-Server, `/api/v1/ping`, Auth-Middleware, Config).
 > **Letzte Aktualisierung:** 2026-06-10
-> **Dokumentversion:** 1.2
+> **Dokumentversion:** 1.3
 
 ---
 
@@ -138,13 +138,14 @@ Felder `id`, `time`, `specversion` werden **serverseitig** ergänzt.
 
 Jede Stufe ist für sich lauffähig. Statusmarkierungen: `⬜ offen` · `🟡 in Arbeit` · `✅ fertig`.
 
-### Stufe 0 — MVP `⬜`
+### Stufe 0 — MVP `🟡`
 *Schätzung: 1–2 Wochen (1 Person)*
+- [x] Projekt-Skelett: Go-Modul `github.com/pblumer/clio`, HTTP-Server, Graceful Shutdown, Config via Env (`CLIO_ADDR`, `CLIO_API_TOKEN`)
+- [x] `ping` (`GET`/`POST /api/v1/ping`)
+- [x] Bearer-Token-Auth-Middleware (ein Token via Env-Var, konstante Vergleichszeit) — verdrahtet ab den geschützten Routen
 - [ ] `write-events`: Candidate validieren, CloudEvents-Felder ergänzen, append-only schreiben
 - [ ] `read-events`: Events eines Subjects als NDJSON
-- [ ] `ping`
-- [ ] Bearer-Token-Auth (ein Token via Env-Var)
-- [ ] Storage: append-only Log (Datei) + In-Memory-Index `subject → []offset`, oder `bbolt`
+- [ ] Storage: `bbolt` (entschieden für Stufe 0) — Index `subject → []offset`
 - **Ergebnis:** Events können geschrieben und gelesen werden.
 
 ### Stufe 1 — Ordnung & Concurrency `⬜`
@@ -237,7 +238,7 @@ Jede Stufe ist für sich lauffähig. Statusmarkierungen: `⬜ offen` · `🟡 in
 
 ## 8. Offene Fragen / zu entscheiden
 
-- Persistenz für Stufe 0: eigenes Datei-Log vs. `bbolt`? (Tendenz: `bbolt` für schnellen, korrekten Start.)
+- ~~Persistenz für Stufe 0: eigenes Datei-Log vs. `bbolt`?~~ **Entschieden:** `bbolt` (schneller, korrekter Start).
 - Genaues Format der `fromLatestEvent`-Option und deren Semantik bei fehlendem Event.
 - fsync-Politik: pro Write vs. gebündelt (Durability-/Performance-Abwägung) — spätestens Stufe 3.
 - Versionierung von Event-Typen: nur Konvention oder Tooling-Unterstützung?
