@@ -29,6 +29,18 @@ func main() {
 	}
 }
 
+// syncMode übersetzt den (bereits validierten) Config-Wert in store.SyncMode.
+func syncMode(s string) store.SyncMode {
+	switch s {
+	case "always":
+		return store.SyncAlways
+	case "off":
+		return store.SyncOff
+	default:
+		return store.SyncGroup
+	}
+}
+
 // run startet den Server und blockiert, bis ctx abgebrochen wird (Graceful
 // Shutdown) oder der Server mit einem Fehler endet.
 func run(ctx context.Context, logger *slog.Logger) error {
@@ -37,7 +49,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		return err
 	}
 
-	st, err := store.Open(cfg.DBPath)
+	st, err := store.OpenWithOptions(cfg.DBPath, store.Options{SyncMode: syncMode(cfg.Sync)})
 	if err != nil {
 		return err
 	}
@@ -46,7 +58,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 			logger.Error("store schließen fehlgeschlagen", "err", err)
 		}
 	}()
-	logger.Info("store geöffnet", "path", cfg.DBPath)
+	logger.Info("store geöffnet", "path", cfg.DBPath, "sync", cfg.Sync)
 
 	srv := &http.Server{
 		Addr:              cfg.Addr,

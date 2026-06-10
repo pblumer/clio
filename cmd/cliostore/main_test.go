@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/pblumer/clio/internal/store"
 )
 
 func quietLogger() *slog.Logger {
@@ -31,6 +33,20 @@ func TestRunStoreError(t *testing.T) {
 	err := run(context.Background(), quietLogger())
 	if err == nil {
 		t.Fatal("erwartete fehler bei ungültigem db-pfad, bekam nil")
+	}
+}
+
+func TestSyncMode(t *testing.T) {
+	tests := map[string]store.SyncMode{
+		"group":   store.SyncGroup,
+		"always":  store.SyncAlways,
+		"off":     store.SyncOff,
+		"unknown": store.SyncGroup, // Fallback
+	}
+	for in, want := range tests {
+		if got := syncMode(in); got != want {
+			t.Errorf("syncMode(%q) = %v, want %v", in, got, want)
+		}
 	}
 }
 
