@@ -1,6 +1,7 @@
 package store
 
 import (
+	"errors"
 	"path/filepath"
 	"strconv"
 	"testing"
@@ -10,17 +11,24 @@ import (
 	"github.com/pblumer/clio/internal/event"
 )
 
-func TestAppendAssignsMonotonicIDs(t *testing.T) {
-	st := openTemp(t)
-
-	got, err := st.Append([]event.Candidate{
-		{Source: "s", Subject: "/a", Type: "t1"},
-		{Source: "s", Subject: "/b", Type: "t2"},
-		{Source: "s", Subject: "/a", Type: "t3"},
-	})
+// appendAll ist ein Test-Helfer für Writes ohne Preconditions.
+func appendAll(t *testing.T, st *Store, cands ...event.Candidate) []event.Event {
+	t.Helper()
+	got, err := st.Append(cands, nil)
 	if err != nil {
 		t.Fatalf("append: %v", err)
 	}
+	return got
+}
+
+func TestAppendAssignsMonotonicIDs(t *testing.T) {
+	st := openTemp(t)
+
+	got := appendAll(t, st,
+		event.Candidate{Source: "s", Subject: "/a", Type: "t1"},
+		event.Candidate{Source: "s", Subject: "/b", Type: "t2"},
+		event.Candidate{Source: "s", Subject: "/a", Type: "t3"},
+	)
 	if len(got) != 3 {
 		t.Fatalf("len = %d, want 3", len(got))
 	}
@@ -36,16 +44,13 @@ func TestAppendAssignsMonotonicIDs(t *testing.T) {
 
 func TestReadSubjectFiltersAndOrders(t *testing.T) {
 	st := openTemp(t)
-	_, err := st.Append([]event.Candidate{
-		{Source: "s", Subject: "/a", Type: "first"},
-		{Source: "s", Subject: "/b", Type: "other"},
-		{Source: "s", Subject: "/a", Type: "second"},
-	})
-	if err != nil {
-		t.Fatalf("append: %v", err)
-	}
+	appendAll(t, st,
+		event.Candidate{Source: "s", Subject: "/a", Type: "first"},
+		event.Candidate{Source: "s", Subject: "/b", Type: "other"},
+		event.Candidate{Source: "s", Subject: "/a", Type: "second"},
+	)
 
-	got, err := st.ReadSubject("/a")
+	got, err := st.ReadSubject("/a", ReadOptions{})
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -53,7 +58,7 @@ func TestReadSubjectFiltersAndOrders(t *testing.T) {
 		t.Fatalf("unerwartetes ergebnis: %+v", got)
 	}
 
-	empty, err := st.ReadSubject("/missing")
+	empty, err := st.ReadSubject("/missing", ReadOptions{})
 	if err != nil {
 		t.Fatalf("read missing: %v", err)
 	}
@@ -62,9 +67,109 @@ func TestReadSubjectFiltersAndOrders(t *testing.T) {
 	}
 }
 
+func TestReadSubjectBounds(t *testing.T) {
+	st := openTemp(t)
+	// IDs 1..5 alle in /s.
+	for i := 0; i < 5; i++ {
+		appendAll(t, st, event.Candidate{Source: "s", Subject: "/s", Type: "t"})
+	}
+
+	tests := []struct {
+		name    string
+		opts    ReadOptions
+		wantIDs []string
+	}{
+		{"ohne grenzen", ReadOptions{}, []string{"1", "2", "3", "4", "5"}},
+		{"nur lower", ReadOptions{LowerBound: 3}, []string{"3", "4", "5"}},
+		{"nur upper", ReadOptions{UpperBound: 2}, []string{"1", "2"}},
+		{"beide inklusiv", ReadOptions{LowerBound: 2, UpperBound: 4}, []string{"2", "3", "4"}},
+		{"exakt einer", ReadOptions{LowerBound: 3, UpperBound: 3}, []string{"3"}},
+		{"leerer bereich", ReadOptions{LowerBound: 4, UpperBound: 2}, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := st.ReadSubject("/s", tt.opts)
+			if err != nil {
+				t.Fatalf("read: %v", err)
+			}
+			var ids []string
+			for _, ev := range got {
+				ids = append(ids, ev.ID)
+			}
+			if len(ids) != len(tt.wantIDs) {
+				t.Fatalf("ids = %v, want %v", ids, tt.wantIDs)
+			}
+			for i := range ids {
+				if ids[i] != tt.wantIDs[i] {
+					t.Fatalf("ids = %v, want %v", ids, tt.wantIDs)
+				}
+			}
+		})
+	}
+}
+
+func TestPreconditionSubjectPristine(t *testing.T) {
+	st := openTemp(t)
+
+	// Auf leeren Stream schreiben: erfüllt.
+	pre := []Precondition{{Type: PreconditionSubjectPristine, Subject: "/x"}}
+	if _, err := st.Append([]event.Candidate{{Source: "s", Subject: "/x", Type: "t"}}, pre); err != nil {
+		t.Fatalf("pristine auf leerem stream: %v", err)
+	}
+
+	// Jetzt ist /x nicht mehr leer: zweiter Write muss scheitern.
+	_, err := st.Append([]event.Candidate{{Source: "s", Subject: "/x", Type: "t2"}}, pre)
+	if !errorsIsPrecondition(err) {
+		t.Fatalf("erwartete ErrPreconditionFailed, bekam %v", err)
+	}
+
+	// Nichts darf aus dem fehlgeschlagenen Write geschrieben worden sein.
+	got, _ := st.ReadSubject("/x", ReadOptions{})
+	if len(got) != 1 {
+		t.Fatalf("nach fehlgeschlagenem write: %d events, want 1", len(got))
+	}
+}
+
+func TestPreconditionSubjectOnEventID(t *testing.T) {
+	st := openTemp(t)
+	appendAll(t, st, event.Candidate{Source: "s", Subject: "/x", Type: "t1"}) // ID 1
+
+	// Korrekte erwartete letzte ID: erfüllt.
+	ok := []Precondition{{Type: PreconditionSubjectOnEventID, Subject: "/x", EventID: "1"}}
+	if _, err := st.Append([]event.Candidate{{Source: "s", Subject: "/x", Type: "t2"}}, ok); err != nil {
+		t.Fatalf("onEventId korrekt: %v", err)
+	}
+
+	// Veraltete erwartete ID (jetzt steht /x auf 2): muss scheitern.
+	stale := []Precondition{{Type: PreconditionSubjectOnEventID, Subject: "/x", EventID: "1"}}
+	if _, err := st.Append([]event.Candidate{{Source: "s", Subject: "/x", Type: "t3"}}, stale); !errorsIsPrecondition(err) {
+		t.Fatalf("erwartete ErrPreconditionFailed bei veralteter id, bekam %v", err)
+	}
+
+	// onEventId gegen leeren Stream: muss scheitern.
+	onEmpty := []Precondition{{Type: PreconditionSubjectOnEventID, Subject: "/leer", EventID: "1"}}
+	if _, err := st.Append([]event.Candidate{{Source: "s", Subject: "/leer", Type: "t"}}, onEmpty); !errorsIsPrecondition(err) {
+		t.Fatalf("erwartete ErrPreconditionFailed bei leerem stream, bekam %v", err)
+	}
+}
+
+func TestPreconditionUnknownAndBadID(t *testing.T) {
+	st := openTemp(t)
+
+	unknown := []Precondition{{Type: "isMagic", Subject: "/x"}}
+	if _, err := st.Append([]event.Candidate{{Source: "s", Subject: "/x", Type: "t"}}, unknown); !errorsIsPrecondition(err) {
+		t.Fatalf("erwartete ErrPreconditionFailed bei unbekanntem typ, bekam %v", err)
+	}
+
+	badID := []Precondition{{Type: PreconditionSubjectOnEventID, Subject: "/x", EventID: "nope"}}
+	if _, err := st.Append([]event.Candidate{{Source: "s", Subject: "/x", Type: "t"}}, badID); !errorsIsPrecondition(err) {
+		t.Fatalf("erwartete ErrPreconditionFailed bei kaputter id, bekam %v", err)
+	}
+}
+
 func TestEmptyAppendNoop(t *testing.T) {
 	st := openTemp(t)
-	got, err := st.Append(nil)
+	got, err := st.Append(nil, nil)
 	if err != nil {
 		t.Fatalf("append nil: %v", err)
 	}
@@ -82,7 +187,7 @@ func TestPersistenceAcrossReopen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	if _, err := st.Append([]event.Candidate{{Source: "s", Subject: "/a", Type: "t"}}); err != nil {
+	if _, err := st.Append([]event.Candidate{{Source: "s", Subject: "/a", Type: "t"}}, nil); err != nil {
 		t.Fatalf("append: %v", err)
 	}
 	if err := st.Close(); err != nil {
@@ -95,7 +200,7 @@ func TestPersistenceAcrossReopen(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = st2.Close() })
 
-	got, err := st2.ReadSubject("/a")
+	got, err := st2.ReadSubject("/a", ReadOptions{})
 	if err != nil {
 		t.Fatalf("read nach reopen: %v", err)
 	}
@@ -104,7 +209,7 @@ func TestPersistenceAcrossReopen(t *testing.T) {
 	}
 
 	// Neue Sequenz setzt fort, vergibt nicht erneut "1".
-	more, err := st2.Append([]event.Candidate{{Source: "s", Subject: "/a", Type: "t"}})
+	more, err := st2.Append([]event.Candidate{{Source: "s", Subject: "/a", Type: "t"}}, nil)
 	if err != nil {
 		t.Fatalf("append nach reopen: %v", err)
 	}
@@ -126,12 +231,12 @@ func TestAppendMarshalError(t *testing.T) {
 	st := openTemp(t)
 	_, err := st.Append([]event.Candidate{
 		{Source: "s", Subject: "/a", Type: "t", Data: []byte("{kaputt")},
-	})
+	}, nil)
 	if err == nil {
 		t.Fatal("erwartete marshal-fehler bei ungültigem data, bekam nil")
 	}
 	// Nichts darf geschrieben worden sein (Transaktion rollt zurück).
-	got, rerr := st.ReadSubject("/a")
+	got, rerr := st.ReadSubject("/a", ReadOptions{})
 	if rerr != nil {
 		t.Fatalf("read: %v", rerr)
 	}
@@ -152,7 +257,7 @@ func TestReadSubjectInconsistentIndex(t *testing.T) {
 		t.Fatalf("index präparieren: %v", err)
 	}
 
-	if _, err := st.ReadSubject("/x"); err == nil {
+	if _, err := st.ReadSubject("/x", ReadOptions{}); err == nil {
 		t.Fatal("erwartete fehler bei inkonsistentem index, bekam nil")
 	}
 }
@@ -172,7 +277,7 @@ func TestReadSubjectDecodeError(t *testing.T) {
 		t.Fatalf("event präparieren: %v", err)
 	}
 
-	if _, err := st.ReadSubject("/y"); err == nil {
+	if _, err := st.ReadSubject("/y", ReadOptions{}); err == nil {
 		t.Fatal("erwartete decode-fehler, bekam nil")
 	}
 }
@@ -203,4 +308,8 @@ func openTemp(t *testing.T) *Store {
 	}
 	t.Cleanup(func() { _ = st.Close() })
 	return st
+}
+
+func errorsIsPrecondition(err error) bool {
+	return errors.Is(err, ErrPreconditionFailed)
 }

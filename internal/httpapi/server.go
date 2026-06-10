@@ -65,9 +65,20 @@ func (s *Server) handlePing(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+// preconditionWire ist die Drahtdarstellung einer Precondition im
+// Request-Body: {"type": "...", "payload": {"subject": "...", "eventId": "..."}}.
+type preconditionWire struct {
+	Type    string `json:"type"`
+	Payload struct {
+		Subject string `json:"subject"`
+		EventID string `json:"eventId"`
+	} `json:"payload"`
+}
+
 // writeEventsRequest ist der Request-Body von /write-events.
 type writeEventsRequest struct {
-	Events []event.Candidate `json:"events"`
+	Events        []event.Candidate  `json:"events"`
+	Preconditions []preconditionWire `json:"preconditions"`
 }
 
 func (s *Server) handleWriteEvents(w http.ResponseWriter, r *http.Request) {
@@ -87,8 +98,18 @@ func (s *Server) handleWriteEvents(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	written, err := s.store.Append(req.Events)
+	preconditions, err := parsePreconditions(req.Preconditions)
 	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	written, err := s.store.Append(req.Events, preconditions)
+	if err != nil {
+		if errors.Is(err, store.ErrPreconditionFailed) {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
 		s.logger.Error("write-events fehlgeschlagen", "err", err)
 		writeError(w, http.StatusInternalServerError, "interner fehler beim schreiben")
 		return
@@ -97,9 +118,43 @@ func (s *Server) handleWriteEvents(w http.ResponseWriter, r *http.Request) {
 	writeNDJSON(w, s.logger, written)
 }
 
-// readEventsRequest ist der Request-Body von /read-events.
+// parsePreconditions validiert die Drahtdarstellung und übersetzt sie in
+// store.Precondition. Format-/Typfehler ergeben 400 (kein 409).
+func parsePreconditions(wire []preconditionWire) ([]store.Precondition, error) {
+	if len(wire) == 0 {
+		return nil, nil
+	}
+	out := make([]store.Precondition, 0, len(wire))
+	for i, p := range wire {
+		prefix := "preconditions[" + strconv.Itoa(i) + "]: "
+		if p.Payload.Subject == "" || p.Payload.Subject[0] != '/' {
+			return nil, errors.New(prefix + "subject muss mit \"/\" beginnen")
+		}
+		switch p.Type {
+		case store.PreconditionSubjectPristine:
+		case store.PreconditionSubjectOnEventID:
+			if _, err := strconv.ParseUint(p.Payload.EventID, 10, 64); err != nil {
+				return nil, errors.New(prefix + "eventId muss eine nicht-negative ganze Zahl sein")
+			}
+		default:
+			return nil, errors.New(prefix + "unbekannter typ " + strconv.Quote(p.Type))
+		}
+		out = append(out, store.Precondition{
+			Type:    p.Type,
+			Subject: p.Payload.Subject,
+			EventID: p.Payload.EventID,
+		})
+	}
+	return out, nil
+}
+
+// readEventsRequest ist der Request-Body von /read-events. lowerBound und
+// upperBound sind optionale, inklusive Event-ID-Grenzen (CloudEvents-IDs sind
+// Strings, hier eine nicht-negative ganze Zahl).
 type readEventsRequest struct {
-	Subject string `json:"subject"`
+	Subject    string `json:"subject"`
+	LowerBound string `json:"lowerBound"`
+	UpperBound string `json:"upperBound"`
 }
 
 func (s *Server) handleReadEvents(w http.ResponseWriter, r *http.Request) {
@@ -113,7 +168,22 @@ func (s *Server) handleReadEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	events, err := s.store.ReadSubject(req.Subject)
+	lower, err := parseBound(req.LowerBound, "lowerBound")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	upper, err := parseBound(req.UpperBound, "upperBound")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if lower != 0 && upper != 0 && lower > upper {
+		writeError(w, http.StatusBadRequest, "lowerBound darf nicht größer als upperBound sein")
+		return
+	}
+
+	events, err := s.store.ReadSubject(req.Subject, store.ReadOptions{LowerBound: lower, UpperBound: upper})
 	if err != nil {
 		s.logger.Error("read-events fehlgeschlagen", "err", err)
 		writeError(w, http.StatusInternalServerError, "interner fehler beim lesen")
@@ -121,6 +191,18 @@ func (s *Server) handleReadEvents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeNDJSON(w, s.logger, events)
+}
+
+// parseBound parst eine optionale ID-Grenze. Leer bedeutet „keine Grenze" (0).
+func parseBound(v, name string) (uint64, error) {
+	if v == "" {
+		return 0, nil
+	}
+	n, err := strconv.ParseUint(v, 10, 64)
+	if err != nil {
+		return 0, errors.New(name + " muss eine nicht-negative ganze Zahl sein")
+	}
+	return n, nil
 }
 
 // requireAuth umschließt einen Handler mit der Bearer-Token-Prüfung (ADR-008).
