@@ -64,6 +64,12 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/write-events", s.requireAuth(s.handleWriteEvents))
 	s.mux.HandleFunc("POST /api/v1/read-events", s.requireAuth(s.handleReadEvents))
 	s.mux.HandleFunc("POST /api/v1/observe-events", s.requireAuth(s.handleObserveEvents))
+
+	// Komfort-Leseroute: GET /api/v1/events/<subject> (Subject = Pfad). Optionen
+	// als Query-Parameter (recursive, lowerBound, upperBound, type, watch).
+	// `GET /api/v1/events` ohne Subject = Wurzel (alle Events).
+	s.mux.HandleFunc("GET /api/v1/events", s.requireAuth(s.handleEventsPath))
+	s.mux.HandleFunc("GET /api/v1/events/{subject...}", s.requireAuth(s.handleEventsPath))
 }
 
 func (s *Server) handlePing(w http.ResponseWriter, r *http.Request) {
@@ -197,17 +203,22 @@ func (s *Server) handleReadEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	events, err := s.store.Read(req.Subject, req.Recursive, store.ReadOptions{
+	s.doRead(w, req.Subject, req.Recursive, store.ReadOptions{
 		LowerBound: lower,
 		UpperBound: upper,
 		Types:      req.Types,
 	})
+}
+
+// doRead liest Events und schreibt sie als NDJSON (oder 500 bei Fehler).
+// Gemeinsamer Kern von read-events (POST) und der GET-Pfad-Route.
+func (s *Server) doRead(w http.ResponseWriter, subject string, recursive bool, opts store.ReadOptions) {
+	events, err := s.store.Read(subject, recursive, opts)
 	if err != nil {
-		s.logger.Error("read-events fehlgeschlagen", "err", err)
+		s.logger.Error("read fehlgeschlagen", "err", err)
 		writeError(w, http.StatusInternalServerError, "interner fehler beim lesen")
 		return
 	}
-
 	writeNDJSON(w, s.logger, events)
 }
 
@@ -231,6 +242,66 @@ func typeSet(types []string) map[string]struct{} {
 		set[t] = struct{}{}
 	}
 	return set
+}
+
+// handleEventsPath bedient die Komfort-Leseroute GET /api/v1/events/<subject>.
+// Das Subject wird aus dem Pfad gebildet, Optionen kommen als Query-Parameter:
+//   - recursive=true|false (Default true: Eltern-Pfade liefern alles darunter)
+//   - lowerBound, upperBound (inklusive Event-ID-Grenzen)
+//   - type=... (wiederholbar) — Filter nach Event-Typ
+//   - watch=true — Verbindung offen halten und live nachliefern (wie observe)
+func (s *Server) handleEventsPath(w http.ResponseWriter, r *http.Request) {
+	// Subject aus dem Pfad: "books/42" -> "/books/42"; leer -> "/".
+	subject := "/" + strings.TrimSuffix(r.PathValue("subject"), "/")
+
+	q := r.URL.Query()
+
+	recursive := true
+	if v := q.Get("recursive"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "recursive muss true oder false sein")
+			return
+		}
+		recursive = b
+	}
+
+	lower, err := parseBound(q.Get("lowerBound"), "lowerBound")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	upper, err := parseBound(q.Get("upperBound"), "upperBound")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if lower != 0 && upper != 0 && lower > upper {
+		writeError(w, http.StatusBadRequest, "lowerBound darf nicht größer als upperBound sein")
+		return
+	}
+
+	types := q["type"]
+	if err := validateTypes(types); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	watch := false
+	if v := q.Get("watch"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "watch muss true oder false sein")
+			return
+		}
+		watch = b
+	}
+
+	if watch {
+		s.doObserve(w, r, subject, recursive, lower, types)
+		return
+	}
+	s.doRead(w, subject, recursive, store.ReadOptions{LowerBound: lower, UpperBound: upper, Types: types})
 }
 
 // parseBound parst eine optionale ID-Grenze. Leer bedeutet „keine Grenze" (0).
@@ -275,6 +346,14 @@ func (s *Server) handleObserveEvents(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+
+	s.doObserve(w, r, req.Subject, req.Recursive, lower, req.Types)
+}
+
+// doObserve liefert zuerst die passende History und hält die Verbindung dann
+// offen für Live-Events. Gemeinsamer Kern von observe-events (POST) und der
+// GET-Pfad-Route mit ?watch=true.
+func (s *Server) doObserve(w http.ResponseWriter, r *http.Request, subject string, recursive bool, lower uint64, types []string) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		writeError(w, http.StatusInternalServerError, "streaming nicht unterstützt")
@@ -287,10 +366,10 @@ func (s *Server) handleObserveEvents(w http.ResponseWriter, r *http.Request) {
 	sub := s.broker.Subscribe()
 	defer s.broker.Unsubscribe(sub)
 
-	typeFilter := typeSet(req.Types)
-	history, err := s.store.Read(req.Subject, req.Recursive, store.ReadOptions{LowerBound: lower, Types: req.Types})
+	typeFilter := typeSet(types)
+	history, err := s.store.Read(subject, recursive, store.ReadOptions{LowerBound: lower, Types: types})
 	if err != nil {
-		s.logger.Error("observe-events history fehlgeschlagen", "err", err)
+		s.logger.Error("observe history fehlgeschlagen", "err", err)
 		writeError(w, http.StatusInternalServerError, "interner fehler beim lesen")
 		return
 	}
@@ -327,7 +406,7 @@ func (s *Server) handleObserveEvents(w http.ResponseWriter, r *http.Request) {
 			if perr != nil || id <= lastID {
 				continue
 			}
-			if !store.MatchSubject(ev.Subject, req.Subject, req.Recursive) {
+			if !store.MatchSubject(ev.Subject, subject, recursive) {
 				continue
 			}
 			if typeFilter != nil {

@@ -16,7 +16,8 @@ Die vollständige Architektur, Roadmap und alle Entscheidungen stehen in
 monotone Event-IDs, `bbolt`-Storage, **Preconditions** für Optimistic
 Concurrency), `read-events` (NDJSON, optionale **`lowerBound`/`upperBound`**,
 **`recursive`**) und **`observe-events`** (Live-Streaming: erst History, dann
-offene Verbindung). Alle Datenrouten Bearer-Token-geschützt.
+offene Verbindung) — wahlweise auch bequem per **`GET /api/v1/events/<subject>`**.
+Alle Datenrouten Bearer-Token-geschützt.
 
 **Stufe 3 in Arbeit:** **Group Commit** als Default-Schreibstrategie (hoher
 Durchsatz bei voller Durability, umschaltbar via `CLIO_SYNC`) — siehe
@@ -109,6 +110,36 @@ curl -X POST http://127.0.0.1:3000/api/v1/read-events \
 
 Der optionale `types`-Filter ist mit `recursive` und `lowerBound`/`upperBound`
 kombinierbar und gilt ebenso für `observe-events`. Leer/weggelassen = alle Typen.
+
+### Bequemer lesen per GET-Pfad
+
+Für `curl`/Tools gibt es eine schreibgeschützte Komfortroute, bei der das Subject
+direkt im Pfad steht (Optionen als Query-Parameter):
+
+```bash
+# Events eines Streams
+curl -H "Authorization: Bearer $TOKEN" \
+  http://127.0.0.1:3000/api/v1/events/books/42
+
+# Eltern-Pfad: liefert automatisch alles darunter (recursive Default true)
+curl -H "Authorization: Bearer $TOKEN" \
+  http://127.0.0.1:3000/api/v1/events/books
+
+# Wurzel: alle Events
+curl -H "Authorization: Bearer $TOKEN" \
+  http://127.0.0.1:3000/api/v1/events
+
+# Mit Optionen: Typ-Filter (wiederholbar), Bounds, recursive abschalten
+curl -H "Authorization: Bearer $TOKEN" \
+  "http://127.0.0.1:3000/api/v1/events/orders?type=order-placed&type=order-cancelled&lowerBound=10"
+
+# Live beobachten (wie observe-events)
+curl -N -H "Authorization: Bearer $TOKEN" \
+  "http://127.0.0.1:3000/api/v1/events/books?watch=true"
+```
+
+Query-Parameter: `recursive` (Default `true`), `lowerBound`, `upperBound`,
+`type` (wiederholbar), `watch=true`. Auth läuft weiter über den Bearer-Header.
 
 ### Events live beobachten
 
