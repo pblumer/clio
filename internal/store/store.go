@@ -15,8 +15,10 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/santhosh-tekuri/jsonschema/v6"
 	bolt "go.etcd.io/bbolt"
 
 	"github.com/pblumer/clio/internal/event"
@@ -29,6 +31,7 @@ var (
 	bucketSubjectIdx = []byte("subject_idx")
 	bucketMeta       = []byte("meta")
 	bucketTypes      = []byte("types")
+	bucketSchemas    = []byte("schemas")
 )
 
 // metaChainHead speichert im meta-Bucket den Hash des zuletzt geschriebenen
@@ -115,6 +118,12 @@ type Store struct {
 	db       *bolt.DB
 	now      func() time.Time
 	syncMode SyncMode
+
+	// schemaCache hält kompilierte JSON-Schemas, geschlüsselt nach dem rohen
+	// Schema-Inhalt (window-frei: ändert sich der Inhalt, ändert sich der
+	// Schlüssel).
+	schemaMu    sync.RWMutex
+	schemaCache map[string]*jsonschema.Schema
 }
 
 // Open öffnet (oder erstellt) die Datenbank unter path mit Standardoptionen
@@ -137,7 +146,7 @@ func OpenWithOptions(path string, opts Options) (*Store, error) {
 	}
 
 	err = db.Update(func(tx *bolt.Tx) error {
-		for _, name := range [][]byte{bucketEvents, bucketSubjectIdx, bucketMeta, bucketTypes} {
+		for _, name := range [][]byte{bucketEvents, bucketSubjectIdx, bucketMeta, bucketTypes, bucketSchemas} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return err
 			}
@@ -149,7 +158,12 @@ func OpenWithOptions(path string, opts Options) (*Store, error) {
 		return nil, fmt.Errorf("buckets anlegen: %w", err)
 	}
 
-	return &Store{db: db, now: time.Now, syncMode: opts.SyncMode}, nil
+	return &Store{
+		db:          db,
+		now:         time.Now,
+		syncMode:    opts.SyncMode,
+		schemaCache: make(map[string]*jsonschema.Schema),
+	}, nil
 }
 
 // write führt eine Schreibtransaktion gemäß dem konfigurierten SyncMode aus.
@@ -180,18 +194,25 @@ func (s *Store) Count() (uint64, error) {
 
 // TypeInfo beschreibt einen bisher geschriebenen Event-Typ.
 type TypeInfo struct {
-	Type  string `json:"type"`
-	Count uint64 `json:"count"`
+	Type      string `json:"type"`
+	Count     uint64 `json:"count"`
+	HasSchema bool   `json:"hasSchema"`
 }
 
 // EventTypes liefert alle bisher geschriebenen Event-Typen in alphabetischer
-// Reihenfolge (bbolt-Schlüsselordnung) samt Anzahl.
+// Reihenfolge (bbolt-Schlüsselordnung) samt Anzahl und ob ein Schema registriert
+// ist.
 func (s *Store) EventTypes() ([]TypeInfo, error) {
 	var out []TypeInfo
 	err := s.db.View(func(tx *bolt.Tx) error {
+		schemas := tx.Bucket(bucketSchemas)
 		c := tx.Bucket(bucketTypes).Cursor()
 		for k, v := c.First(); k != nil; k, v = c.Next() {
-			out = append(out, TypeInfo{Type: string(k), Count: binary.BigEndian.Uint64(v)})
+			out = append(out, TypeInfo{
+				Type:      string(k),
+				Count:     binary.BigEndian.Uint64(v),
+				HasSchema: schemas.Get(k) != nil,
+			})
 		}
 		return nil
 	})
@@ -247,6 +268,11 @@ func (s *Store) Append(candidates []event.Candidate, preconditions []Preconditio
 		}
 
 		for _, c := range candidates {
+			// Gegen ein ggf. registriertes Schema validieren (vor dem Schreiben).
+			if err := s.validateAgainstSchema(tx, c.Type, c.Data); err != nil {
+				return err
+			}
+
 			seq, err := evts.NextSequence()
 			if err != nil {
 				return err
@@ -295,7 +321,7 @@ func (s *Store) Append(candidates []event.Candidate, preconditions []Preconditio
 		return meta.Put(metaChainHead, []byte(head))
 	})
 	if err != nil {
-		if errors.Is(err, ErrPreconditionFailed) {
+		if errors.Is(err, ErrPreconditionFailed) || errors.Is(err, ErrSchemaValidation) {
 			return nil, err
 		}
 		return nil, fmt.Errorf("events schreiben: %w", err)

@@ -128,6 +128,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/observe-events", s.requireAuth(s.handleObserveEvents))
 	s.mux.HandleFunc("GET /api/v1/verify", s.requireAuth(s.handleVerify))
 	s.mux.HandleFunc("GET /api/v1/read-event-types", s.requireAuth(s.handleReadEventTypes))
+	s.mux.HandleFunc("POST /api/v1/register-event-schema", s.requireAuth(s.handleRegisterEventSchema))
+	s.mux.HandleFunc("GET /api/v1/read-event-schema", s.requireAuth(s.handleReadEventSchema))
 
 	// Prometheus-Metriken (ohne Auth, üblich für Scraping im internen Netz).
 	s.mux.HandleFunc("GET /metrics", s.handleMetrics)
@@ -174,6 +176,60 @@ func (s *Server) handleReadEventTypes(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+}
+
+// registerEventSchemaRequest ist der Body von /register-event-schema.
+type registerEventSchemaRequest struct {
+	Type   string          `json:"type"`
+	Schema json.RawMessage `json:"schema"`
+}
+
+func (s *Server) handleRegisterEventSchema(w http.ResponseWriter, r *http.Request) {
+	var req registerEventSchemaRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if strings.TrimSpace(req.Type) == "" {
+		writeError(w, http.StatusBadRequest, "type ist pflicht")
+		return
+	}
+	if len(req.Schema) == 0 {
+		writeError(w, http.StatusBadRequest, "schema ist pflicht")
+		return
+	}
+
+	err := s.store.RegisterSchema(req.Type, req.Schema)
+	switch {
+	case err == nil:
+		writeJSON(w, http.StatusOK, map[string]string{"type": req.Type, "status": "registered"})
+	case errors.Is(err, store.ErrSchemaExists):
+		writeError(w, http.StatusConflict, err.Error())
+	case errors.Is(err, store.ErrSchemaValidation):
+		writeError(w, http.StatusBadRequest, err.Error())
+	default:
+		s.logger.Error("register-event-schema fehlgeschlagen", "err", err)
+		writeError(w, http.StatusInternalServerError, "interner fehler beim registrieren")
+	}
+}
+
+func (s *Server) handleReadEventSchema(w http.ResponseWriter, r *http.Request) {
+	typ := r.URL.Query().Get("type")
+	if typ == "" {
+		writeError(w, http.StatusBadRequest, "query-parameter type ist pflicht")
+		return
+	}
+	schema, found, err := s.store.SchemaFor(typ)
+	if err != nil {
+		s.logger.Error("read-event-schema fehlgeschlagen", "err", err)
+		writeError(w, http.StatusInternalServerError, "interner fehler beim lesen")
+		return
+	}
+	if !found {
+		writeError(w, http.StatusNotFound, "für diesen typ ist kein schema registriert")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"type": typ, "schema": schema})
 }
 
 // handleMetrics liefert die Metriken im Prometheus-Textformat.
@@ -246,6 +302,10 @@ func (s *Server) handleWriteEvents(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, store.ErrPreconditionFailed) {
 			s.metrics.IncPreconditionFailure()
 			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+		if errors.Is(err, store.ErrSchemaValidation) {
+			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		s.logger.Error("write-events fehlgeschlagen", "err", err)

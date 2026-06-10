@@ -171,6 +171,64 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "500": { $ref: "#/components/responses/InternalError" }
 
+  /api/v1/register-event-schema:
+    post:
+      tags: [Events]
+      summary: JSON Schema für einen Event-Typ registrieren
+      description: |
+        Registriert ein JSON Schema für `type`. Danach wird `data` aller Events
+        dieses Typs beim Schreiben validiert. Schemas sind unveränderlich
+        (erneut → 409); die Registrierung gelingt nur, wenn bereits gespeicherte
+        Events des Typs konform sind (sonst 400).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, schema]
+              properties:
+                type: { type: string, example: "io.example.order-placed" }
+                schema:
+                  type: object
+                  description: Ein JSON Schema
+      responses:
+        "200": { description: Registriert }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409":
+          description: Für diesen Typ existiert bereits ein Schema
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/v1/read-event-schema:
+    get:
+      tags: [Events]
+      summary: Registriertes Schema eines Typs lesen
+      parameters:
+        - name: type
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Das registrierte Schema
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  type: { type: string }
+                  schema: { type: object }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404":
+          description: Kein Schema für diesen Typ
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
   /api/v1/verify:
     get:
       tags: [Events]
@@ -314,6 +372,7 @@ components:
       properties:
         type: { type: string, example: "io.example.library.book-acquired" }
         count: { type: integer, description: "Anzahl Events dieses Typs" }
+        hasSchema: { type: boolean, description: "true, wenn ein Schema registriert ist" }
     VerifyResult:
       type: object
       properties:
