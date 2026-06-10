@@ -174,6 +174,48 @@ func TestReadRecursiveGlobalOrder(t *testing.T) {
 	}
 }
 
+func TestReadTypeFilter(t *testing.T) {
+	st := openTemp(t)
+	appendAll(t, st,
+		event.Candidate{Source: "s", Subject: "/o/1", Type: "placed"},    // 1
+		event.Candidate{Source: "s", Subject: "/o/2", Type: "cancelled"}, // 2
+		event.Candidate{Source: "s", Subject: "/o/1", Type: "placed"},    // 3
+		event.Candidate{Source: "s", Subject: "/o/3", Type: "shipped"},   // 4
+	)
+
+	tests := []struct {
+		name      string
+		query     string
+		recursive bool
+		opts      ReadOptions
+		wantIDs   []string
+	}{
+		{"rekursiv ein typ", "/o", true, ReadOptions{Types: []string{"placed"}}, []string{"1", "3"}},
+		{"rekursiv mehrere typen", "/o", true, ReadOptions{Types: []string{"placed", "shipped"}}, []string{"1", "3", "4"}},
+		{"rekursiv ohne filter", "/o", true, ReadOptions{}, []string{"1", "2", "3", "4"}},
+		{"nicht-rekursiv mit typ", "/o/1", false, ReadOptions{Types: []string{"placed"}}, []string{"1", "3"}},
+		{"typ + bounds", "/o", true, ReadOptions{Types: []string{"placed"}, LowerBound: 2}, []string{"3"}},
+		{"unbekannter typ", "/o", true, ReadOptions{Types: []string{"refunded"}}, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := st.Read(tt.query, tt.recursive, tt.opts)
+			if err != nil {
+				t.Fatalf("read: %v", err)
+			}
+			ids := idsOf(got)
+			if len(ids) != len(tt.wantIDs) {
+				t.Fatalf("ids = %v, want %v", ids, tt.wantIDs)
+			}
+			for i := range ids {
+				if ids[i] != tt.wantIDs[i] {
+					t.Fatalf("ids = %v, want %v", ids, tt.wantIDs)
+				}
+			}
+		})
+	}
+}
+
 func idsOf(events []event.Event) []string {
 	var ids []string
 	for _, e := range events {
