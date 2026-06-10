@@ -12,11 +12,12 @@ Die vollständige Architektur, Roadmap und alle Entscheidungen stehen in
 
 ## Status
 
-**Stufe 0 + 1 — abgeschlossen.** Lauffähig: `ping`, `write-events` (atomar,
+**Stufe 0–2 — abgeschlossen.** Lauffähig: `ping`, `write-events` (atomar,
 monotone Event-IDs, `bbolt`-Storage, **Preconditions** für Optimistic
-Concurrency) und `read-events` (NDJSON, optionale **`lowerBound`/`upperBound`**),
-alle Datenrouten Bearer-Token-geschützt. Als Nächstes (Stufe 2): `observe-events`
-(Live-Streaming).
+Concurrency), `read-events` (NDJSON, optionale **`lowerBound`/`upperBound`**,
+**`recursive`**) und **`observe-events`** (Live-Streaming: erst History, dann
+offene Verbindung). Alle Datenrouten Bearer-Token-geschützt. Als Nächstes
+(Stufe 3): Robustheit & Betrieb (Crash-Recovery, fsync, Builds).
 
 ## Bauen & Starten
 
@@ -61,6 +62,30 @@ curl -X POST http://127.0.0.1:3000/api/v1/read-events \
 curl -X POST http://127.0.0.1:3000/api/v1/read-events \
   -H "Authorization: Bearer $TOKEN" \
   -d '{"subject":"/books/42","lowerBound":"2","upperBound":"10"}'
+
+# Rekursiv alle Events unterhalb von /books lesen
+curl -X POST http://127.0.0.1:3000/api/v1/read-events \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"subject":"/books","recursive":true}'
+```
+
+### Events live beobachten
+
+`observe-events` liefert zuerst die passende History und hält die Verbindung
+dann offen, um neue Events sofort als NDJSON nachzuliefern. Nach einem
+Verbindungsabbruch verbindet man sich mit `lowerBound` neu und lädt so die
+verpassten Events nach.
+
+```bash
+# Live alle Events unterhalb von /books beobachten (-N = ungepuffert)
+curl -N -X POST http://127.0.0.1:3000/api/v1/observe-events \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"subject":"/books","recursive":true}'
+
+# Reconnect ab einer bekannten Event-ID (verpasste Events nachholen)
+curl -N -X POST http://127.0.0.1:3000/api/v1/observe-events \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"subject":"/books","recursive":true,"lowerBound":"42"}'
 ```
 
 ### Optimistic Concurrency (Preconditions)

@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	bolt "go.etcd.io/bbolt"
@@ -208,43 +209,105 @@ func lastSeq(idx *bolt.Bucket, subject string) (uint64, bool) {
 	return binary.BigEndian.Uint64(k[len(prefix):]), true
 }
 
-// ReadSubject liefert die Events eines Subjects in Schreibreihenfolge, gefiltert
-// auf den durch opts beschriebenen ID-Bereich.
+// MatchSubject prüft, ob ein Event-Subject zu einer Abfrage passt. Ohne
+// recursive ist nur exakte Gleichheit ein Treffer; mit recursive zählen das
+// Subject selbst und alle untergeordneten Pfade (Prefix an der "/"-Grenze).
+// Die Wurzel "/" matcht rekursiv alles.
+func MatchSubject(subject, query string, recursive bool) bool {
+	if !recursive {
+		return subject == query
+	}
+	if query == "/" || subject == query {
+		return true
+	}
+	return strings.HasPrefix(subject, strings.TrimSuffix(query, "/")+"/")
+}
+
+// ReadSubject liefert die Events genau eines Subjects (nicht rekursiv).
 func (s *Store) ReadSubject(subject string, opts ReadOptions) ([]event.Event, error) {
+	return s.Read(subject, false, opts)
+}
+
+// Read liefert Events in globaler Schreibreihenfolge, gefiltert auf das (ggf.
+// rekursive) Subject und den durch opts beschriebenen ID-Bereich.
+//
+// Nicht-rekursiv wird über den Subject-Index gelesen (nur die Events des
+// Subjects). Rekursiv wird der nach globaler Sequenz geordnete events-Bucket
+// durchlaufen und per MatchSubject gefiltert — so bleibt die globale Ordnung
+// auch über mehrere Subjects hinweg erhalten.
+func (s *Store) Read(query string, recursive bool, opts ReadOptions) ([]event.Event, error) {
 	var events []event.Event
 
-	prefix := append([]byte(subject), subjectSep)
-
 	err := s.db.View(func(tx *bolt.Tx) error {
-		evts := tx.Bucket(bucketEvents)
-		cur := tx.Bucket(bucketSubjectIdx).Cursor()
-
-		for k, evKey := cur.Seek(prefix); k != nil && hasPrefix(k, prefix); k, evKey = cur.Next() {
-			seq := binary.BigEndian.Uint64(evKey)
-			if opts.LowerBound != 0 && seq < opts.LowerBound {
-				continue
-			}
-			if opts.UpperBound != 0 && seq > opts.UpperBound {
-				continue
-			}
-
-			raw := evts.Get(evKey)
-			if raw == nil {
-				return fmt.Errorf("inkonsistenter index: event %x fehlt", evKey)
-			}
-			var ev event.Event
-			if err := json.Unmarshal(raw, &ev); err != nil {
-				return fmt.Errorf("event dekodieren: %w", err)
-			}
-			events = append(events, ev)
+		if recursive {
+			return readRecursive(tx, query, opts, &events)
 		}
-		return nil
+		return readSubjectIndex(tx, query, opts, &events)
 	})
 	if err != nil {
 		return nil, err
 	}
-
 	return events, nil
+}
+
+func readSubjectIndex(tx *bolt.Tx, subject string, opts ReadOptions, out *[]event.Event) error {
+	evts := tx.Bucket(bucketEvents)
+	cur := tx.Bucket(bucketSubjectIdx).Cursor()
+	prefix := append([]byte(subject), subjectSep)
+
+	for k, evKey := cur.Seek(prefix); k != nil && hasPrefix(k, prefix); k, evKey = cur.Next() {
+		seq := binary.BigEndian.Uint64(evKey)
+		if !inBounds(seq, opts) {
+			continue
+		}
+		raw := evts.Get(evKey)
+		if raw == nil {
+			return fmt.Errorf("inkonsistenter index: event %x fehlt", evKey)
+		}
+		var ev event.Event
+		if err := json.Unmarshal(raw, &ev); err != nil {
+			return fmt.Errorf("event dekodieren: %w", err)
+		}
+		*out = append(*out, ev)
+	}
+	return nil
+}
+
+func readRecursive(tx *bolt.Tx, query string, opts ReadOptions, out *[]event.Event) error {
+	cur := tx.Bucket(bucketEvents).Cursor()
+
+	var k, v []byte
+	if opts.LowerBound != 0 {
+		k, v = cur.Seek(seqKey(opts.LowerBound))
+	} else {
+		k, v = cur.First()
+	}
+
+	for ; k != nil; k, v = cur.Next() {
+		seq := binary.BigEndian.Uint64(k)
+		if opts.UpperBound != 0 && seq > opts.UpperBound {
+			break
+		}
+		var ev event.Event
+		if err := json.Unmarshal(v, &ev); err != nil {
+			return fmt.Errorf("event dekodieren: %w", err)
+		}
+		if MatchSubject(ev.Subject, query, true) {
+			*out = append(*out, ev)
+		}
+	}
+	return nil
+}
+
+// inBounds prüft, ob eine Sequenz innerhalb der (inklusiven) ID-Grenzen liegt.
+func inBounds(seq uint64, opts ReadOptions) bool {
+	if opts.LowerBound != 0 && seq < opts.LowerBound {
+		return false
+	}
+	if opts.UpperBound != 0 && seq > opts.UpperBound {
+		return false
+	}
+	return true
 }
 
 // seqKey kodiert eine Sequenznummer als 8-Byte-Big-Endian, sodass die
