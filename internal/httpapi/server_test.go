@@ -315,6 +315,43 @@ func TestReadEventsTypesBadRequest(t *testing.T) {
 	}
 }
 
+func TestOpenAPISpec(t *testing.T) {
+	srv := newTestServer(t)
+	// Ohne Auth erreichbar (Doku ist nicht sensibel).
+	rec := do(t, srv, http.MethodGet, "/openapi.yaml", "", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/yaml" {
+		t.Fatalf("content-type = %q, want application/yaml", ct)
+	}
+	if !strings.Contains(rec.Body.String(), "openapi:") {
+		t.Fatal("spec enthält kein \"openapi:\"")
+	}
+}
+
+func TestDocsUI(t *testing.T) {
+	srv := newTestServer(t)
+
+	// /docs -> Redirect auf /docs/
+	rec := do(t, srv, http.MethodGet, "/docs", "", "")
+	if rec.Code != http.StatusMovedPermanently {
+		t.Fatalf("/docs status = %d, want 301", rec.Code)
+	}
+	if loc := rec.Header().Get("Location"); loc != "/docs/" {
+		t.Fatalf("Location = %q, want /docs/", loc)
+	}
+
+	// /docs/ -> Swagger-UI-HTML
+	rec = do(t, srv, http.MethodGet, "/docs/", "", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/docs/ status = %d, want 200", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "Swagger UI") {
+		t.Fatal("/docs/ liefert keine Swagger-UI-Seite")
+	}
+}
+
 func TestEventsPathRead(t *testing.T) {
 	srv := newTestServer(t)
 	do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token",

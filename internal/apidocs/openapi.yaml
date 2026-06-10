@@ -1,0 +1,304 @@
+openapi: 3.0.3
+info:
+  title: cliostore API
+  description: |
+    HTTP-API von **cliostore** — einem in Go geschriebenen Event Store.
+    Events werden im CloudEvents-Format geschrieben, gelesen und live beobachtet.
+
+    Event-Listen werden als **NDJSON** geliefert (ein JSON-Objekt pro Zeile),
+    Content-Type `application/x-ndjson`.
+
+    Alle Datenrouten sind per **Bearer-Token** geschützt (`Authorize`-Button).
+  version: "1.0"
+
+servers:
+  - url: /
+    description: Diese Instanz
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: System
+  - name: Events
+
+paths:
+  /api/v1/ping:
+    get:
+      tags: [System]
+      summary: Erreichbarkeitsprüfung (Liveness)
+      security: []
+      responses:
+        "200":
+          description: Server erreichbar
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Status" }
+    post:
+      tags: [System]
+      summary: Erreichbarkeitsprüfung (Liveness)
+      security: []
+      responses:
+        "200":
+          description: Server erreichbar
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Status" }
+
+  /api/v1/write-events:
+    post:
+      tags: [Events]
+      summary: Ein oder mehrere Events atomar schreiben
+      description: |
+        Schreibt alle Event-Candidates in einer einzigen Transaktion
+        (alles-oder-nichts). `id`, `time` und `specversion` werden serverseitig
+        ergänzt. Optionale Preconditions ermöglichen Optimistic Concurrency.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WriteEventsRequest" }
+            examples:
+              einfach:
+                value:
+                  events:
+                    - source: "https://library.example.io"
+                      subject: "/books/42"
+                      type: "io.example.library.book-acquired"
+                      data: { title: "Dune", author: "Herbert" }
+              mitPrecondition:
+                value:
+                  events:
+                    - source: "https://library.example.io"
+                      subject: "/books/42"
+                      type: "io.example.library.book-borrowed"
+                  preconditions:
+                    - type: "isSubjectOnEventId"
+                      payload: { subject: "/books/42", eventId: "7" }
+      responses:
+        "200":
+          description: Geschriebene Events als NDJSON
+          content:
+            application/x-ndjson:
+              schema: { $ref: "#/components/schemas/EventStream" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409":
+          description: Eine Precondition war nicht erfüllt (Optimistic Concurrency)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/v1/read-events:
+    post:
+      tags: [Events]
+      summary: Events eines Subjects lesen
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReadEventsRequest" }
+            examples:
+              subjekt:
+                value: { subject: "/books/42" }
+              rekursivMitTypen:
+                value: { subject: "/books", recursive: true, types: ["acquired"] }
+              bereich:
+                value: { subject: "/books/42", lowerBound: "2", upperBound: "10" }
+      responses:
+        "200":
+          description: Passende Events als NDJSON
+          content:
+            application/x-ndjson:
+              schema: { $ref: "#/components/schemas/EventStream" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/v1/observe-events:
+    post:
+      tags: [Events]
+      summary: Events beobachten (History + Live-Stream)
+      description: |
+        Liefert zuerst die passende History und hält die Verbindung dann offen,
+        um neue Events live nachzuliefern. Reconnect erfolgt über `lowerBound`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ObserveEventsRequest" }
+            examples:
+              live:
+                value: { subject: "/books", recursive: true }
+              reconnect:
+                value: { subject: "/books", recursive: true, lowerBound: "42" }
+      responses:
+        "200":
+          description: NDJSON-Stream (offen gehalten)
+          content:
+            application/x-ndjson:
+              schema: { $ref: "#/components/schemas/EventStream" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/v1/events/{subject}:
+    get:
+      tags: [Events]
+      summary: Komfort-Leseroute (Subject im Pfad)
+      description: |
+        Liest Events, deren Subject dem URL-Pfad entspricht. Eltern-Pfade
+        liefern dank `recursive` (Default `true`) automatisch alles darunter.
+        Mit `watch=true` bleibt die Verbindung wie bei observe-events offen.
+        `GET /api/v1/events` (ohne Subject) liefert die Wurzel (alle Events).
+      parameters:
+        - name: subject
+          in: path
+          required: true
+          description: Subject-Pfad, z. B. `books/42` (führt zu Subject `/books/42`)
+          schema: { type: string }
+          example: "books/42"
+        - name: recursive
+          in: query
+          schema: { type: boolean, default: true }
+        - name: lowerBound
+          in: query
+          description: Inklusive untere Event-ID-Grenze
+          schema: { type: string }
+        - name: upperBound
+          in: query
+          description: Inklusive obere Event-ID-Grenze
+          schema: { type: string }
+        - name: type
+          in: query
+          description: Filter nach Event-Typ (wiederholbar)
+          schema: { type: array, items: { type: string } }
+        - name: watch
+          in: query
+          description: Verbindung offen halten und live nachliefern
+          schema: { type: boolean, default: false }
+      responses:
+        "200":
+          description: Passende Events als NDJSON
+          content:
+            application/x-ndjson:
+              schema: { $ref: "#/components/schemas/EventStream" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Konfiguriertes API-Token (CLIO_API_TOKEN)
+
+  responses:
+    BadRequest:
+      description: Ungültige Anfrage
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Unauthorized:
+      description: Fehlendes oder falsches Bearer-Token
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    InternalError:
+      description: Interner Fehler
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+
+  schemas:
+    Status:
+      type: object
+      properties:
+        status: { type: string, example: "ok" }
+    Error:
+      type: object
+      properties:
+        error: { type: string }
+    EventCandidate:
+      type: object
+      required: [source, subject, type]
+      properties:
+        source:
+          type: string
+          description: Herkunft (URI-artig)
+          example: "https://library.example.io"
+        subject:
+          type: string
+          description: Stream-Pfad, beginnt mit "/"
+          example: "/books/42"
+        type:
+          type: string
+          example: "io.example.library.book-acquired"
+        data:
+          description: Beliebige JSON-Nutzdaten (optional)
+          nullable: true
+    Event:
+      type: object
+      description: Gespeichertes, unveränderliches Event (CloudEvents)
+      properties:
+        specversion: { type: string, example: "1.0" }
+        id: { type: string, description: "global monoton steigend", example: "42" }
+        time: { type: string, format: date-time }
+        source: { type: string }
+        subject: { type: string }
+        type: { type: string }
+        data: { nullable: true }
+    EventStream:
+      type: string
+      description: |
+        NDJSON: ein `Event`-JSON-Objekt pro Zeile (kein JSON-Array).
+    Precondition:
+      type: object
+      required: [type, payload]
+      properties:
+        type:
+          type: string
+          enum: [isSubjectPristine, isSubjectOnEventId]
+        payload:
+          type: object
+          properties:
+            subject: { type: string, example: "/books/42" }
+            eventId:
+              type: string
+              description: nur für isSubjectOnEventId
+              example: "7"
+    WriteEventsRequest:
+      type: object
+      required: [events]
+      properties:
+        events:
+          type: array
+          minItems: 1
+          items: { $ref: "#/components/schemas/EventCandidate" }
+        preconditions:
+          type: array
+          items: { $ref: "#/components/schemas/Precondition" }
+    ReadEventsRequest:
+      type: object
+      required: [subject]
+      properties:
+        subject: { type: string, example: "/books/42" }
+        recursive: { type: boolean, default: false }
+        lowerBound: { type: string, description: "inklusive untere Event-ID-Grenze" }
+        upperBound: { type: string, description: "inklusive obere Event-ID-Grenze" }
+        types:
+          type: array
+          items: { type: string }
+          description: Filter nach Event-Typ
+    ObserveEventsRequest:
+      type: object
+      required: [subject]
+      properties:
+        subject: { type: string, example: "/books" }
+        recursive: { type: boolean, default: false }
+        lowerBound: { type: string, description: "Reconnect ab dieser Event-ID" }
+        types:
+          type: array
+          items: { type: string }

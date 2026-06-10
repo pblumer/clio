@@ -5,7 +5,7 @@
 >
 > **Status des Gesamtprojekts:** `IN ENTWICKLUNG` — Stufe 0–2 abgeschlossen; Stufe 3 weit fortgeschritten: **Group Commit** (Durchsatz bei voller Durability, `CLIO_SYNC`), Crash-Recovery durch bbolt-ACID, **Distribution** (statische Cross-Builds via `make dist`, Docker-Image, Release-Workflow). Offen in Stufe 3: Kompaktierung, Metrics/Observability.
 > **Letzte Aktualisierung:** 2026-06-10
-> **Dokumentversion:** 1.10
+> **Dokumentversion:** 1.11
 
 ---
 
@@ -111,6 +111,7 @@ Alle Routen nutzen **POST** (außer ggf. `ping`), weil Parameter im Request-Body
 | `POST /api/v1/observe-events` | Wie read (inkl. `recursive`, `lowerBound`, `types`), aber Verbindung bleibt offen für Live-Updates; Reconnect via `lowerBound` | 2 |
 | `GET /api/v1/events/<subject>` | Komfort-Leseroute: Subject = URL-Pfad; Optionen als Query (`recursive` (Default true), `lowerBound`, `upperBound`, `type` (wiederholbar), `watch=true` für Live). `GET /api/v1/events` = Wurzel | 3 |
 | `POST /api/v1/run-eventql-query` | EventQL-Abfrage (spätes Ziel) | 4 |
+| `GET /openapi.yaml` · `GET /docs` | OpenAPI-3-Spec bzw. interaktive Swagger UI (eingebettet, ohne Auth) | 3 |
 
 **Auth:** Header `Authorization: Bearer <API_TOKEN>` gegen ein konfiguriertes Einzeltoken.
 
@@ -250,6 +251,12 @@ Jede Stufe ist für sich lauffähig. Statusmarkierungen: `⬜ offen` · `🟡 in
 - **Kontext:** Die ursprüngliche Entscheidung (Abschnitt 5) ist „alles POST mit JSON-Body" (wie beim Vorbild). Für schnelles Lesen mit `curl`/Tools ist eine pfadbasierte GET-Route deutlich ergonomischer, da Subjects ohnehin hierarchische URL-Pfade sind.
 - **Entscheidung:** Zusätzliche, schreibgeschützte Route `GET /api/v1/events/<subject>` (namespaced unter `/events/`, um Kollisionen mit reservierten Routen zu vermeiden). Subject = Pfad; Optionen als Query (`recursive`, Default `true` für natürliches „alles unterhalb"; `lowerBound`/`upperBound`; `type` wiederholbar; `watch=true` für Live-Streaming). `GET /api/v1/events` ohne Subject = Wurzel. Die POST-Routen bleiben unverändert; Read/Observe teilen denselben Kern (`doRead`/`doObserve`).
 - **Konsequenzen:** Bequemes Lesen/Beobachten ohne Body. Auth weiterhin per Bearer-Header — direktes Öffnen im Browser (ohne Header) ist damit nicht vorgesehen. `recursive` defaultet hier auf `true` (abweichend von `read-events`), passend zum Pfad-Browsing.
+
+### ADR-011: Eingebettete OpenAPI-Spec + Swagger UI
+- **Status:** Akzeptiert
+- **Kontext:** Kunden brauchen eine maschinenlesbare API-Beschreibung und eine Möglichkeit, die API ohne eigenes Setup auszuprobieren.
+- **Entscheidung:** Eine handgepflegte OpenAPI-3-Spec (`internal/apidocs/openapi.yaml`) wird per `go:embed` ins Binary aufgenommen und unter `GET /openapi.yaml` ausgeliefert. Eine interaktive Swagger UI wird unter `GET /docs` bereitgestellt; die UI-Assets sind via Modul `swaggest/swgui` (statigz, `go:embed`) ebenfalls eingebettet — passend zum „abhängigkeitsfreien Single-Binary"-Ziel (ADR-001). Beide Routen sind ohne Auth erreichbar (nicht sensibel); „Try it out" nutzt das vom Nutzer eingegebene Bearer-Token gegen dieselbe Instanz (same-origin, kein CORS).
+- **Konsequenzen:** Selbsterklärende, sofort testbare API ohne externe Dienste. Zwei zusätzliche (build-time/eingebettete) Abhängigkeiten und ein größeres Binary (~1,5 MB UI-Assets). Die Spec wird manuell gepflegt — bei API-Änderungen mitziehen.
 
 ---
 
