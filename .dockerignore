@@ -1,0 +1,8 @@
+# Build-Artefakte und lokale Daten nicht in den Build-Context
+dist/
+cliostore
+*.db
+*.out
+.git
+.github
+*.md

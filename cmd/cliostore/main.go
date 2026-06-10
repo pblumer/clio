@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -16,7 +17,16 @@ import (
 	"github.com/pblumer/clio/internal/store"
 )
 
+// version wird beim Build via -ldflags "-X main.version=..." gesetzt.
+var version = "dev"
+
 func main() {
+	// `cliostore -version` / `version` gibt die Version aus und beendet.
+	if len(os.Args) > 1 && (os.Args[1] == "-version" || os.Args[1] == "--version" || os.Args[1] == "version") {
+		fmt.Println("cliostore", version)
+		return
+	}
+
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 
 	// Graceful Shutdown bei SIGINT/SIGTERM.
@@ -68,7 +78,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 
 	errCh := make(chan error, 1)
 	go func() {
-		logger.Info("cliostore lauscht", "addr", cfg.Addr)
+		logger.Info("cliostore lauscht", "addr", cfg.Addr, "version", version)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 			return

@@ -3,9 +3,9 @@
 > **Zweck dieses Dokuments**
 > Dieses Dokument ist die *Single Source of Truth* für das Projekt. Es ist so geschrieben, dass eine KI oder eine Person ohne Vorwissen nach dem Lesen vollständig versteht: **Was** gebaut wird, **warum**, **welche Ziele** verfolgt werden, **welche Entscheidungen** getroffen wurden und **wo das Projekt aktuell steht**. Es kombiniert ein Kontextdokument mit eingebetteten Architecture Decision Records (ADRs).
 >
-> **Status des Gesamtprojekts:** `IN ENTWICKLUNG` — Stufe 0–2 abgeschlossen; Stufe 3 begonnen: **Group Commit** als Default-Schreibstrategie (hoher Durchsatz bei voller Durability, umschaltbar via `CLIO_SYNC`), Crash-Recovery durch bbolt-ACID. Offen in Stufe 3: Kompaktierung, Metrics, Cross-Builds, Docker.
+> **Status des Gesamtprojekts:** `IN ENTWICKLUNG` — Stufe 0–2 abgeschlossen; Stufe 3 weit fortgeschritten: **Group Commit** (Durchsatz bei voller Durability, `CLIO_SYNC`), Crash-Recovery durch bbolt-ACID, **Distribution** (statische Cross-Builds via `make dist`, Docker-Image, Release-Workflow). Offen in Stufe 3: Kompaktierung, Metrics/Observability.
 > **Letzte Aktualisierung:** 2026-06-10
-> **Dokumentversion:** 1.7
+> **Dokumentversion:** 1.8
 
 ---
 
@@ -173,8 +173,8 @@ Jede Stufe ist für sich lauffähig. Statusmarkierungen: `⬜ offen` · `🟡 in
 - [x] fsync-Strategie (Durability vs. Performance) → **Group Commit** als Default (ADR-009), umschaltbar via `CLIO_SYNC` (`group`/`always`/`off`). Benchmarks belegen den Effekt.
 - [ ] Kompaktierung / Dateirotation
 - [ ] Observability: Metrics, strukturiertes Logging (slog steht bereits)
-- [ ] Single-Binary-Builds für alle Plattformen (`GOOS`/`GOARCH`)
-- [ ] Docker-Image
+- [x] Single-Binary-Builds für alle Plattformen (`GOOS`/`GOARCH`) — `make dist` (linux/darwin/windows × amd64/arm64), Version via `-ldflags` eingebettet; Release-Workflow bei Tags `v*`
+- [x] Docker-Image — mehrstufig, `distroless/static`, nonroot, `/data`-Volume
 
 ### Stufe 4 — Snapshots & EventQL `⬜`
 *Schätzung: 1–3 Monate (EventQL dominiert)*
