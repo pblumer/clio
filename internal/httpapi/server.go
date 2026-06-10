@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/pblumer/clio/internal/config"
 	"github.com/pblumer/clio/internal/event"
@@ -159,10 +160,11 @@ func parsePreconditions(wire []preconditionWire) ([]store.Precondition, error) {
 // upperBound sind optionale, inklusive Event-ID-Grenzen (CloudEvents-IDs sind
 // Strings, hier eine nicht-negative ganze Zahl).
 type readEventsRequest struct {
-	Subject    string `json:"subject"`
-	Recursive  bool   `json:"recursive"`
-	LowerBound string `json:"lowerBound"`
-	UpperBound string `json:"upperBound"`
+	Subject    string   `json:"subject"`
+	Recursive  bool     `json:"recursive"`
+	LowerBound string   `json:"lowerBound"`
+	UpperBound string   `json:"upperBound"`
+	Types      []string `json:"types"`
 }
 
 func (s *Server) handleReadEvents(w http.ResponseWriter, r *http.Request) {
@@ -190,8 +192,16 @@ func (s *Server) handleReadEvents(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "lowerBound darf nicht größer als upperBound sein")
 		return
 	}
+	if err := validateTypes(req.Types); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
-	events, err := s.store.Read(req.Subject, req.Recursive, store.ReadOptions{LowerBound: lower, UpperBound: upper})
+	events, err := s.store.Read(req.Subject, req.Recursive, store.ReadOptions{
+		LowerBound: lower,
+		UpperBound: upper,
+		Types:      req.Types,
+	})
 	if err != nil {
 		s.logger.Error("read-events fehlgeschlagen", "err", err)
 		writeError(w, http.StatusInternalServerError, "interner fehler beim lesen")
@@ -199,6 +209,28 @@ func (s *Server) handleReadEvents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeNDJSON(w, s.logger, events)
+}
+
+// validateTypes stellt sicher, dass jeder angegebene Typ-Filter nicht leer ist.
+func validateTypes(types []string) error {
+	for i, t := range types {
+		if strings.TrimSpace(t) == "" {
+			return errors.New("types[" + strconv.Itoa(i) + "] darf nicht leer sein")
+		}
+	}
+	return nil
+}
+
+// typeSet baut ein Lookup-Set für den Live-Typ-Filter; nil bei leerer Liste.
+func typeSet(types []string) map[string]struct{} {
+	if len(types) == 0 {
+		return nil
+	}
+	set := make(map[string]struct{}, len(types))
+	for _, t := range types {
+		set[t] = struct{}{}
+	}
+	return set
 }
 
 // parseBound parst eine optionale ID-Grenze. Leer bedeutet „keine Grenze" (0).
@@ -215,9 +247,10 @@ func parseBound(v, name string) (uint64, error) {
 
 // observeEventsRequest ist der Request-Body von /observe-events.
 type observeEventsRequest struct {
-	Subject    string `json:"subject"`
-	Recursive  bool   `json:"recursive"`
-	LowerBound string `json:"lowerBound"`
+	Subject    string   `json:"subject"`
+	Recursive  bool     `json:"recursive"`
+	LowerBound string   `json:"lowerBound"`
+	Types      []string `json:"types"`
 }
 
 // handleObserveEvents liefert zuerst die passende History und hält die
@@ -238,6 +271,10 @@ func (s *Server) handleObserveEvents(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if err := validateTypes(req.Types); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		writeError(w, http.StatusInternalServerError, "streaming nicht unterstützt")
@@ -250,7 +287,8 @@ func (s *Server) handleObserveEvents(w http.ResponseWriter, r *http.Request) {
 	sub := s.broker.Subscribe()
 	defer s.broker.Unsubscribe(sub)
 
-	history, err := s.store.Read(req.Subject, req.Recursive, store.ReadOptions{LowerBound: lower})
+	typeFilter := typeSet(req.Types)
+	history, err := s.store.Read(req.Subject, req.Recursive, store.ReadOptions{LowerBound: lower, Types: req.Types})
 	if err != nil {
 		s.logger.Error("observe-events history fehlgeschlagen", "err", err)
 		writeError(w, http.StatusInternalServerError, "interner fehler beim lesen")
@@ -291,6 +329,11 @@ func (s *Server) handleObserveEvents(w http.ResponseWriter, r *http.Request) {
 			}
 			if !store.MatchSubject(ev.Subject, req.Subject, req.Recursive) {
 				continue
+			}
+			if typeFilter != nil {
+				if _, ok := typeFilter[ev.Type]; !ok {
+					continue
+				}
 			}
 			if err := enc.Encode(ev); err != nil {
 				return

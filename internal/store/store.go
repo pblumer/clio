@@ -51,12 +51,35 @@ type Precondition struct {
 	EventID string
 }
 
-// ReadOptions filtert ein ReadSubject auf einen Bereich globaler Event-IDs.
-// Beide Grenzen sind inklusiv. LowerBound 0 bedeutet „keine untere Grenze";
-// UpperBound 0 bedeutet „keine obere Grenze".
+// ReadOptions filtert ein Read auf einen Bereich globaler Event-IDs und
+// optional auf bestimmte Event-Typen. Beide Grenzen sind inklusiv; LowerBound 0
+// bedeutet „keine untere Grenze", UpperBound 0 „keine obere Grenze". Ist Types
+// leer, werden alle Typen geliefert; sonst nur Events mit passendem `type`.
 type ReadOptions struct {
 	LowerBound uint64
 	UpperBound uint64
+	Types      []string
+}
+
+// typeSet baut aus Types ein Lookup-Set. nil bedeutet „kein Typ-Filter".
+func (o ReadOptions) typeSet() map[string]struct{} {
+	if len(o.Types) == 0 {
+		return nil
+	}
+	set := make(map[string]struct{}, len(o.Types))
+	for _, t := range o.Types {
+		set[t] = struct{}{}
+	}
+	return set
+}
+
+// matchType prüft ein Event-Typ gegen das (ggf. leere) Typ-Set.
+func matchType(t string, set map[string]struct{}) bool {
+	if set == nil {
+		return true
+	}
+	_, ok := set[t]
+	return ok
 }
 
 // SyncMode steuert die Durability-/Performance-Abwägung beim Schreiben.
@@ -302,6 +325,7 @@ func readSubjectIndex(tx *bolt.Tx, subject string, opts ReadOptions, out *[]even
 	evts := tx.Bucket(bucketEvents)
 	cur := tx.Bucket(bucketSubjectIdx).Cursor()
 	prefix := append([]byte(subject), subjectSep)
+	types := opts.typeSet()
 
 	for k, evKey := cur.Seek(prefix); k != nil && hasPrefix(k, prefix); k, evKey = cur.Next() {
 		seq := binary.BigEndian.Uint64(evKey)
@@ -316,6 +340,9 @@ func readSubjectIndex(tx *bolt.Tx, subject string, opts ReadOptions, out *[]even
 		if err := json.Unmarshal(raw, &ev); err != nil {
 			return fmt.Errorf("event dekodieren: %w", err)
 		}
+		if !matchType(ev.Type, types) {
+			continue
+		}
 		*out = append(*out, ev)
 	}
 	return nil
@@ -323,6 +350,7 @@ func readSubjectIndex(tx *bolt.Tx, subject string, opts ReadOptions, out *[]even
 
 func readRecursive(tx *bolt.Tx, query string, opts ReadOptions, out *[]event.Event) error {
 	cur := tx.Bucket(bucketEvents).Cursor()
+	types := opts.typeSet()
 
 	var k, v []byte
 	if opts.LowerBound != 0 {
@@ -340,7 +368,7 @@ func readRecursive(tx *bolt.Tx, query string, opts ReadOptions, out *[]event.Eve
 		if err := json.Unmarshal(v, &ev); err != nil {
 			return fmt.Errorf("event dekodieren: %w", err)
 		}
-		if MatchSubject(ev.Subject, query, true) {
+		if MatchSubject(ev.Subject, query, true) && matchType(ev.Type, types) {
 			*out = append(*out, ev)
 		}
 	}

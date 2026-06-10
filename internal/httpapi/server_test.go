@@ -284,6 +284,37 @@ func TestReadEventsRecursive(t *testing.T) {
 	}
 }
 
+func TestReadEventsTypeFilter(t *testing.T) {
+	srv := newTestServer(t)
+	do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token",
+		`{"events":[
+			{"source":"s","subject":"/o/1","type":"placed"},
+			{"source":"s","subject":"/o/2","type":"cancelled"},
+			{"source":"s","subject":"/o/1","type":"placed"},
+			{"source":"s","subject":"/o/3","type":"shipped"}
+		]}`)
+
+	// Rekursiv ab /o, nur placed + shipped -> IDs 1,3,4.
+	rec := do(t, srv, http.MethodPost, "/api/v1/read-events", "secret-token",
+		`{"subject":"/o","recursive":true,"types":["placed","shipped"]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	got := decodeNDJSON(t, rec.Body.String())
+	if len(got) != 3 || got[0].ID != "1" || got[1].ID != "3" || got[2].ID != "4" {
+		t.Fatalf("type-filter ergebnis: %+v", got)
+	}
+}
+
+func TestReadEventsTypesBadRequest(t *testing.T) {
+	srv := newTestServer(t)
+	rec := do(t, srv, http.MethodPost, "/api/v1/read-events", "secret-token",
+		`{"subject":"/o","types":["placed",""]}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+}
+
 func TestObserveEventsBadRequest(t *testing.T) {
 	srv := newTestServer(t)
 	tests := []struct {
@@ -352,6 +383,37 @@ func TestObserveEventsHistoryAndLive(t *testing.T) {
 	}
 	if live.ID != "4" {
 		t.Fatalf("live id = %q, want 4", live.ID)
+	}
+}
+
+// TestObserveEventsTypeFilter: nur Events passender Typen werden live geliefert.
+func TestObserveEventsTypeFilter(t *testing.T) {
+	srv := newTestServer(t)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, ts.URL+"/api/v1/observe-events",
+		strings.NewReader(`{"subject":"/t","recursive":true,"types":["placed"]}`))
+	req.Header.Set("Authorization", "Bearer secret-token")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("observe-request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	reader := bufio.NewReader(resp.Body)
+
+	// "cancelled" (gefiltert) und "placed" (durchgelassen) schreiben.
+	writeViaHTTP(t, ts.URL, `{"events":[{"source":"s","subject":"/t/1","type":"cancelled"}]}`)
+	writeViaHTTP(t, ts.URL, `{"events":[{"source":"s","subject":"/t/1","type":"placed"}]}`)
+
+	ev := readStreamEvent(t, reader)
+	if ev.Type != "placed" {
+		t.Fatalf("live type = %q, want placed (typ-filter griff nicht)", ev.Type)
 	}
 }
 

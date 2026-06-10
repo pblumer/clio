@@ -100,7 +100,15 @@ curl -X POST http://127.0.0.1:3000/api/v1/read-events \
 curl -X POST http://127.0.0.1:3000/api/v1/read-events \
   -H "Authorization: Bearer $TOKEN" \
   -d '{"subject":"/books","recursive":true}'
+
+# Nach Event-Typ(en) filtern (z. B. „alle Bestellungen")
+curl -X POST http://127.0.0.1:3000/api/v1/read-events \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"subject":"/orders","recursive":true,"types":["order-placed","order-cancelled"]}'
 ```
+
+Der optionale `types`-Filter ist mit `recursive` und `lowerBound`/`upperBound`
+kombinierbar und gilt ebenso für `observe-events`. Leer/weggelassen = alle Typen.
 
 ### Events live beobachten
 

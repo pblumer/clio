@@ -5,7 +5,7 @@
 >
 > **Status des Gesamtprojekts:** `IN ENTWICKLUNG` — Stufe 0–2 abgeschlossen; Stufe 3 weit fortgeschritten: **Group Commit** (Durchsatz bei voller Durability, `CLIO_SYNC`), Crash-Recovery durch bbolt-ACID, **Distribution** (statische Cross-Builds via `make dist`, Docker-Image, Release-Workflow). Offen in Stufe 3: Kompaktierung, Metrics/Observability.
 > **Letzte Aktualisierung:** 2026-06-10
-> **Dokumentversion:** 1.8
+> **Dokumentversion:** 1.9
 
 ---
 
@@ -107,8 +107,8 @@ Alle Routen nutzen **POST** (außer ggf. `ping`), weil Parameter im Request-Body
 |---|---|---|
 | `GET/POST /api/v1/ping` | Erreichbarkeitsprüfung | 0 |
 | `POST /api/v1/write-events` | Ein oder mehrere Event-Candidates atomar schreiben, optional mit Preconditions | 0 → 1 |
-| `POST /api/v1/read-events` | Events eines Subjects lesen; Optionen: `recursive`, `lowerBound`, `upperBound`, `fromLatestEvent` | 0 → 1 |
-| `POST /api/v1/observe-events` | Wie read, aber Verbindung bleibt offen für Live-Updates; Reconnect via `lowerBound` | 2 |
+| `POST /api/v1/read-events` | Events eines Subjects lesen; Optionen: `recursive`, `lowerBound`, `upperBound`, `types` (Filter nach Event-Typ) | 0 → 1 |
+| `POST /api/v1/observe-events` | Wie read (inkl. `recursive`, `lowerBound`, `types`), aber Verbindung bleibt offen für Live-Updates; Reconnect via `lowerBound` | 2 |
 | `POST /api/v1/run-eventql-query` | EventQL-Abfrage (spätes Ziel) | 4 |
 
 **Auth:** Header `Authorization: Bearer <API_TOKEN>` gegen ein konfiguriertes Einzeltoken.
@@ -230,7 +230,7 @@ Jede Stufe ist für sich lauffähig. Statusmarkierungen: `⬜ offen` · `🟡 in
 - **Status:** Akzeptiert
 - **Kontext:** Eine eigene Query-Sprache (Lexer/Parser/Planner/Executor) kann den Aufwand des gesamten Restprojekts übersteigen.
 - **Entscheidung:** Der Kern (Write/Read/Observe/Preconditions) funktioniert ohne EventQL. EventQL kommt erst in Stufe 4; bis dahin genügt eine einfachere Filter-API.
-- **Konsequenzen:** Früher Nutzwert ohne Sprachimplementierung. `isEventQlQueryTrue` erst ab Stufe 4 verfügbar.
+- **Konsequenzen:** Früher Nutzwert ohne Sprachimplementierung. Die „einfachere Filter-API" umfasst inzwischen `subject`, `recursive`, `lowerBound`/`upperBound` und `types` (Filter nach Event-Typ) — für viele Abfragen („alle Events vom Typ X") reicht das ohne EventQL. `isEventQlQueryTrue` erst ab Stufe 4 verfügbar.
 
 ### ADR-008: Authentifizierung über einzelnes API-Token
 - **Status:** Akzeptiert
