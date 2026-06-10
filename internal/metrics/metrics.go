@@ -26,6 +26,7 @@ type reqKey struct {
 type Gauges struct {
 	ActiveObservers int
 	EventsTotal     uint64
+	DBSizeBytes     int64
 }
 
 // Metrics sammelt HTTP- und Domänen-Metriken. Alle Methoden sind nebenläufig
@@ -116,6 +117,9 @@ func (m *Metrics) Write(w io.Writer, g Gauges) {
 
 	writeGauge(w, "clio_active_observers", "Aktuell offene observe-Verbindungen.", uint64(g.ActiveObservers))
 	writeGauge(w, "clio_events_total", "Anzahl gespeicherter Events.", g.EventsTotal)
+	if g.DBSizeBytes >= 0 {
+		writeGauge(w, "clio_db_size_bytes", "Größe der Datenbankdatei in Bytes.", uint64(g.DBSizeBytes))
+	}
 }
 
 func writeCounter(w io.Writer, name, help string, v uint64) {

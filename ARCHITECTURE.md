@@ -3,9 +3,9 @@
 > **Zweck dieses Dokuments**
 > Dieses Dokument ist die *Single Source of Truth* für das Projekt. Es ist so geschrieben, dass eine KI oder eine Person ohne Vorwissen nach dem Lesen vollständig versteht: **Was** gebaut wird, **warum**, **welche Ziele** verfolgt werden, **welche Entscheidungen** getroffen wurden und **wo das Projekt aktuell steht**. Es kombiniert ein Kontextdokument mit eingebetteten Architecture Decision Records (ADRs).
 >
-> **Status des Gesamtprojekts:** `IN ENTWICKLUNG` — Stufe 0–2 abgeschlossen; Stufe 3 weit fortgeschritten: **Group Commit** (Durchsatz bei voller Durability, `CLIO_SYNC`), Crash-Recovery durch bbolt-ACID, **Distribution** (statische Cross-Builds via `make dist`, Docker-Image, Release-Workflow). Offen in Stufe 3: Kompaktierung, Metrics/Observability.
+> **Status des Gesamtprojekts:** `IN ENTWICKLUNG` — **Stufe 0–3 abgeschlossen.** Write/Read/Observe, Optimistic Concurrency, Hash-Kette (`/verify`), Event-Typen + JSON-Schemas, Group Commit (`CLIO_SYNC`), Observability (`/metrics`), Distribution (Cross-Builds/Docker/Release), Kompaktierung (`cliostore compact`), OpenAPI/Swagger UI. Offen: Stufe 4 (Snapshots, EventQL) sowie optional Signaturen.
 > **Letzte Aktualisierung:** 2026-06-10
-> **Dokumentversion:** 1.15
+> **Dokumentversion:** 1.16
 
 ---
 
@@ -173,14 +173,15 @@ Jede Stufe ist für sich lauffähig. Statusmarkierungen: `⬜ offen` · `🟡 in
 - [x] `recursive`-Flag + Subject-Prefix-Matching (`store.MatchSubject`) — auch für `read-events`; rekursive Reads laufen über den globalen `events`-Bucket und bewahren so die globale Ordnung
 - **Ergebnis:** Live-Beobachtung von Streams inkl. rekursiver Subjects. ✅
 
-### Stufe 3 — Robustheit & Betrieb `🟡`
+### Stufe 3 — Robustheit & Betrieb `✅`
 *Schätzung: 2–4 Wochen*
 - [x] Crash-Recovery: durch bbolts ACID-Transaktionen gegeben — Index ist Teil derselben DB und damit immer konsistent; ein separater Rebuild entfällt (siehe ADR-006).
 - [x] fsync-Strategie (Durability vs. Performance) → **Group Commit** als Default (ADR-009), umschaltbar via `CLIO_SYNC` (`group`/`always`/`off`). Benchmarks belegen den Effekt.
-- [ ] Kompaktierung / Dateirotation
-- [x] Observability: strukturiertes Request-Logging (slog) + Prometheus-`/metrics` (Requests, Latenz-Histogramm, geschriebene Events, 409-Failures, aktive Observer, Event-Count) — ADR-013, ohne Prometheus-Client-Dependency
+- [x] Kompaktierung — `cliostore compact` (offline, atomarer Swap) defragmentiert die bbolt-Datei ohne Events zu löschen; `clio_db_size_bytes`-Metrik (ADR-015). *Rotation/Archivierung bewusst nicht: widerspricht der Unveränderlichkeit (siehe ADR-015).*
+- [x] Observability: strukturiertes Request-Logging (slog) + Prometheus-`/metrics` (Requests, Latenz-Histogramm, geschriebene Events, 409-Failures, aktive Observer, Event-Count, DB-Größe) — ADR-013, ohne Prometheus-Client-Dependency
 - [x] Single-Binary-Builds für alle Plattformen (`GOOS`/`GOARCH`) — `make dist` (linux/darwin/windows × amd64/arm64), Version via `-ldflags` eingebettet; Release-Workflow bei Tags `v*`
 - [x] Docker-Image — mehrstufig, `distroless/static`, nonroot, `/data`-Volume
+- **Ergebnis:** Betriebsreif — Durability-Tuning, Observability, Distribution, Wartung. ✅
 
 ### Stufe 4 — Snapshots & EventQL `⬜`
 *Schätzung: 1–3 Monate (EventQL dominiert)*
@@ -279,6 +280,12 @@ Jede Stufe ist für sich lauffähig. Statusmarkierungen: `⬜ offen` · `🟡 in
 - **Kontext:** Produzenten/Konsumenten brauchen einen Vertrag über die Struktur der `data` eines Event-Typs (wie `registerEventSchema` beim Vorbild). JSON Schema selbst nachzubauen wäre unverhältnismäßig.
 - **Entscheidung:** Pro Event-Typ kann ein **JSON Schema** registriert werden (`POST /api/v1/register-event-schema`); beim `write-events` wird `data` dagegen validiert (Verstoß → 400). Schemas sind **unveränderlich** (erneute Registrierung → 409), und eine Registrierung gelingt nur, wenn **alle bereits gespeicherten Events** des Typs konform sind — so erfüllt jeder Typ mit Schema durchgängig seinen Vertrag. Validierung über `github.com/santhosh-tekuri/jsonschema/v6`; kompilierte Schemas werden inhaltsbasiert gecacht (window-frei).
 - **Konsequenzen:** Starke Strukturgarantien ohne EventQL. Eine zusätzliche Abhängigkeit (bewusst, wie bbolt/swgui). Schemas können nicht gelockert werden — das schützt die Historie, erfordert aber Sorgfalt beim ersten Entwurf. Typen ohne Schema bleiben frei (abwärtskompatibel).
+
+### ADR-015: Kompaktierung defragmentiert, löscht aber keine Events
+- **Status:** Akzeptiert
+- **Kontext:** Die Datenbank wächst monoton (Events sind unveränderlich und werden nie gelöscht); zugleich fragmentiert bbolt intern. „Kompaktierung/Rotation" im klassischen Sinn (alte Daten löschen, Retention, Log-Compaction nach Key) widerspricht dem Kernprinzip und würde die Hash-Kette (ADR-012) brechen.
+- **Entscheidung:** Kompaktierung bedeutet ausschließlich **bbolt-Defragmentierung** über `cliostore compact`: die Datei wird offline neu geschrieben (temp-Datei + atomarer Rename) und damit verkleinert/entfragmentiert — **ohne** Events zu löschen oder zu verändern. Der Befehl scheitert bewusst, wenn eine Instanz die Datei hält (Datei-Lock). Die DB-Größe ist als `clio_db_size_bytes` beobachtbar.
+- **Konsequenzen:** Wiedergewinnung von Speicher-Overhead bei voller Erhaltung der Historie (verify bleibt grün). Echte Archivierung/Segmentierung alter Events (Cold Storage, Kette über Segmente) bleibt ein separater, größerer Architektur-Schritt gegen das Single-File-Design — bewusst zurückgestellt.
 
 ---
 

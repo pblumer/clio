@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -21,10 +22,18 @@ import (
 var version = "dev"
 
 func main() {
-	// `cliostore -version` / `version` gibt die Version aus und beendet.
-	if len(os.Args) > 1 && (os.Args[1] == "-version" || os.Args[1] == "--version" || os.Args[1] == "version") {
-		fmt.Println("cliostore", version)
-		return
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "-version", "--version", "version":
+			fmt.Println("cliostore", version)
+			return
+		case "compact":
+			if err := runCompact(os.Stdout); err != nil {
+				fmt.Fprintln(os.Stderr, "compact:", err)
+				os.Exit(1)
+			}
+			return
+		}
 	}
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
@@ -37,6 +46,29 @@ func main() {
 		logger.Error("server beendet mit fehler", "err", err)
 		os.Exit(1)
 	}
+}
+
+// dbPath liefert den DB-Pfad aus der Umgebung (Default clio.db).
+func dbPath() string {
+	if p := os.Getenv("CLIO_DB_PATH"); p != "" {
+		return p
+	}
+	return "clio.db"
+}
+
+// runCompact kompaktiert die Datenbankdatei (offline) und meldet die Größen.
+func runCompact(w io.Writer) error {
+	path := dbPath()
+	old, neu, err := store.Compact(path)
+	if err != nil {
+		return err
+	}
+	var pct float64
+	if old > 0 {
+		pct = 100 * (1 - float64(neu)/float64(old))
+	}
+	fmt.Fprintf(w, "kompaktiert: %s — %d -> %d bytes (%.1f%% kleiner)\n", path, old, neu, pct)
+	return nil
 }
 
 // syncMode übersetzt den (bereits validierten) Config-Wert in store.SyncMode.

@@ -1,13 +1,16 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"log/slog"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/pblumer/clio/internal/event"
 	"github.com/pblumer/clio/internal/store"
 )
 
@@ -33,6 +36,27 @@ func TestRunStoreError(t *testing.T) {
 	err := run(context.Background(), quietLogger())
 	if err == nil {
 		t.Fatal("erwartete fehler bei ungültigem db-pfad, bekam nil")
+	}
+}
+
+func TestRunCompact(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "c.db")
+	st, err := store.Open(path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if _, err := st.Append([]event.Candidate{{Source: "s", Subject: "/a", Type: "t"}}, nil); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	_ = st.Close()
+
+	t.Setenv("CLIO_DB_PATH", path)
+	var buf bytes.Buffer
+	if err := runCompact(&buf); err != nil {
+		t.Fatalf("runCompact: %v", err)
+	}
+	if !strings.Contains(buf.String(), "kompaktiert") {
+		t.Fatalf("ausgabe = %q", buf.String())
 	}
 }
 
