@@ -127,6 +127,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/read-events", s.requireAuth(s.handleReadEvents))
 	s.mux.HandleFunc("POST /api/v1/observe-events", s.requireAuth(s.handleObserveEvents))
 	s.mux.HandleFunc("GET /api/v1/verify", s.requireAuth(s.handleVerify))
+	s.mux.HandleFunc("GET /api/v1/public-key", s.requireAuth(s.handlePublicKey))
 	s.mux.HandleFunc("GET /api/v1/read-event-types", s.requireAuth(s.handleReadEventTypes))
 	s.mux.HandleFunc("POST /api/v1/register-event-schema", s.requireAuth(s.handleRegisterEventSchema))
 	s.mux.HandleFunc("GET /api/v1/read-event-schema", s.requireAuth(s.handleReadEventSchema))
@@ -230,6 +231,21 @@ func (s *Server) handleReadEventSchema(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"type": typ, "schema": schema})
+}
+
+// handlePublicKey liefert den öffentlichen Signaturschlüssel (base64), mit dem
+// Clients die Event-Signaturen selbst prüfen können. 404, wenn nicht signiert
+// wird.
+func (s *Server) handlePublicKey(w http.ResponseWriter, r *http.Request) {
+	pub, ok := s.store.PublicKey()
+	if !ok {
+		writeError(w, http.StatusNotFound, "signieren ist nicht aktiviert")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{
+		"algorithm": "ed25519",
+		"publicKey": store.EncodePublicKey(pub),
+	})
 }
 
 // handleMetrics liefert die Metriken im Prometheus-Textformat.

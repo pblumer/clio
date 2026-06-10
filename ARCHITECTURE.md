@@ -3,9 +3,9 @@
 > **Zweck dieses Dokuments**
 > Dieses Dokument ist die *Single Source of Truth* für das Projekt. Es ist so geschrieben, dass eine KI oder eine Person ohne Vorwissen nach dem Lesen vollständig versteht: **Was** gebaut wird, **warum**, **welche Ziele** verfolgt werden, **welche Entscheidungen** getroffen wurden und **wo das Projekt aktuell steht**. Es kombiniert ein Kontextdokument mit eingebetteten Architecture Decision Records (ADRs).
 >
-> **Status des Gesamtprojekts:** `IN ENTWICKLUNG` — **Stufe 0–3 abgeschlossen.** Write/Read/Observe, Optimistic Concurrency, Hash-Kette (`/verify`), Event-Typen + JSON-Schemas, Group Commit (`CLIO_SYNC`), Observability (`/metrics`), Distribution (Cross-Builds/Docker/Release), Kompaktierung (`cliostore compact`), OpenAPI/Swagger UI. Offen: Stufe 4 (Snapshots, EventQL) sowie optional Signaturen.
+> **Status des Gesamtprojekts:** `IN ENTWICKLUNG` — **Stufe 0–3 abgeschlossen** plus **Ed25519-Signaturen** (Authentizität). Write/Read/Observe, Optimistic Concurrency, Hash-Kette + Signaturen (`/verify`, `/public-key`), Event-Typen + JSON-Schemas, Group Commit (`CLIO_SYNC`), Observability (`/metrics`), Distribution (Cross-Builds/Docker/Release), Kompaktierung (`cliostore compact`), OpenAPI/Swagger UI. Offen: Stufe 4 (Snapshots, EventQL).
 > **Letzte Aktualisierung:** 2026-06-10
-> **Dokumentversion:** 1.16
+> **Dokumentversion:** 1.17
 
 ---
 
@@ -109,7 +109,8 @@ Alle Routen nutzen **POST** (außer ggf. `ping`), weil Parameter im Request-Body
 | `POST /api/v1/write-events` | Ein oder mehrere Event-Candidates atomar schreiben, optional mit Preconditions | 0 → 1 |
 | `POST /api/v1/read-events` | Events eines Subjects lesen; Optionen: `recursive`, `lowerBound`, `upperBound`, `types` (Filter nach Event-Typ) | 0 → 1 |
 | `POST /api/v1/observe-events` | Wie read (inkl. `recursive`, `lowerBound`, `types`), aber Verbindung bleibt offen für Live-Updates; Reconnect via `lowerBound` | 2 |
-| `GET /api/v1/verify` | Integrität der Hash-Kette prüfen (Tamper-Evidence) | 3 |
+| `GET /api/v1/verify` | Integrität der Hash-Kette (und ggf. Signaturen) prüfen | 3 |
+| `GET /api/v1/public-key` | Öffentlicher Ed25519-Schlüssel (falls Signieren aktiv) | 3 |
 | `GET /api/v1/read-event-types` | Alle bisher geschriebenen Event-Typen (Anzahl + `hasSchema`) | 3 |
 | `POST /api/v1/register-event-schema` · `GET /api/v1/read-event-schema` | JSON-Schema je Typ registrieren/lesen; Validierung beim Write (ADR-014) | 3 |
 | `GET /api/v1/events/<subject>` | Komfort-Leseroute: Subject = URL-Pfad; Optionen als Query (`recursive` (Default true), `lowerBound`, `upperBound`, `type` (wiederholbar), `watch=true` für Live). `GET /api/v1/events` = Wurzel | 3 |
@@ -286,6 +287,12 @@ Jede Stufe ist für sich lauffähig. Statusmarkierungen: `⬜ offen` · `🟡 in
 - **Kontext:** Die Datenbank wächst monoton (Events sind unveränderlich und werden nie gelöscht); zugleich fragmentiert bbolt intern. „Kompaktierung/Rotation" im klassischen Sinn (alte Daten löschen, Retention, Log-Compaction nach Key) widerspricht dem Kernprinzip und würde die Hash-Kette (ADR-012) brechen.
 - **Entscheidung:** Kompaktierung bedeutet ausschließlich **bbolt-Defragmentierung** über `cliostore compact`: die Datei wird offline neu geschrieben (temp-Datei + atomarer Rename) und damit verkleinert/entfragmentiert — **ohne** Events zu löschen oder zu verändern. Der Befehl scheitert bewusst, wenn eine Instanz die Datei hält (Datei-Lock). Die DB-Größe ist als `clio_db_size_bytes` beobachtbar.
 - **Konsequenzen:** Wiedergewinnung von Speicher-Overhead bei voller Erhaltung der Historie (verify bleibt grün). Echte Archivierung/Segmentierung alter Events (Cold Storage, Kette über Segmente) bleibt ein separater, größerer Architektur-Schritt gegen das Single-File-Design — bewusst zurückgestellt.
+
+### ADR-016: Ed25519-Signaturen für Authentizität
+- **Status:** Akzeptiert
+- **Kontext:** Die Hash-Kette (ADR-012) beweist *Integrität* (nichts wurde nachträglich geändert), aber nicht *Authentizität* (von wem stammen die Events). Das `signature`-Feld war dafür bereits vorgesehen.
+- **Entscheidung:** Ist ein Ed25519-Schlüssel über `CLIO_SIGNING_KEY` konfiguriert, signiert der Server jedes Event über seinen Hash (`signature` = base64). `cliostore gen-key` erzeugt ein Schlüsselpaar; `GET /api/v1/public-key` liefert den öffentlichen Schlüssel, sodass Clients unabhängig prüfen können. `GET /api/v1/verify` prüft die Signaturen mit, sofern ein Schlüssel aktiv ist. Ohne Schlüssel bleibt `signature` `null` (abwärtskompatibel).
+- **Konsequenzen:** Nachweisbare Urheberschaft zusätzlich zur Integrität. Die Signatur geht bewusst **nicht** in den Hash ein (Trennung von Integrität und Authentizität; Verfälschen der Signatur bricht nur die Signaturprüfung). Schlüsselverwaltung/-rotation liegt beim Betreiber; nur ein aktiver Schlüssel wird unterstützt (Rotation alter Signaturen ist nicht abgedeckt).
 
 ---
 

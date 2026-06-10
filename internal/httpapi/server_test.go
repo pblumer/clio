@@ -315,6 +315,42 @@ func TestReadEventsTypesBadRequest(t *testing.T) {
 	}
 }
 
+func TestPublicKeyEndpoint(t *testing.T) {
+	// Ohne Signieren -> 404.
+	plain := newTestServer(t)
+	if rec := do(t, plain, http.MethodGet, "/api/v1/public-key", "secret-token", ""); rec.Code != http.StatusNotFound {
+		t.Fatalf("ohne signieren: status = %d, want 404", rec.Code)
+	}
+
+	// Mit Signieren -> 200 + ed25519 public key.
+	seed, _, err := store.GenerateKey()
+	if err != nil {
+		t.Fatalf("gen-key: %v", err)
+	}
+	key, err := store.ParsePrivateKey(seed)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	st, err := store.OpenWithOptions(filepath.Join(t.TempDir(), "s.db"), store.Options{SigningKey: key})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	srv := New(config.Config{APIToken: "secret-token"}, st, nil)
+
+	rec := do(t, srv, http.MethodGet, "/api/v1/public-key", "secret-token", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var body map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("dekodieren: %v", err)
+	}
+	if body["algorithm"] != "ed25519" || body["publicKey"] == "" {
+		t.Fatalf("unerwartete antwort: %v", body)
+	}
+}
+
 func TestVerifyEndpoint(t *testing.T) {
 	srv := newTestServer(t)
 	do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token",
