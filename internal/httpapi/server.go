@@ -238,10 +238,16 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.logger.Error("events zählen fehlgeschlagen", "err", err)
 	}
+	size, err := s.store.Size()
+	if err != nil {
+		s.logger.Error("db-größe ermitteln fehlgeschlagen", "err", err)
+		size = -1
+	}
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	s.metrics.Write(w, metrics.Gauges{
 		ActiveObservers: s.broker.SubscriberCount(),
 		EventsTotal:     count,
+		DBSizeBytes:     size,
 	})
 }
 

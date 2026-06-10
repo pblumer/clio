@@ -252,7 +252,20 @@ curl http://127.0.0.1:3000/metrics
 
 Enthalten u. a.: `clio_http_requests_total{method,route,status}`,
 `clio_http_request_duration_seconds` (Histogramm), `clio_events_written_total`,
-`clio_precondition_failures_total`, `clio_active_observers`, `clio_events_total`.
+`clio_precondition_failures_total`, `clio_active_observers`, `clio_events_total`,
+`clio_db_size_bytes`.
+
+### Wartung: Kompaktierung
+
+Die Datenbank wächst monoton (Events sind unveränderlich). `compact`
+defragmentiert die bbolt-Datei **offline** (atomarer Swap), ohne Events zu
+löschen oder zu verändern — die Hash-Kette bleibt gültig:
+
+```bash
+# Server vorher stoppen (der Befehl scheitert sonst am Datei-Lock)
+CLIO_DB_PATH=clio.db ./cliostore compact
+# -> kompaktiert: clio.db — 2097152 -> 1048576 bytes (50.0% kleiner)
+```
 
 ## Performance & Durability
 
