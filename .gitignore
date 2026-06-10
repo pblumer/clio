@@ -1,0 +1,14 @@
+# Kompilierte Binaries
+/cliostore
+/dist/
+
+# Go-Test-/Coverage-Artefakte
+*.test
+*.out
+
+# Lokale Daten (bbolt-Datei etc.)
+*.db
+/data/
+
+# Editor/OS
+.DS_Store
