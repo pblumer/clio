@@ -220,6 +220,27 @@ curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:3000/api/v1/read-event-t
 #    {"type":"borrowed","count":1}
 ```
 
+### Event-Schemas
+
+Pro Event-Typ lässt sich ein **JSON Schema** registrieren; danach wird `data`
+beim Schreiben dagegen validiert (Verstoß → 400). Schemas sind unveränderlich,
+und eine Registrierung gelingt nur, wenn die bestehende Historie des Typs konform
+ist.
+
+```bash
+# Schema registrieren
+curl -X POST http://127.0.0.1:3000/api/v1/register-event-schema \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"type":"order-placed","schema":{"type":"object","required":["amount"],
+       "properties":{"amount":{"type":"number"}}}}'
+
+# Schema lesen
+curl -H "Authorization: Bearer $TOKEN" \
+  "http://127.0.0.1:3000/api/v1/read-event-schema?type=order-placed"
+```
+
+`read-event-types` zeigt pro Typ zusätzlich `hasSchema`.
+
 ## Observability
 
 Jede Anfrage wird strukturiert geloggt (Methode, Route, Status, Dauer). Unter

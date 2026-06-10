@@ -341,6 +341,56 @@ func TestVerifyEndpoint(t *testing.T) {
 	}
 }
 
+func TestEventSchemaLifecycle(t *testing.T) {
+	srv := newTestServer(t)
+	reg := `{"type":"order","schema":{"type":"object","required":["amount"],"properties":{"amount":{"type":"number"}},"additionalProperties":false}}`
+
+	// Registrieren -> 200.
+	if rec := do(t, srv, http.MethodPost, "/api/v1/register-event-schema", "secret-token", reg); rec.Code != http.StatusOK {
+		t.Fatalf("register status = %d, want 200; %s", rec.Code, rec.Body.String())
+	}
+	// Erneut -> 409.
+	if rec := do(t, srv, http.MethodPost, "/api/v1/register-event-schema", "secret-token", reg); rec.Code != http.StatusConflict {
+		t.Fatalf("re-register status = %d, want 409", rec.Code)
+	}
+
+	// Gültiges Event -> 200.
+	if rec := do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token",
+		`{"events":[{"source":"s","subject":"/o/1","type":"order","data":{"amount":5}}]}`); rec.Code != http.StatusOK {
+		t.Fatalf("gültiger write = %d, want 200", rec.Code)
+	}
+	// Ungültiges Event -> 400.
+	if rec := do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token",
+		`{"events":[{"source":"s","subject":"/o/2","type":"order","data":{"foo":1}}]}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("ungültiger write = %d, want 400", rec.Code)
+	}
+
+	// read-event-schema -> 200 mit Schema.
+	rec := do(t, srv, http.MethodGet, "/api/v1/read-event-schema?type=order", "secret-token", "")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "amount") {
+		t.Fatalf("read-event-schema = %d / %s", rec.Code, rec.Body.String())
+	}
+	// Unbekannter Typ -> 404.
+	if rec := do(t, srv, http.MethodGet, "/api/v1/read-event-schema?type=nope", "secret-token", ""); rec.Code != http.StatusNotFound {
+		t.Fatalf("unbekannter typ = %d, want 404", rec.Code)
+	}
+}
+
+func TestRegisterEventSchemaBadRequest(t *testing.T) {
+	srv := newTestServer(t)
+	tests := []string{
+		`{"schema":{"type":"object"}}`,           // type fehlt
+		`{"type":"x"}`,                           // schema fehlt
+		`{"type":"x","schema":{"type":"quark"}}`, // ungültiges schema
+	}
+	for _, body := range tests {
+		rec := do(t, srv, http.MethodPost, "/api/v1/register-event-schema", "secret-token", body)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("body %s: status = %d, want 400", body, rec.Code)
+		}
+	}
+}
+
 func TestReadEventTypes(t *testing.T) {
 	srv := newTestServer(t)
 	do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token",
