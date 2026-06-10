@@ -13,12 +13,14 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/swaggest/swgui/v5emb"
 
 	"github.com/pblumer/clio/internal/apidocs"
 	"github.com/pblumer/clio/internal/config"
 	"github.com/pblumer/clio/internal/event"
+	"github.com/pblumer/clio/internal/metrics"
 	"github.com/pblumer/clio/internal/pubsub"
 	"github.com/pblumer/clio/internal/store"
 )
@@ -28,11 +30,12 @@ const ndjsonContentType = "application/x-ndjson"
 
 // Server kapselt Konfiguration, Storage und Router des HTTP-API-Layers.
 type Server struct {
-	cfg    config.Config
-	store  *store.Store
-	broker *pubsub.Broker
-	logger *slog.Logger
-	mux    *http.ServeMux
+	cfg     config.Config
+	store   *store.Store
+	broker  *pubsub.Broker
+	metrics *metrics.Metrics
+	logger  *slog.Logger
+	mux     *http.ServeMux
 }
 
 // New erzeugt einen konfigurierten Server. Ist logger nil, wird der
@@ -42,19 +45,75 @@ func New(cfg config.Config, st *store.Store, logger *slog.Logger) *Server {
 		logger = slog.Default()
 	}
 	s := &Server{
-		cfg:    cfg,
-		store:  st,
-		broker: pubsub.New(),
-		logger: logger,
-		mux:    http.NewServeMux(),
+		cfg:     cfg,
+		store:   st,
+		broker:  pubsub.New(),
+		metrics: metrics.New(),
+		logger:  logger,
+		mux:     http.NewServeMux(),
 	}
 	s.routes()
 	return s
 }
 
-// Handler liefert den http.Handler des Servers (nützlich für Tests).
+// Handler liefert den http.Handler des Servers, umschlossen von der
+// Observability-Middleware (Request-Logging + Metriken).
 func (s *Server) Handler() http.Handler {
-	return s.mux
+	return s.instrument(s.mux)
+}
+
+// statusRecorder fängt den Status-Code (und reicht http.Flusher fürs Streaming
+// durch), um Anfragen instrumentieren zu können.
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+	wrote  bool
+}
+
+func (r *statusRecorder) WriteHeader(code int) {
+	if !r.wrote {
+		r.status = code
+		r.wrote = true
+	}
+	r.ResponseWriter.WriteHeader(code)
+}
+
+func (r *statusRecorder) Write(b []byte) (int, error) {
+	if !r.wrote {
+		r.status = http.StatusOK
+		r.wrote = true
+	}
+	return r.ResponseWriter.Write(b)
+}
+
+func (r *statusRecorder) Flush() {
+	if f, ok := r.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// instrument loggt jede Anfrage strukturiert und verbucht sie in den Metriken.
+func (s *Server) instrument(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+
+		next.ServeHTTP(rec, r)
+
+		dur := time.Since(start)
+		route := r.Pattern
+		if route == "" {
+			route = "unmatched"
+		}
+		s.metrics.ObserveRequest(r.Method, route, rec.status, dur)
+		s.logger.Info("request",
+			"method", r.Method,
+			"route", route,
+			"path", r.URL.Path,
+			"status", rec.status,
+			"dur_ms", float64(dur.Microseconds())/1000,
+		)
+	})
 }
 
 func (s *Server) routes() {
@@ -68,6 +127,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/read-events", s.requireAuth(s.handleReadEvents))
 	s.mux.HandleFunc("POST /api/v1/observe-events", s.requireAuth(s.handleObserveEvents))
 	s.mux.HandleFunc("GET /api/v1/verify", s.requireAuth(s.handleVerify))
+
+	// Prometheus-Metriken (ohne Auth, üblich für Scraping im internen Netz).
+	s.mux.HandleFunc("GET /metrics", s.handleMetrics)
 
 	// Komfort-Leseroute: GET /api/v1/events/<subject> (Subject = Pfad). Optionen
 	// als Query-Parameter (recursive, lowerBound, upperBound, type, watch).
@@ -91,6 +153,19 @@ func (s *Server) handleOpenAPISpec(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handlePing(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleMetrics liefert die Metriken im Prometheus-Textformat.
+func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	count, err := s.store.Count()
+	if err != nil {
+		s.logger.Error("events zählen fehlgeschlagen", "err", err)
+	}
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+	s.metrics.Write(w, metrics.Gauges{
+		ActiveObservers: s.broker.SubscriberCount(),
+		EventsTotal:     count,
+	})
 }
 
 // handleVerify rechnet die Hash-Kette nach und meldet, ob die Historie
@@ -148,6 +223,7 @@ func (s *Server) handleWriteEvents(w http.ResponseWriter, r *http.Request) {
 	written, err := s.store.Append(req.Events, preconditions)
 	if err != nil {
 		if errors.Is(err, store.ErrPreconditionFailed) {
+			s.metrics.IncPreconditionFailure()
 			writeError(w, http.StatusConflict, err.Error())
 			return
 		}
@@ -155,6 +231,8 @@ func (s *Server) handleWriteEvents(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "interner fehler beim schreiben")
 		return
 	}
+
+	s.metrics.AddEventsWritten(len(written))
 
 	// Live-Observer benachrichtigen (nach erfolgreichem, committetem Write).
 	s.broker.Publish(written)

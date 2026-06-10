@@ -5,7 +5,7 @@
 >
 > **Status des Gesamtprojekts:** `IN ENTWICKLUNG` — Stufe 0–2 abgeschlossen; Stufe 3 weit fortgeschritten: **Group Commit** (Durchsatz bei voller Durability, `CLIO_SYNC`), Crash-Recovery durch bbolt-ACID, **Distribution** (statische Cross-Builds via `make dist`, Docker-Image, Release-Workflow). Offen in Stufe 3: Kompaktierung, Metrics/Observability.
 > **Letzte Aktualisierung:** 2026-06-10
-> **Dokumentversion:** 1.12
+> **Dokumentversion:** 1.13
 
 ---
 
@@ -113,6 +113,7 @@ Alle Routen nutzen **POST** (außer ggf. `ping`), weil Parameter im Request-Body
 | `GET /api/v1/events/<subject>` | Komfort-Leseroute: Subject = URL-Pfad; Optionen als Query (`recursive` (Default true), `lowerBound`, `upperBound`, `type` (wiederholbar), `watch=true` für Live). `GET /api/v1/events` = Wurzel | 3 |
 | `POST /api/v1/run-eventql-query` | EventQL-Abfrage (spätes Ziel) | 4 |
 | `GET /openapi.yaml` · `GET /docs` | OpenAPI-3-Spec bzw. interaktive Swagger UI (eingebettet, ohne Auth) | 3 |
+| `GET /metrics` | Prometheus-Metriken (ohne Auth) | 3 |
 
 **Auth:** Header `Authorization: Bearer <API_TOKEN>` gegen ein konfiguriertes Einzeltoken.
 
@@ -175,7 +176,7 @@ Jede Stufe ist für sich lauffähig. Statusmarkierungen: `⬜ offen` · `🟡 in
 - [x] Crash-Recovery: durch bbolts ACID-Transaktionen gegeben — Index ist Teil derselben DB und damit immer konsistent; ein separater Rebuild entfällt (siehe ADR-006).
 - [x] fsync-Strategie (Durability vs. Performance) → **Group Commit** als Default (ADR-009), umschaltbar via `CLIO_SYNC` (`group`/`always`/`off`). Benchmarks belegen den Effekt.
 - [ ] Kompaktierung / Dateirotation
-- [ ] Observability: Metrics, strukturiertes Logging (slog steht bereits)
+- [x] Observability: strukturiertes Request-Logging (slog) + Prometheus-`/metrics` (Requests, Latenz-Histogramm, geschriebene Events, 409-Failures, aktive Observer, Event-Count) — ADR-013, ohne Prometheus-Client-Dependency
 - [x] Single-Binary-Builds für alle Plattformen (`GOOS`/`GOARCH`) — `make dist` (linux/darwin/windows × amd64/arm64), Version via `-ldflags` eingebettet; Release-Workflow bei Tags `v*`
 - [x] Docker-Image — mehrstufig, `distroless/static`, nonroot, `/data`-Volume
 
@@ -264,6 +265,12 @@ Jede Stufe ist für sich lauffähig. Statusmarkierungen: `⬜ offen` · `🟡 in
 - **Kontext:** „Garantierte Unveränderlichkeit" war bisher nur organisatorisch (append-only API). Wer Zugriff auf die Datei hat, könnte die Historie offline und unbemerkt ändern. Gewünscht ist ein *mathematischer* Nachweis der Unverändertheit (wie beim Vorbild: `predecessorhash`/`hash`).
 - **Entscheidung:** Jedes Event erhält einen SHA-256-`hash` über seinen Inhalt **und** den `predecessorhash` (Hash des Vorgängers; Genesis = 64 Nullen). Der Ketten-Kopf wird transaktional im `meta`-Bucket fortgeschrieben — die global serialisierte Schreibstelle (ADR-003) macht die Kette eindeutig. Felder werden längenpräfigiert kanonisch serialisiert; `data` wird kompakt gespeichert, damit die Prüfung reproduzierbar ist. `GET /api/v1/verify` rechnet die Kette nach. Signaturen (Authentizität) sind ein optionaler späterer Schritt; das `signature`-Feld ist vorhanden, aber im Integritäts-Modus `null`.
 - **Konsequenzen:** Jede nachträgliche Änderung an einem historischen Event ist beweisbar erkennbar (Tamper-Evidence). Mehraufwand pro Write (ein SHA-256) ist vernachlässigbar. Die Kette bezieht sich auf die globale Schreibreihenfolge; sie setzt eine konsistente Storage-Engine voraus (gegeben). Byte-genaue Kompatibilität mit den Hashes des Vorbilds ist **nicht** garantiert (eigenes, dokumentiertes Kanonisierungsschema).
+
+### ADR-013: Eigene, abhängigkeitsfreie Metriken statt Prometheus-Client
+- **Status:** Akzeptiert
+- **Kontext:** Betriebssichtbarkeit (Request-Logs, Metriken) wird benötigt. Der offizielle Prometheus-Client zieht zahlreiche transitive Abhängigkeiten nach — im Widerspruch zum „schlankes, abhängigkeitsfreies Binary"-Ziel (ADR-001).
+- **Entscheidung:** Ein kleines internes `metrics`-Paket sammelt Counter/Gauge/Histogramm und rendert sie direkt im Prometheus-Textformat (`GET /metrics`). Eine Middleware loggt jede Anfrage strukturiert (slog) und verbucht sie; als Route-Label dient das gematchte Mux-Pattern (`r.Pattern`) — geringe Kardinalität trotz variabler Pfade.
+- **Konsequenzen:** Volle Prometheus-Scrape-Kompatibilität ohne neue Abhängigkeiten. Funktionsumfang bewusst begrenzt (eine globale Latenz-Histogramm-Serie, fester Bucket-Satz). `/metrics` ist ohne Auth erreichbar (Konvention; im Betrieb per Netz/Proxy abzusichern).
 
 ---
 

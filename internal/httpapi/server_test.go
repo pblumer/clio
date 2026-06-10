@@ -341,6 +341,31 @@ func TestVerifyEndpoint(t *testing.T) {
 	}
 }
 
+func TestMetricsEndpoint(t *testing.T) {
+	srv := newTestServer(t)
+	do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token",
+		`{"events":[{"source":"s","subject":"/a","type":"t1"},{"source":"s","subject":"/a","type":"t2"}]}`)
+
+	// Ohne Auth erreichbar (Scraping).
+	rec := do(t, srv, http.MethodGet, "/metrics", "", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/plain") {
+		t.Fatalf("content-type = %q, want text/plain…", ct)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{
+		"clio_events_written_total 2",
+		"clio_events_total 2",
+		`clio_http_requests_total{method="POST",route="POST /api/v1/write-events",status="200"}`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("/metrics enthält nicht: %s", want)
+		}
+	}
+}
+
 func TestOpenAPISpec(t *testing.T) {
 	srv := newTestServer(t)
 	// Ohne Auth erreichbar (Doku ist nicht sensibel).

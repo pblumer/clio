@@ -211,6 +211,19 @@ curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:3000/api/v1/verify
 Eine optionale Signatur (Authentizität) ist als `signature`-Feld vorgesehen,
 im aktuellen Integritäts-Modus aber `null`.
 
+## Observability
+
+Jede Anfrage wird strukturiert geloggt (Methode, Route, Status, Dauer). Unter
+**`/metrics`** liegen Prometheus-Metriken — ohne externe Client-Bibliothek:
+
+```bash
+curl http://127.0.0.1:3000/metrics
+```
+
+Enthalten u. a.: `clio_http_requests_total{method,route,status}`,
+`clio_http_request_duration_seconds` (Histogramm), `clio_events_written_total`,
+`clio_precondition_failures_total`, `clio_active_observers`, `clio_events_total`.
+
 ## Performance & Durability
 
 Writes laufen standardmäßig über **Group Commit** (`CLIO_SYNC=group`): viele

@@ -143,6 +143,18 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "500": { $ref: "#/components/responses/InternalError" }
 
+  /metrics:
+    get:
+      tags: [System]
+      summary: Prometheus-Metriken
+      security: []
+      responses:
+        "200":
+          description: Metriken im Prometheus-Textformat
+          content:
+            text/plain:
+              schema: { type: string }
+
   /api/v1/verify:
     get:
       tags: [Events]
