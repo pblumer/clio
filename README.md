@@ -12,10 +12,11 @@ Die vollständige Architektur, Roadmap und alle Entscheidungen stehen in
 
 ## Status
 
-**Stufe 0 (MVP) — funktional vollständig.** Lauffähig: `ping`, `write-events`
-(atomar, monotone Event-IDs, `bbolt`-Storage) und `read-events` (NDJSON), alle
-Datenrouten Bearer-Token-geschützt. Als Nächstes (Stufe 1): Preconditions
-(Optimistic Concurrency) und `lowerBound`/`upperBound` beim Lesen.
+**Stufe 0 + 1 — abgeschlossen.** Lauffähig: `ping`, `write-events` (atomar,
+monotone Event-IDs, `bbolt`-Storage, **Preconditions** für Optimistic
+Concurrency) und `read-events` (NDJSON, optionale **`lowerBound`/`upperBound`**),
+alle Datenrouten Bearer-Token-geschützt. Als Nächstes (Stufe 2): `observe-events`
+(Live-Streaming).
 
 ## Bauen & Starten
 
@@ -55,6 +56,35 @@ curl -X POST http://127.0.0.1:3000/api/v1/write-events \
 curl -X POST http://127.0.0.1:3000/api/v1/read-events \
   -H "Authorization: Bearer $TOKEN" \
   -d '{"subject":"/books/42"}'
+
+# Nur einen ID-Bereich lesen (beide Grenzen inklusive)
+curl -X POST http://127.0.0.1:3000/api/v1/read-events \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"subject":"/books/42","lowerBound":"2","upperBound":"10"}'
+```
+
+### Optimistic Concurrency (Preconditions)
+
+`write-events` akzeptiert optionale Preconditions, die **atomar** mit dem Write
+geprüft werden. Schlägt eine fehl, wird nichts geschrieben und der Server
+antwortet mit **HTTP 409**.
+
+```bash
+# Nur schreiben, wenn der Stream noch leer ist
+curl -X POST http://127.0.0.1:3000/api/v1/write-events \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{
+        "events":[{"source":"lib","subject":"/books/42","type":"acquired"}],
+        "preconditions":[{"type":"isSubjectPristine","payload":{"subject":"/books/42"}}]
+      }'
+
+# Nur schreiben, wenn das letzte Event des Streams diese ID hat
+curl -X POST http://127.0.0.1:3000/api/v1/write-events \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{
+        "events":[{"source":"lib","subject":"/books/42","type":"borrowed"}],
+        "preconditions":[{"type":"isSubjectOnEventId","payload":{"subject":"/books/42","eventId":"7"}}]
+      }'
 ```
 
 ## Tests

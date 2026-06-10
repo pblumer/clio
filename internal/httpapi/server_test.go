@@ -181,6 +181,88 @@ func TestReadEventsBadRequest(t *testing.T) {
 	}
 }
 
+func TestWriteEventsPreconditions(t *testing.T) {
+	srv := newTestServer(t)
+
+	// isSubjectPristine: erster Write auf leeren Stream -> 200.
+	body := `{"events":[{"source":"s","subject":"/p","type":"t"}],
+		"preconditions":[{"type":"isSubjectPristine","payload":{"subject":"/p"}}]}`
+	if rec := do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token", body); rec.Code != http.StatusOK {
+		t.Fatalf("pristine-write status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	// Zweiter Write mit gleicher Precondition -> 409 (Stream nicht mehr leer).
+	if rec := do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token", body); rec.Code != http.StatusConflict {
+		t.Fatalf("zweiter pristine-write status = %d, want 409", rec.Code)
+	}
+
+	// isSubjectOnEventId: /p steht jetzt auf ID 1.
+	okBody := `{"events":[{"source":"s","subject":"/p","type":"t2"}],
+		"preconditions":[{"type":"isSubjectOnEventId","payload":{"subject":"/p","eventId":"1"}}]}`
+	if rec := do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token", okBody); rec.Code != http.StatusOK {
+		t.Fatalf("onEventId-write status = %d, want 200", rec.Code)
+	}
+	// Veraltete erwartete ID -> 409.
+	staleBody := `{"events":[{"source":"s","subject":"/p","type":"t3"}],
+		"preconditions":[{"type":"isSubjectOnEventId","payload":{"subject":"/p","eventId":"1"}}]}`
+	if rec := do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token", staleBody); rec.Code != http.StatusConflict {
+		t.Fatalf("veralteter onEventId-write status = %d, want 409", rec.Code)
+	}
+}
+
+func TestWriteEventsPreconditionBadRequest(t *testing.T) {
+	srv := newTestServer(t)
+	ev := `"events":[{"source":"s","subject":"/p","type":"t"}]`
+	tests := []struct {
+		name string
+		body string
+	}{
+		{"subject ohne slash", `{` + ev + `,"preconditions":[{"type":"isSubjectPristine","payload":{"subject":"p"}}]}`},
+		{"unbekannter typ", `{` + ev + `,"preconditions":[{"type":"isMagic","payload":{"subject":"/p"}}]}`},
+		{"eventId nicht numerisch", `{` + ev + `,"preconditions":[{"type":"isSubjectOnEventId","payload":{"subject":"/p","eventId":"x"}}]}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token", tt.body)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestReadEventsBounds(t *testing.T) {
+	srv := newTestServer(t)
+	for i := 0; i < 5; i++ {
+		do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token",
+			`{"events":[{"source":"s","subject":"/s","type":"t"}]}`)
+	}
+
+	rec := do(t, srv, http.MethodPost, "/api/v1/read-events", "secret-token",
+		`{"subject":"/s","lowerBound":"2","upperBound":"4"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	got := decodeNDJSON(t, rec.Body.String())
+	if len(got) != 3 || got[0].ID != "2" || got[2].ID != "4" {
+		t.Fatalf("bounds-ergebnis falsch: %+v", got)
+	}
+}
+
+func TestReadEventsBoundsBadRequest(t *testing.T) {
+	srv := newTestServer(t)
+	tests := []string{
+		`{"subject":"/s","lowerBound":"x"}`,
+		`{"subject":"/s","upperBound":"-1"}`,
+		`{"subject":"/s","lowerBound":"5","upperBound":"2"}`,
+	}
+	for _, body := range tests {
+		rec := do(t, srv, http.MethodPost, "/api/v1/read-events", "secret-token", body)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("body %s: status = %d, want 400", body, rec.Code)
+		}
+	}
+}
+
 // Geschlossener Store: Lese-/Schreibrouten antworten mit 500.
 func TestDataRoutesStoreError(t *testing.T) {
 	srv := newTestServer(t)

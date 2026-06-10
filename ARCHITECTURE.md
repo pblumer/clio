@@ -3,9 +3,9 @@
 > **Zweck dieses Dokuments**
 > Dieses Dokument ist die *Single Source of Truth* für das Projekt. Es ist so geschrieben, dass eine KI oder eine Person ohne Vorwissen nach dem Lesen vollständig versteht: **Was** gebaut wird, **warum**, **welche Ziele** verfolgt werden, **welche Entscheidungen** getroffen wurden und **wo das Projekt aktuell steht**. Es kombiniert ein Kontextdokument mit eingebetteten Architecture Decision Records (ADRs).
 >
-> **Status des Gesamtprojekts:** `IN ENTWICKLUNG` — Stufe 0 (MVP) funktional vollständig: `write-events` (atomar, monotone IDs, bbolt) und `read-events` (NDJSON) lauffähig.
+> **Status des Gesamtprojekts:** `IN ENTWICKLUNG` — Stufe 0 + 1 abgeschlossen: Write/Read mit `bbolt`, Optimistic Concurrency (Preconditions → HTTP 409) und bereichsgefiltertes Lesen (`lowerBound`/`upperBound`). Nächste Stufe: Observe/Live-Streaming.
 > **Letzte Aktualisierung:** 2026-06-10
-> **Dokumentversion:** 1.4
+> **Dokumentversion:** 1.5
 
 ---
 
@@ -150,13 +150,14 @@ Jede Stufe ist für sich lauffähig. Statusmarkierungen: `⬜ offen` · `🟡 in
 
 > **Hinweis:** Die atomare Mehrfach-Schreibung und die serialisierte, monotone ID-Vergabe (eigentlich Stufe-1-Punkte, ADR-003) ergeben sich aus der bbolt-Transaktion bereits hier „gratis" und sind umgesetzt. Verbleibend für Stufe 1: Preconditions sowie `lowerBound`/`upperBound` beim Lesen.
 
-### Stufe 1 — Ordnung & Concurrency `⬜`
+### Stufe 1 — Ordnung & Concurrency `✅`
 *Schätzung: 1–2 Wochen*
-- [ ] Globale, monoton steigende Event-IDs (serialisiert)
-- [ ] Atomares Schreiben mehrerer Events (alles-oder-nichts)
-- [ ] Preconditions `isSubjectPristine`, `isSubjectOnEventId`
-- [ ] `lowerBound` / `upperBound` beim Lesen
-- [ ] Serialisierte Write-Queue / einzelner Write-Mutex (siehe ADR-003)
+- [x] Globale, monoton steigende Event-IDs (serialisiert) — via `bbolt`-Sequenz in der Schreibtransaktion
+- [x] Atomares Schreiben mehrerer Events (alles-oder-nichts) — eine `bbolt`-Update-Transaktion pro Aufruf
+- [x] Preconditions `isSubjectPristine`, `isSubjectOnEventId` — innerhalb der Schreibtransaktion ausgewertet; Verletzung → HTTP 409
+- [x] `lowerBound` / `upperBound` beim Lesen — inklusive Event-ID-Grenzen
+- [x] Serialisierte Write-Queue / einzelner Write-Mutex (siehe ADR-003) — durch bbolts Single-Writer-Transaktion erfüllt
+- **Ergebnis:** Optimistic Concurrency und bereichsgefiltertes Lesen. ✅
 
 ### Stufe 2 — Observe / Live-Streaming `⬜`
 *Schätzung: 1–2 Wochen*

@@ -3,13 +3,14 @@
 //
 // Ordnung & Atomarität (ADR-003): bbolt erlaubt zu jedem Zeitpunkt genau eine
 // schreibende Transaktion. Diese serialisierte Schreibstelle vergibt die global
-// monoton steigenden Event-IDs und schreibt alle Events eines Aufrufs in einer
-// einzigen Transaktion — also alles-oder-nichts.
+// monoton steigenden Event-IDs, prüft die Preconditions und schreibt alle
+// Events eines Aufrufs in einer einzigen Transaktion — also alles-oder-nichts.
 package store
 
 import (
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -29,6 +30,33 @@ var (
 // subjectSep trennt im Subject-Index das Subject von der Sequenznummer.
 // 0x00 kommt in Subject-Pfaden nicht vor und ist daher als Separator sicher.
 const subjectSep = 0x00
+
+// ErrPreconditionFailed wird zurückgegeben, wenn eine Precondition beim
+// Schreiben nicht erfüllt ist (Optimistic Concurrency). Aufrufer können dies
+// per errors.Is erkennen und z. B. auf HTTP 409 abbilden.
+var ErrPreconditionFailed = errors.New("precondition nicht erfüllt")
+
+// Precondition-Typen (siehe ADR / API-Kontrakt).
+const (
+	PreconditionSubjectPristine  = "isSubjectPristine"
+	PreconditionSubjectOnEventID = "isSubjectOnEventId"
+)
+
+// Precondition ist eine vor dem Write zu erfüllende Bedingung. Subject ist für
+// alle Typen relevant; EventID nur für isSubjectOnEventId.
+type Precondition struct {
+	Type    string
+	Subject string
+	EventID string
+}
+
+// ReadOptions filtert ein ReadSubject auf einen Bereich globaler Event-IDs.
+// Beide Grenzen sind inklusiv. LowerBound 0 bedeutet „keine untere Grenze";
+// UpperBound 0 bedeutet „keine obere Grenze".
+type ReadOptions struct {
+	LowerBound uint64
+	UpperBound uint64
+}
 
 // Store kapselt die bbolt-Datenbank.
 type Store struct {
@@ -65,10 +93,11 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
-// Append speichert eine oder mehrere Candidates atomar (alles-oder-nichts) und
-// liefert die fertig ergänzten Events in Schreibreihenfolge zurück. Bei leerer
-// Eingabe wird ein leeres Ergebnis ohne Transaktion zurückgegeben.
-func (s *Store) Append(candidates []event.Candidate) ([]event.Event, error) {
+// Append prüft die Preconditions und speichert anschließend eine oder mehrere
+// Candidates atomar (alles-oder-nichts). Schlägt eine Precondition fehl, wird
+// nichts geschrieben und ein in ErrPreconditionFailed gehüllter Fehler
+// zurückgegeben. Bei leerer Eingabe wird ein leeres Ergebnis zurückgegeben.
+func (s *Store) Append(candidates []event.Candidate, preconditions []Precondition) ([]event.Event, error) {
 	if len(candidates) == 0 {
 		return nil, nil
 	}
@@ -77,6 +106,10 @@ func (s *Store) Append(candidates []event.Candidate) ([]event.Event, error) {
 	events := make([]event.Event, 0, len(candidates))
 
 	err := s.db.Update(func(tx *bolt.Tx) error {
+		if err := checkPreconditions(tx, preconditions); err != nil {
+			return err
+		}
+
 		evts := tx.Bucket(bucketEvents)
 		idx := tx.Bucket(bucketSubjectIdx)
 
@@ -114,14 +147,70 @@ func (s *Store) Append(candidates []event.Candidate) ([]event.Event, error) {
 		return nil
 	})
 	if err != nil {
+		if errors.Is(err, ErrPreconditionFailed) {
+			return nil, err
+		}
 		return nil, fmt.Errorf("events schreiben: %w", err)
 	}
 
 	return events, nil
 }
 
-// ReadSubject liefert alle Events eines Subjects in Schreibreihenfolge.
-func (s *Store) ReadSubject(subject string) ([]event.Event, error) {
+// checkPreconditions wertet alle Preconditions innerhalb der Schreibtransaktion
+// aus, damit Prüfung und Write atomar sind.
+func checkPreconditions(tx *bolt.Tx, preconditions []Precondition) error {
+	idx := tx.Bucket(bucketSubjectIdx)
+
+	for _, p := range preconditions {
+		last, exists := lastSeq(idx, p.Subject)
+
+		switch p.Type {
+		case PreconditionSubjectPristine:
+			if exists {
+				return fmt.Errorf("%w: subject %q ist nicht leer", ErrPreconditionFailed, p.Subject)
+			}
+		case PreconditionSubjectOnEventID:
+			want, err := strconv.ParseUint(p.EventID, 10, 64)
+			if err != nil {
+				return fmt.Errorf("%w: ungültige eventId %q", ErrPreconditionFailed, p.EventID)
+			}
+			if !exists {
+				return fmt.Errorf("%w: subject %q ist leer, erwartet eventId %s", ErrPreconditionFailed, p.Subject, p.EventID)
+			}
+			if last != want {
+				return fmt.Errorf("%w: subject %q steht auf eventId %d, erwartet %d", ErrPreconditionFailed, p.Subject, last, want)
+			}
+		default:
+			return fmt.Errorf("%w: unbekannter precondition-typ %q", ErrPreconditionFailed, p.Type)
+		}
+	}
+	return nil
+}
+
+// lastSeq liefert die Sequenznummer des letzten Events eines Subjects und ob
+// der Stream überhaupt Events enthält.
+func lastSeq(idx *bolt.Bucket, subject string) (uint64, bool) {
+	prefix := append([]byte(subject), subjectSep)
+	cur := idx.Cursor()
+
+	// Auf den ersten Schlüssel hinter dem Prefix springen und einen Schritt
+	// zurück: das ist der letzte Eintrag des Subjects (sofern vorhanden).
+	end := append([]byte(subject), subjectSep+1)
+	k, _ := cur.Seek(end)
+	if k == nil {
+		k, _ = cur.Last()
+	} else {
+		k, _ = cur.Prev()
+	}
+	if k == nil || !hasPrefix(k, prefix) {
+		return 0, false
+	}
+	return binary.BigEndian.Uint64(k[len(prefix):]), true
+}
+
+// ReadSubject liefert die Events eines Subjects in Schreibreihenfolge, gefiltert
+// auf den durch opts beschriebenen ID-Bereich.
+func (s *Store) ReadSubject(subject string, opts ReadOptions) ([]event.Event, error) {
 	var events []event.Event
 
 	prefix := append([]byte(subject), subjectSep)
@@ -130,10 +219,18 @@ func (s *Store) ReadSubject(subject string) ([]event.Event, error) {
 		evts := tx.Bucket(bucketEvents)
 		cur := tx.Bucket(bucketSubjectIdx).Cursor()
 
-		for k, seqKey := cur.Seek(prefix); k != nil && hasPrefix(k, prefix); k, seqKey = cur.Next() {
-			raw := evts.Get(seqKey)
+		for k, evKey := cur.Seek(prefix); k != nil && hasPrefix(k, prefix); k, evKey = cur.Next() {
+			seq := binary.BigEndian.Uint64(evKey)
+			if opts.LowerBound != 0 && seq < opts.LowerBound {
+				continue
+			}
+			if opts.UpperBound != 0 && seq > opts.UpperBound {
+				continue
+			}
+
+			raw := evts.Get(evKey)
 			if raw == nil {
-				return fmt.Errorf("inkonsistenter index: event %x fehlt", seqKey)
+				return fmt.Errorf("inkonsistenter index: event %x fehlt", evKey)
 			}
 			var ev event.Event
 			if err := json.Unmarshal(raw, &ev); err != nil {
