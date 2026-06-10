@@ -28,6 +28,7 @@ var (
 	bucketEvents     = []byte("events")
 	bucketSubjectIdx = []byte("subject_idx")
 	bucketMeta       = []byte("meta")
+	bucketTypes      = []byte("types")
 )
 
 // metaChainHead speichert im meta-Bucket den Hash des zuletzt geschriebenen
@@ -136,7 +137,7 @@ func OpenWithOptions(path string, opts Options) (*Store, error) {
 	}
 
 	err = db.Update(func(tx *bolt.Tx) error {
-		for _, name := range [][]byte{bucketEvents, bucketSubjectIdx, bucketMeta} {
+		for _, name := range [][]byte{bucketEvents, bucketSubjectIdx, bucketMeta, bucketTypes} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return err
 			}
@@ -177,6 +178,40 @@ func (s *Store) Count() (uint64, error) {
 	return n, err
 }
 
+// TypeInfo beschreibt einen bisher geschriebenen Event-Typ.
+type TypeInfo struct {
+	Type  string `json:"type"`
+	Count uint64 `json:"count"`
+}
+
+// EventTypes liefert alle bisher geschriebenen Event-Typen in alphabetischer
+// Reihenfolge (bbolt-Schlüsselordnung) samt Anzahl.
+func (s *Store) EventTypes() ([]TypeInfo, error) {
+	var out []TypeInfo
+	err := s.db.View(func(tx *bolt.Tx) error {
+		c := tx.Bucket(bucketTypes).Cursor()
+		for k, v := c.First(); k != nil; k, v = c.Next() {
+			out = append(out, TypeInfo{Type: string(k), Count: binary.BigEndian.Uint64(v)})
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// incrTypeCount erhöht den Zähler eines Event-Typs im types-Bucket.
+func incrTypeCount(types *bolt.Bucket, t string) error {
+	var cnt uint64
+	if v := types.Get([]byte(t)); len(v) == 8 {
+		cnt = binary.BigEndian.Uint64(v)
+	}
+	var buf [8]byte
+	binary.BigEndian.PutUint64(buf[:], cnt+1)
+	return types.Put([]byte(t), buf[:])
+}
+
 // Append prüft die Preconditions und speichert anschließend eine oder mehrere
 // Candidates atomar (alles-oder-nichts). Schlägt eine Precondition fehl, wird
 // nichts geschrieben und ein in ErrPreconditionFailed gehüllter Fehler
@@ -201,6 +236,7 @@ func (s *Store) Append(candidates []event.Candidate, preconditions []Preconditio
 		evts := tx.Bucket(bucketEvents)
 		idx := tx.Bucket(bucketSubjectIdx)
 		meta := tx.Bucket(bucketMeta)
+		types := tx.Bucket(bucketTypes)
 
 		// Kopf der Hash-Kette lesen (Genesis, falls leer). Innerhalb einer
 		// (Group-Commit-)Transaktion sehen Folgeschreiber den aktualisierten
@@ -246,6 +282,9 @@ func (s *Store) Append(candidates []event.Candidate, preconditions []Preconditio
 				return err
 			}
 			if err := idx.Put(subjectKey(c.Subject, seq), key); err != nil {
+				return err
+			}
+			if err := incrTypeCount(types, c.Type); err != nil {
 				return err
 			}
 

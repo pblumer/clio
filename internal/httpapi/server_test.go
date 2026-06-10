@@ -341,6 +341,53 @@ func TestVerifyEndpoint(t *testing.T) {
 	}
 }
 
+func TestReadEventTypes(t *testing.T) {
+	srv := newTestServer(t)
+	do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token",
+		`{"events":[
+			{"source":"s","subject":"/a","type":"borrowed"},
+			{"source":"s","subject":"/a","type":"acquired"},
+			{"source":"s","subject":"/b","type":"acquired"}
+		]}`)
+
+	// Ohne Token -> 401.
+	if rec := do(t, srv, http.MethodGet, "/api/v1/read-event-types", "", ""); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("ohne token: status = %d, want 401", rec.Code)
+	}
+
+	rec := do(t, srv, http.MethodGet, "/api/v1/read-event-types", "secret-token", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+
+	type typeInfo struct {
+		Type  string `json:"type"`
+		Count uint64 `json:"count"`
+	}
+	var got []typeInfo
+	sc := bufio.NewScanner(strings.NewReader(rec.Body.String()))
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" {
+			continue
+		}
+		var ti typeInfo
+		if err := json.Unmarshal([]byte(line), &ti); err != nil {
+			t.Fatalf("ndjson dekodieren: %v", err)
+		}
+		got = append(got, ti)
+	}
+	want := []typeInfo{{"acquired", 2}, {"borrowed", 1}}
+	if len(got) != len(want) {
+		t.Fatalf("got %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("got %+v, want %+v", got, want)
+		}
+	}
+}
+
 func TestMetricsEndpoint(t *testing.T) {
 	srv := newTestServer(t)
 	do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token",

@@ -127,6 +127,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/read-events", s.requireAuth(s.handleReadEvents))
 	s.mux.HandleFunc("POST /api/v1/observe-events", s.requireAuth(s.handleObserveEvents))
 	s.mux.HandleFunc("GET /api/v1/verify", s.requireAuth(s.handleVerify))
+	s.mux.HandleFunc("GET /api/v1/read-event-types", s.requireAuth(s.handleReadEventTypes))
 
 	// Prometheus-Metriken (ohne Auth, üblich für Scraping im internen Netz).
 	s.mux.HandleFunc("GET /metrics", s.handleMetrics)
@@ -153,6 +154,26 @@ func (s *Server) handleOpenAPISpec(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handlePing(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleReadEventTypes liefert alle bisher geschriebenen Event-Typen als NDJSON
+// ({"type":...,"count":...} pro Zeile).
+func (s *Server) handleReadEventTypes(w http.ResponseWriter, r *http.Request) {
+	types, err := s.store.EventTypes()
+	if err != nil {
+		s.logger.Error("read-event-types fehlgeschlagen", "err", err)
+		writeError(w, http.StatusInternalServerError, "interner fehler beim lesen")
+		return
+	}
+	w.Header().Set("Content-Type", ndjsonContentType)
+	w.WriteHeader(http.StatusOK)
+	enc := json.NewEncoder(w)
+	for _, t := range types {
+		if err := enc.Encode(t); err != nil {
+			s.logger.Error("ndjson schreiben fehlgeschlagen", "err", err)
+			return
+		}
+	}
 }
 
 // handleMetrics liefert die Metriken im Prometheus-Textformat.

@@ -5,7 +5,7 @@
 >
 > **Status des Gesamtprojekts:** `IN ENTWICKLUNG` — Stufe 0–2 abgeschlossen; Stufe 3 weit fortgeschritten: **Group Commit** (Durchsatz bei voller Durability, `CLIO_SYNC`), Crash-Recovery durch bbolt-ACID, **Distribution** (statische Cross-Builds via `make dist`, Docker-Image, Release-Workflow). Offen in Stufe 3: Kompaktierung, Metrics/Observability.
 > **Letzte Aktualisierung:** 2026-06-10
-> **Dokumentversion:** 1.13
+> **Dokumentversion:** 1.14
 
 ---
 
@@ -110,6 +110,8 @@ Alle Routen nutzen **POST** (außer ggf. `ping`), weil Parameter im Request-Body
 | `POST /api/v1/read-events` | Events eines Subjects lesen; Optionen: `recursive`, `lowerBound`, `upperBound`, `types` (Filter nach Event-Typ) | 0 → 1 |
 | `POST /api/v1/observe-events` | Wie read (inkl. `recursive`, `lowerBound`, `types`), aber Verbindung bleibt offen für Live-Updates; Reconnect via `lowerBound` | 2 |
 | `GET /api/v1/verify` | Integrität der Hash-Kette prüfen (Tamper-Evidence) | 3 |
+| `GET /api/v1/read-event-types` | Alle bisher geschriebenen Event-Typen (mit Anzahl) | 3 |
+| `POST /api/v1/register-event-schema` · `GET /api/v1/read-event-schema` | JSON-Schema je Typ registrieren/lesen + Validierung beim Write | *geplant* |
 | `GET /api/v1/events/<subject>` | Komfort-Leseroute: Subject = URL-Pfad; Optionen als Query (`recursive` (Default true), `lowerBound`, `upperBound`, `type` (wiederholbar), `watch=true` für Live). `GET /api/v1/events` = Wurzel | 3 |
 | `POST /api/v1/run-eventql-query` | EventQL-Abfrage (spätes Ziel) | 4 |
 | `GET /openapi.yaml` · `GET /docs` | OpenAPI-3-Spec bzw. interaktive Swagger UI (eingebettet, ohne Auth) | 3 |
@@ -279,6 +281,7 @@ Jede Stufe ist für sich lauffähig. Statusmarkierungen: `⬜ offen` · `🟡 in
 - ~~Persistenz für Stufe 0: eigenes Datei-Log vs. `bbolt`?~~ **Entschieden:** `bbolt` (schneller, korrekter Start).
 - Genaues Format der `fromLatestEvent`-Option und deren Semantik bei fehlendem Event.
 - ~~fsync-Politik: pro Write vs. gebündelt (Durability-/Performance-Abwägung) — spätestens Stufe 3.~~ **Entschieden:** Group Commit als Default, umschaltbar via `CLIO_SYNC` (ADR-009).
+- **Event-Schemas (geplant, PR B):** JSON Schema je Event-Typ registrieren (`register-event-schema`), beim Write `data` dagegen validieren, Schema lesbar machen (`read-event-schema`). Erfordert eine JSON-Schema-Bibliothek (eigener ADR). Der `read-event-types`-Endpunkt liefert künftig zusätzlich „hat Schema?".
 - Versionierung von Event-Typen: nur Konvention oder Tooling-Unterstützung?
 - Namespace: `cliostore` ist als Name auf GitHub/in der Go-Welt frei (kein nennenswertes bestehendes Projekt). Bewusst gewählt statt des kürzeren `clio` (mehrfach belegt, u. a. OpenTelemetry-Collector `openconfig/clio`) und `cliodb` (existiert bereits als Datomic-ähnliche immutable DB, `loganmhb/cliodb`). Modulpfad voraussichtlich `github.com/<owner>/cliostore`.
 
