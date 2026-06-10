@@ -1,17 +1,19 @@
-# Projekt-Architektur & Kontext: `goesdb` — ein Event Store in Go
+# Projekt-Architektur & Kontext: `cliostore` — ein Event Store in Go
 
 > **Zweck dieses Dokuments**
 > Dieses Dokument ist die *Single Source of Truth* für das Projekt. Es ist so geschrieben, dass eine KI oder eine Person ohne Vorwissen nach dem Lesen vollständig versteht: **Was** gebaut wird, **warum**, **welche Ziele** verfolgt werden, **welche Entscheidungen** getroffen wurden und **wo das Projekt aktuell steht**. Es kombiniert ein Kontextdokument mit eingebetteten Architecture Decision Records (ADRs).
 >
 > **Status des Gesamtprojekts:** `KONZEPT` — noch kein Code geschrieben. Dies ist das Gründungsdokument.
 > **Letzte Aktualisierung:** 2026-06-10
-> **Dokumentversion:** 1.0
+> **Dokumentversion:** 1.2
 
 ---
 
 ## 1. Worum geht es? (Elevator Pitch)
 
-`goesdb` ist eine eigenständige, von Grund auf in Go geschriebene Neuimplementierung eines dedizierten **Event Stores**, funktional orientiert am Vorbild **EventSourcingDB** (von the native web GmbH). Es ist *kein* Fork und nutzt keinen Code des Originals — es ist eine unabhängige Implementierung, die denselben Funktionsumfang und dieselben API-Konzepte nachbaut, um Event-Sourcing-Systeme zu betreiben.
+`cliostore` ist eine eigenständige, von Grund auf in Go geschriebene Neuimplementierung eines dedizierten **Event Stores**, funktional orientiert am Vorbild **EventSourcingDB** (von the native web GmbH). Es ist *kein* Fork und nutzt keinen Code des Originals — es ist eine unabhängige Implementierung, die denselben Funktionsumfang und dieselben API-Konzepte nachbaut, um Event-Sourcing-Systeme zu betreiben.
+
+Der Name **cliostore** verbindet **Clio**, die griechische Muse der Geschichtsschreibung, mit **store** — passend für ein System, dessen einzige Aufgabe es ist, die vollständige, unveränderliche Geschichte aller Ereignisse zu bewahren und wieder erzählbar zu machen. (Kurzform im Code/Sprachgebrauch: „Clio".)
 
 Ein Event Store speichert Zustandsänderungen einer Anwendung als unveränderliche, geordnete Ereignisse (Events) in einem Append-only-Log, statt nur den aktuellen Zustand zu überschreiben. Der aktuelle Zustand wird bei Bedarf durch erneutes Abspielen (Replay) der Events rekonstruiert.
 
@@ -239,6 +241,7 @@ Jede Stufe ist für sich lauffähig. Statusmarkierungen: `⬜ offen` · `🟡 in
 - Genaues Format der `fromLatestEvent`-Option und deren Semantik bei fehlendem Event.
 - fsync-Politik: pro Write vs. gebündelt (Durability-/Performance-Abwägung) — spätestens Stufe 3.
 - Versionierung von Event-Typen: nur Konvention oder Tooling-Unterstützung?
+- Namespace: `cliostore` ist als Name auf GitHub/in der Go-Welt frei (kein nennenswertes bestehendes Projekt). Bewusst gewählt statt des kürzeren `clio` (mehrfach belegt, u. a. OpenTelemetry-Collector `openconfig/clio`) und `cliodb` (existiert bereits als Datomic-ähnliche immutable DB, `loganmhb/cliodb`). Modulpfad voraussichtlich `github.com/<owner>/cliostore`.
 
 ---
 
@@ -257,4 +260,4 @@ Jede Stufe ist für sich lauffähig. Statusmarkierungen: `⬜ offen` · `🟡 in
 - Dieses Dokument ist ein **lebendes Dokument**. Bei jeder relevanten Änderung: Versionsnummer und Datum oben aktualisieren.
 - Statusmarkierungen in der Roadmap (Abschnitt 6) bei Fortschritt pflegen.
 - Neue Entscheidungen als neuen ADR mit fortlaufender Nummer ergänzen; bestehende ADRs nicht löschen, sondern bei Bedarf auf `Abgelöst durch ADR-XYZ` setzen.
-- Rechtlicher Hinweis: `goesdb` ist eine unabhängige Implementierung. Es wird kein Quellcode oder geschütztes Material des Vorbilds übernommen; nur öffentlich dokumentierte Konzepte und API-Formate werden nachgebildet.
+- Rechtlicher Hinweis: `cliostore` ist eine unabhängige Implementierung. Es wird kein Quellcode oder geschütztes Material des Vorbilds übernommen; nur öffentlich dokumentierte Konzepte und API-Formate werden nachgebildet.
