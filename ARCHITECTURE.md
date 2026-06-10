@@ -3,9 +3,9 @@
 > **Zweck dieses Dokuments**
 > Dieses Dokument ist die *Single Source of Truth* für das Projekt. Es ist so geschrieben, dass eine KI oder eine Person ohne Vorwissen nach dem Lesen vollständig versteht: **Was** gebaut wird, **warum**, **welche Ziele** verfolgt werden, **welche Entscheidungen** getroffen wurden und **wo das Projekt aktuell steht**. Es kombiniert ein Kontextdokument mit eingebetteten Architecture Decision Records (ADRs).
 >
-> **Status des Gesamtprojekts:** `IN ENTWICKLUNG` — Stufe 0–2 abgeschlossen: Write/Read mit `bbolt`, Optimistic Concurrency (Preconditions → HTTP 409), bereichsgefiltertes & rekursives Lesen und Live-`observe-events` (NDJSON-Streaming). Nächste Stufe: Robustheit & Betrieb (Crash-Recovery, fsync, Builds).
+> **Status des Gesamtprojekts:** `IN ENTWICKLUNG` — Stufe 0–2 abgeschlossen; Stufe 3 begonnen: **Group Commit** als Default-Schreibstrategie (hoher Durchsatz bei voller Durability, umschaltbar via `CLIO_SYNC`), Crash-Recovery durch bbolt-ACID. Offen in Stufe 3: Kompaktierung, Metrics, Cross-Builds, Docker.
 > **Letzte Aktualisierung:** 2026-06-10
-> **Dokumentversion:** 1.6
+> **Dokumentversion:** 1.7
 
 ---
 
@@ -167,12 +167,12 @@ Jede Stufe ist für sich lauffähig. Statusmarkierungen: `⬜ offen` · `🟡 in
 - [x] `recursive`-Flag + Subject-Prefix-Matching (`store.MatchSubject`) — auch für `read-events`; rekursive Reads laufen über den globalen `events`-Bucket und bewahren so die globale Ordnung
 - **Ergebnis:** Live-Beobachtung von Streams inkl. rekursiver Subjects. ✅
 
-### Stufe 3 — Robustheit & Betrieb `⬜`
+### Stufe 3 — Robustheit & Betrieb `🟡`
 *Schätzung: 2–4 Wochen*
-- [ ] Crash-Recovery / Index-Rebuild beim Start
-- [ ] fsync-Strategie (Durability vs. Performance)
+- [x] Crash-Recovery: durch bbolts ACID-Transaktionen gegeben — Index ist Teil derselben DB und damit immer konsistent; ein separater Rebuild entfällt (siehe ADR-006).
+- [x] fsync-Strategie (Durability vs. Performance) → **Group Commit** als Default (ADR-009), umschaltbar via `CLIO_SYNC` (`group`/`always`/`off`). Benchmarks belegen den Effekt.
 - [ ] Kompaktierung / Dateirotation
-- [ ] Observability: Metrics, strukturiertes Logging
+- [ ] Observability: Metrics, strukturiertes Logging (slog steht bereits)
 - [ ] Single-Binary-Builds für alle Plattformen (`GOOS`/`GOARCH`)
 - [ ] Docker-Image
 
@@ -238,13 +238,19 @@ Jede Stufe ist für sich lauffähig. Statusmarkierungen: `⬜ offen` · `🟡 in
 - **Entscheidung:** Ein konfiguriertes Bearer-Token schützt alle Routen.
 - **Konsequenzen:** Minimaler Aufwand. Keine Mandantentrennung/Rollen — bewusst akzeptiert.
 
+### ADR-009: Group Commit als Default-Schreibstrategie
+- **Status:** Akzeptiert
+- **Kontext:** Der Schreibdurchsatz ist durch `fsync` pro Transaktion begrenzt (Durability vs. Performance). Ziel ist hoher Durchsatz *ohne* Durability aufzugeben. Storage-Engine bleibt bbolt (ADR-006 bestätigt).
+- **Entscheidung:** Writes laufen standardmäßig über bbolts `Batch` (**Group Commit**): gleichzeitige Schreibvorgänge werden zu möglichst wenigen Transaktionen mit *einem* `fsync` pro Batch gebündelt. Umschaltbar via `CLIO_SYNC`: `group` (Default), `always` (fsync pro Write, geringste Einzel-Latenz), `off` (kein fsync, maximaler Durchsatz, Crash-Verlust möglich).
+- **Konsequenzen:** Unter gleichzeitiger Last drastisch höherer Durchsatz bei voller Durability (Benchmark: ~31× gegenüber `always`, nahe an `off`). Nachteil: bei *einzelnen, sequentiellen* Schreibern erhöht die Batch-Verzögerung die Latenz — dann ist `always` (oder `off`) die bessere Wahl. Die `Batch`-Funktion kann die Schreibfunktion bei Retries mehrfach aufrufen; sie ist daher idempotent gehalten.
+
 ---
 
 ## 8. Offene Fragen / zu entscheiden
 
 - ~~Persistenz für Stufe 0: eigenes Datei-Log vs. `bbolt`?~~ **Entschieden:** `bbolt` (schneller, korrekter Start).
 - Genaues Format der `fromLatestEvent`-Option und deren Semantik bei fehlendem Event.
-- fsync-Politik: pro Write vs. gebündelt (Durability-/Performance-Abwägung) — spätestens Stufe 3.
+- ~~fsync-Politik: pro Write vs. gebündelt (Durability-/Performance-Abwägung) — spätestens Stufe 3.~~ **Entschieden:** Group Commit als Default, umschaltbar via `CLIO_SYNC` (ADR-009).
 - Versionierung von Event-Typen: nur Konvention oder Tooling-Unterstützung?
 - Namespace: `cliostore` ist als Name auf GitHub/in der Go-Welt frei (kein nennenswertes bestehendes Projekt). Bewusst gewählt statt des kürzeren `clio` (mehrfach belegt, u. a. OpenTelemetry-Collector `openconfig/clio`) und `cliodb` (existiert bereits als Datomic-ähnliche immutable DB, `loganmhb/cliodb`). Modulpfad voraussichtlich `github.com/<owner>/cliostore`.
 

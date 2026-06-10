@@ -46,3 +46,39 @@ func TestFromEnvMissingToken(t *testing.T) {
 		t.Fatal("erwartete fehler bei fehlendem token, bekam nil")
 	}
 }
+
+func TestFromEnvSyncDefault(t *testing.T) {
+	t.Setenv(envToken, "tok")
+	t.Setenv(envSync, "")
+
+	cfg, err := FromEnv()
+	if err != nil {
+		t.Fatalf("unerwarteter fehler: %v", err)
+	}
+	if cfg.Sync != defaultSync {
+		t.Errorf("Sync = %q, want default %q", cfg.Sync, defaultSync)
+	}
+}
+
+func TestFromEnvSyncValid(t *testing.T) {
+	for _, v := range []string{"group", "always", "off"} {
+		t.Setenv(envToken, "tok")
+		t.Setenv(envSync, v)
+		cfg, err := FromEnv()
+		if err != nil {
+			t.Fatalf("sync %q: unerwarteter fehler: %v", v, err)
+		}
+		if cfg.Sync != v {
+			t.Errorf("Sync = %q, want %q", cfg.Sync, v)
+		}
+	}
+}
+
+func TestFromEnvSyncInvalid(t *testing.T) {
+	t.Setenv(envToken, "tok")
+	t.Setenv(envSync, "turbo")
+
+	if _, err := FromEnv(); err == nil {
+		t.Fatal("erwartete fehler bei ungültigem CLIO_SYNC, bekam nil")
+	}
+}

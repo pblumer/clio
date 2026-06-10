@@ -16,8 +16,12 @@ Die vollständige Architektur, Roadmap und alle Entscheidungen stehen in
 monotone Event-IDs, `bbolt`-Storage, **Preconditions** für Optimistic
 Concurrency), `read-events` (NDJSON, optionale **`lowerBound`/`upperBound`**,
 **`recursive`**) und **`observe-events`** (Live-Streaming: erst History, dann
-offene Verbindung). Alle Datenrouten Bearer-Token-geschützt. Als Nächstes
-(Stufe 3): Robustheit & Betrieb (Crash-Recovery, fsync, Builds).
+offene Verbindung). Alle Datenrouten Bearer-Token-geschützt.
+
+**Stufe 3 begonnen:** **Group Commit** als Default-Schreibstrategie (hoher
+Durchsatz bei voller Durability, umschaltbar via `CLIO_SYNC`) — siehe
+[Performance](#performance--durability). Offen: Kompaktierung, Metrics,
+Cross-Builds, Docker.
 
 ## Bauen & Starten
 
@@ -42,6 +46,7 @@ curl http://127.0.0.1:3000/api/v1/ping
 | `CLIO_API_TOKEN`  | ja      | —          | Bearer-Token für geschützte Routen |
 | `CLIO_ADDR`       | nein    | `:3000`    | Listen-Adresse des HTTP-Servers    |
 | `CLIO_DB_PATH`    | nein    | `clio.db`  | Pfad zur bbolt-Datenbankdatei      |
+| `CLIO_SYNC`       | nein    | `group`    | Schreibstrategie: `group`/`always`/`off` (siehe Performance) |
 
 ### Events schreiben & lesen
 
@@ -112,8 +117,31 @@ curl -X POST http://127.0.0.1:3000/api/v1/write-events \
       }'
 ```
 
+## Performance & Durability
+
+Writes laufen standardmäßig über **Group Commit** (`CLIO_SYNC=group`): viele
+gleichzeitige Schreibvorgänge teilen sich ein `fsync`. Das liefert unter Last
+hohen Durchsatz **bei voller Durability**. Die Strategie ist umschaltbar:
+
+| `CLIO_SYNC` | fsync | Stärke | Schwäche |
+|---|---|---|---|
+| `group` (Default) | pro Batch | hoher Durchsatz unter Last, voll durable | höhere Latenz bei einzelnen, sequentiellen Writes |
+| `always` | pro Write | geringste Einzel-Latenz, voll durable | begrenzter Durchsatz |
+| `off` | nie | maximaler Durchsatz | Crash kann zuletzt geschriebene Events verlieren |
+
+Richtwerte aus den enthaltenen Benchmarks bei ~256 gleichzeitigen Schreibern
+(SSD; absolute Zahlen hardwareabhängig): `group` ≈ **31×** Durchsatz von
+`always` und nahe an `off` — also fast die Geschwindigkeit ohne fsync, aber
+crash-sicher.
+
+```bash
+# Benchmarks selbst ausführen
+go test -run='^$' -bench=BenchmarkAppend -benchmem ./internal/store/
+```
+
 ## Tests
 
 ```bash
 go test ./...
+go test -race ./...   # Nebenläufigkeit (Observe, Group Commit)
 ```

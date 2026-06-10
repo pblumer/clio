@@ -59,18 +59,51 @@ type ReadOptions struct {
 	UpperBound uint64
 }
 
-// Store kapselt die bbolt-Datenbank.
-type Store struct {
-	db  *bolt.DB
-	now func() time.Time
+// SyncMode steuert die Durability-/Performance-Abwägung beim Schreiben.
+type SyncMode int
+
+const (
+	// SyncGroup bündelt gleichzeitige Writes per Group Commit in möglichst
+	// wenige Transaktionen (ein fsync pro Batch). Volle Durability bei hohem
+	// Durchsatz unter Last. Standard.
+	SyncGroup SyncMode = iota
+	// SyncAlways committet jeden Write einzeln (ein fsync pro Write). Geringste
+	// Latenz pro Einzelschreiber, volle Durability, begrenzter Durchsatz.
+	SyncAlways
+	// SyncOff verzichtet auf fsync. Maximaler Durchsatz, aber bei einem Crash
+	// können die zuletzt geschriebenen Events verloren gehen.
+	SyncOff
+)
+
+// Options konfiguriert den Store.
+type Options struct {
+	SyncMode SyncMode
 }
 
-// Open öffnet (oder erstellt) die Datenbank unter path und legt die nötigen
-// Buckets an.
+// Store kapselt die bbolt-Datenbank.
+type Store struct {
+	db       *bolt.DB
+	now      func() time.Time
+	syncMode SyncMode
+}
+
+// Open öffnet (oder erstellt) die Datenbank unter path mit Standardoptionen
+// (Group Commit).
 func Open(path string) (*Store, error) {
+	return OpenWithOptions(path, Options{SyncMode: SyncGroup})
+}
+
+// OpenWithOptions öffnet die Datenbank mit expliziten Optionen und legt die
+// nötigen Buckets an.
+func OpenWithOptions(path string, opts Options) (*Store, error) {
 	db, err := bolt.Open(path, 0o600, &bolt.Options{Timeout: time.Second})
 	if err != nil {
 		return nil, fmt.Errorf("bbolt öffnen: %w", err)
+	}
+
+	// SyncOff: bbolt fsync'd nicht mehr beim Commit.
+	if opts.SyncMode == SyncOff {
+		db.NoSync = true
 	}
 
 	err = db.Update(func(tx *bolt.Tx) error {
@@ -86,7 +119,18 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("buckets anlegen: %w", err)
 	}
 
-	return &Store{db: db, now: time.Now}, nil
+	return &Store{db: db, now: time.Now, syncMode: opts.SyncMode}, nil
+}
+
+// write führt eine Schreibtransaktion gemäß dem konfigurierten SyncMode aus.
+// Im Group-Commit-Modus werden gleichzeitige Aufrufe von bbolt coalesced; die
+// übergebene Funktion kann dann mehrfach aufgerufen werden und muss daher
+// idempotent sein (sie baut ihr Ergebnis bei jedem Lauf frisch auf).
+func (s *Store) write(fn func(*bolt.Tx) error) error {
+	if s.syncMode == SyncGroup {
+		return s.db.Batch(fn)
+	}
+	return s.db.Update(fn)
 }
 
 // Close schließt die Datenbank.
@@ -104,9 +148,13 @@ func (s *Store) Append(candidates []event.Candidate, preconditions []Preconditio
 	}
 
 	now := s.now().UTC().Format(time.RFC3339Nano)
-	events := make([]event.Event, 0, len(candidates))
+	var events []event.Event
 
-	err := s.db.Update(func(tx *bolt.Tx) error {
+	err := s.write(func(tx *bolt.Tx) error {
+		// Bei Group-Commit-Retries kann diese Funktion erneut laufen — Ergebnis
+		// daher bei jedem Lauf frisch aufbauen.
+		events = make([]event.Event, 0, len(candidates))
+
 		if err := checkPreconditions(tx, preconditions); err != nil {
 			return err
 		}
