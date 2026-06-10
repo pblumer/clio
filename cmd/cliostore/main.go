@@ -19,13 +19,19 @@ import (
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 
-	if err := run(logger); err != nil {
+	// Graceful Shutdown bei SIGINT/SIGTERM.
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	if err := run(ctx, logger); err != nil {
 		logger.Error("server beendet mit fehler", "err", err)
 		os.Exit(1)
 	}
 }
 
-func run(logger *slog.Logger) error {
+// run startet den Server und blockiert, bis ctx abgebrochen wird (Graceful
+// Shutdown) oder der Server mit einem Fehler endet.
+func run(ctx context.Context, logger *slog.Logger) error {
 	cfg, err := config.FromEnv()
 	if err != nil {
 		return err
@@ -47,10 +53,6 @@ func run(logger *slog.Logger) error {
 		Handler:           httpapi.New(cfg, st, logger).Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
-
-	// Graceful Shutdown bei SIGINT/SIGTERM.
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 
 	errCh := make(chan error, 1)
 	go func() {

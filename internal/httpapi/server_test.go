@@ -3,6 +3,9 @@ package httpapi
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -155,6 +158,65 @@ func TestWriteThenReadRoundTrip(t *testing.T) {
 	if n := len(decodeNDJSON(t, rec.Body.String())); n != 0 {
 		t.Fatalf("leeres subject: events = %d, want 0", n)
 	}
+}
+
+func TestReadEventsBadRequest(t *testing.T) {
+	srv := newTestServer(t)
+	tests := []struct {
+		name string
+		body string
+	}{
+		{"kaputtes json", `{`},
+		{"unbekanntes feld", `{"subject":"/a","foo":1}`},
+		{"subject leer", `{"subject":""}`},
+		{"subject ohne slash", `{"subject":"a"}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := do(t, srv, http.MethodPost, "/api/v1/read-events", "secret-token", tt.body)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+			}
+		})
+	}
+}
+
+// Geschlossener Store: Lese-/Schreibrouten antworten mit 500.
+func TestDataRoutesStoreError(t *testing.T) {
+	srv := newTestServer(t)
+	if err := srv.store.Close(); err != nil {
+		t.Fatalf("store schließen: %v", err)
+	}
+
+	rec := do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token",
+		`{"events":[{"source":"s","subject":"/a","type":"t"}]}`)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("write status = %d, want 500", rec.Code)
+	}
+
+	rec = do(t, srv, http.MethodPost, "/api/v1/read-events", "secret-token", `{"subject":"/a"}`)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("read status = %d, want 500", rec.Code)
+	}
+}
+
+// failingWriter schlägt bei jedem Write fehl, um den Fehlerpfad in writeNDJSON
+// (Header bereits gesendet) abzudecken.
+type failingWriter struct{ header http.Header }
+
+func (f *failingWriter) Header() http.Header {
+	if f.header == nil {
+		f.header = http.Header{}
+	}
+	return f.header
+}
+func (f *failingWriter) Write([]byte) (int, error) { return 0, errors.New("kaputt") }
+func (f *failingWriter) WriteHeader(int)           {}
+
+func TestWriteNDJSONEncodeError(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	// Darf nicht paniken, auch wenn der ResponseWriter scheitert.
+	writeNDJSON(&failingWriter{}, logger, []event.Event{{ID: "1", Subject: "/a"}})
 }
 
 func decodeNDJSON(t *testing.T, body string) []event.Event {
