@@ -45,6 +45,16 @@ curl http://127.0.0.1:3000/api/v1/ping
 # -> {"status":"ok"}
 ```
 
+### Interaktive API-Doku (OpenAPI / Swagger UI)
+
+Die laufende Instanz liefert ihre eigene Dokumentation aus — alles ins Binary
+eingebettet, kein Internet nötig:
+
+- **`http://127.0.0.1:3000/docs`** — Swagger UI zum interaktiven Ausprobieren
+  („Authorize" mit dem Bearer-Token, dann „Try it out").
+- **`http://127.0.0.1:3000/openapi.yaml`** — die OpenAPI-3-Spezifikation zum
+  Import in eigene Tools (Postman, Insomnia, Codegen).
+
 ### Single-Binaries für alle Plattformen
 
 ```bash

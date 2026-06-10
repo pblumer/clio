@@ -14,6 +14,9 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/swaggest/swgui/v5emb"
+
+	"github.com/pblumer/clio/internal/apidocs"
 	"github.com/pblumer/clio/internal/config"
 	"github.com/pblumer/clio/internal/event"
 	"github.com/pblumer/clio/internal/pubsub"
@@ -70,6 +73,19 @@ func (s *Server) routes() {
 	// `GET /api/v1/events` ohne Subject = Wurzel (alle Events).
 	s.mux.HandleFunc("GET /api/v1/events", s.requireAuth(s.handleEventsPath))
 	s.mux.HandleFunc("GET /api/v1/events/{subject...}", s.requireAuth(s.handleEventsPath))
+
+	// API-Doku: OpenAPI-Spec + interaktive UI. Bewusst ohne Auth (nicht
+	// sensibel); „Try it out" nutzt das Bearer-Token, das der Nutzer eingibt.
+	s.mux.HandleFunc("GET /openapi.yaml", s.handleOpenAPISpec)
+	s.mux.Handle("/docs/", v5emb.New("cliostore API", "/openapi.yaml", "/docs/"))
+	s.mux.HandleFunc("GET /docs", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/docs/", http.StatusMovedPermanently)
+	})
+}
+
+func (s *Server) handleOpenAPISpec(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/yaml")
+	_, _ = w.Write(apidocs.Spec)
 }
 
 func (s *Server) handlePing(w http.ResponseWriter, r *http.Request) {
