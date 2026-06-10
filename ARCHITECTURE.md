@@ -3,9 +3,9 @@
 > **Zweck dieses Dokuments**
 > Dieses Dokument ist die *Single Source of Truth* für das Projekt. Es ist so geschrieben, dass eine KI oder eine Person ohne Vorwissen nach dem Lesen vollständig versteht: **Was** gebaut wird, **warum**, **welche Ziele** verfolgt werden, **welche Entscheidungen** getroffen wurden und **wo das Projekt aktuell steht**. Es kombiniert ein Kontextdokument mit eingebetteten Architecture Decision Records (ADRs).
 >
-> **Status des Gesamtprojekts:** `IN ENTWICKLUNG` — Stufe 0 begonnen (Walking Skeleton: HTTP-Server, `/api/v1/ping`, Auth-Middleware, Config).
+> **Status des Gesamtprojekts:** `IN ENTWICKLUNG` — Stufe 0 (MVP) funktional vollständig: `write-events` (atomar, monotone IDs, bbolt) und `read-events` (NDJSON) lauffähig.
 > **Letzte Aktualisierung:** 2026-06-10
-> **Dokumentversion:** 1.3
+> **Dokumentversion:** 1.4
 
 ---
 
@@ -138,15 +138,17 @@ Felder `id`, `time`, `specversion` werden **serverseitig** ergänzt.
 
 Jede Stufe ist für sich lauffähig. Statusmarkierungen: `⬜ offen` · `🟡 in Arbeit` · `✅ fertig`.
 
-### Stufe 0 — MVP `🟡`
+### Stufe 0 — MVP `✅`
 *Schätzung: 1–2 Wochen (1 Person)*
-- [x] Projekt-Skelett: Go-Modul `github.com/pblumer/clio`, HTTP-Server, Graceful Shutdown, Config via Env (`CLIO_ADDR`, `CLIO_API_TOKEN`)
+- [x] Projekt-Skelett: Go-Modul `github.com/pblumer/clio`, HTTP-Server, Graceful Shutdown, Config via Env (`CLIO_ADDR`, `CLIO_API_TOKEN`, `CLIO_DB_PATH`)
 - [x] `ping` (`GET`/`POST /api/v1/ping`)
-- [x] Bearer-Token-Auth-Middleware (ein Token via Env-Var, konstante Vergleichszeit) — verdrahtet ab den geschützten Routen
-- [ ] `write-events`: Candidate validieren, CloudEvents-Felder ergänzen, append-only schreiben
-- [ ] `read-events`: Events eines Subjects als NDJSON
-- [ ] Storage: `bbolt` (entschieden für Stufe 0) — Index `subject → []offset`
-- **Ergebnis:** Events können geschrieben und gelesen werden.
+- [x] Bearer-Token-Auth-Middleware (ein Token via Env-Var, konstante Vergleichszeit) — schützt die Datenrouten
+- [x] `write-events`: Candidate validieren, CloudEvents-Felder (`id`/`time`/`specversion`) ergänzen, atomar (alles-oder-nichts) append-only schreiben
+- [x] `read-events`: Events eines Subjects als NDJSON
+- [x] Storage: `bbolt` — Bucket `events` (global, monotone Sequenz) + Subject-Index `subject → seq`
+- **Ergebnis:** Events können geschrieben und gelesen werden. ✅
+
+> **Hinweis:** Die atomare Mehrfach-Schreibung und die serialisierte, monotone ID-Vergabe (eigentlich Stufe-1-Punkte, ADR-003) ergeben sich aus der bbolt-Transaktion bereits hier „gratis" und sind umgesetzt. Verbleibend für Stufe 1: Preconditions sowie `lowerBound`/`upperBound` beim Lesen.
 
 ### Stufe 1 — Ordnung & Concurrency `⬜`
 *Schätzung: 1–2 Wochen*

@@ -12,9 +12,10 @@ Die vollständige Architektur, Roadmap und alle Entscheidungen stehen in
 
 ## Status
 
-**Stufe 0 (MVP) — in Arbeit.** Aktuell lauffähig: HTTP-Server mit
-`GET/POST /api/v1/ping`, Config über Umgebungsvariablen und Bearer-Token-Auth.
-Als Nächstes: `write-events` / `read-events` mit `bbolt`-Storage.
+**Stufe 0 (MVP) — funktional vollständig.** Lauffähig: `ping`, `write-events`
+(atomar, monotone Event-IDs, `bbolt`-Storage) und `read-events` (NDJSON), alle
+Datenrouten Bearer-Token-geschützt. Als Nächstes (Stufe 1): Preconditions
+(Optimistic Concurrency) und `lowerBound`/`upperBound` beim Lesen.
 
 ## Bauen & Starten
 
@@ -34,10 +35,27 @@ curl http://127.0.0.1:3000/api/v1/ping
 
 ### Konfiguration
 
-| Variable          | Pflicht | Default  | Bedeutung                          |
-|-------------------|---------|----------|------------------------------------|
-| `CLIO_API_TOKEN`  | ja      | —        | Bearer-Token für geschützte Routen |
-| `CLIO_ADDR`       | nein    | `:3000`  | Listen-Adresse des HTTP-Servers    |
+| Variable          | Pflicht | Default    | Bedeutung                          |
+|-------------------|---------|------------|------------------------------------|
+| `CLIO_API_TOKEN`  | ja      | —          | Bearer-Token für geschützte Routen |
+| `CLIO_ADDR`       | nein    | `:3000`    | Listen-Adresse des HTTP-Servers    |
+| `CLIO_DB_PATH`    | nein    | `clio.db`  | Pfad zur bbolt-Datenbankdatei      |
+
+### Events schreiben & lesen
+
+```bash
+TOKEN=dein-geheimes-token
+
+# Ein oder mehrere Events atomar schreiben (id/time/specversion ergänzt der Server)
+curl -X POST http://127.0.0.1:3000/api/v1/write-events \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"events":[{"source":"lib","subject":"/books/42","type":"acquired","data":{"title":"Dune"}}]}'
+
+# Alle Events eines Subjects als NDJSON lesen
+curl -X POST http://127.0.0.1:3000/api/v1/read-events \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"subject":"/books/42"}'
+```
 
 ## Tests
 

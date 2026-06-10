@@ -13,6 +13,7 @@ import (
 
 	"github.com/pblumer/clio/internal/config"
 	"github.com/pblumer/clio/internal/httpapi"
+	"github.com/pblumer/clio/internal/store"
 )
 
 func main() {
@@ -30,9 +31,20 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 
+	st, err := store.Open(cfg.DBPath)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := st.Close(); err != nil {
+			logger.Error("store schließen fehlgeschlagen", "err", err)
+		}
+	}()
+	logger.Info("store geöffnet", "path", cfg.DBPath)
+
 	srv := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           httpapi.New(cfg, logger).Handler(),
+		Handler:           httpapi.New(cfg, st, logger).Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
