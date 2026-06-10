@@ -15,6 +15,7 @@ import (
 
 	"github.com/pblumer/clio/internal/config"
 	"github.com/pblumer/clio/internal/event"
+	"github.com/pblumer/clio/internal/pubsub"
 	"github.com/pblumer/clio/internal/store"
 )
 
@@ -25,6 +26,7 @@ const ndjsonContentType = "application/x-ndjson"
 type Server struct {
 	cfg    config.Config
 	store  *store.Store
+	broker *pubsub.Broker
 	logger *slog.Logger
 	mux    *http.ServeMux
 }
@@ -38,6 +40,7 @@ func New(cfg config.Config, st *store.Store, logger *slog.Logger) *Server {
 	s := &Server{
 		cfg:    cfg,
 		store:  st,
+		broker: pubsub.New(),
 		logger: logger,
 		mux:    http.NewServeMux(),
 	}
@@ -59,6 +62,7 @@ func (s *Server) routes() {
 	// Datenrouten sind durch das Bearer-Token geschützt (ADR-008).
 	s.mux.HandleFunc("POST /api/v1/write-events", s.requireAuth(s.handleWriteEvents))
 	s.mux.HandleFunc("POST /api/v1/read-events", s.requireAuth(s.handleReadEvents))
+	s.mux.HandleFunc("POST /api/v1/observe-events", s.requireAuth(s.handleObserveEvents))
 }
 
 func (s *Server) handlePing(w http.ResponseWriter, r *http.Request) {
@@ -115,6 +119,9 @@ func (s *Server) handleWriteEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Live-Observer benachrichtigen (nach erfolgreichem, committetem Write).
+	s.broker.Publish(written)
+
 	writeNDJSON(w, s.logger, written)
 }
 
@@ -153,6 +160,7 @@ func parsePreconditions(wire []preconditionWire) ([]store.Precondition, error) {
 // Strings, hier eine nicht-negative ganze Zahl).
 type readEventsRequest struct {
 	Subject    string `json:"subject"`
+	Recursive  bool   `json:"recursive"`
 	LowerBound string `json:"lowerBound"`
 	UpperBound string `json:"upperBound"`
 }
@@ -183,7 +191,7 @@ func (s *Server) handleReadEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	events, err := s.store.ReadSubject(req.Subject, store.ReadOptions{LowerBound: lower, UpperBound: upper})
+	events, err := s.store.Read(req.Subject, req.Recursive, store.ReadOptions{LowerBound: lower, UpperBound: upper})
 	if err != nil {
 		s.logger.Error("read-events fehlgeschlagen", "err", err)
 		writeError(w, http.StatusInternalServerError, "interner fehler beim lesen")
@@ -203,6 +211,94 @@ func parseBound(v, name string) (uint64, error) {
 		return 0, errors.New(name + " muss eine nicht-negative ganze Zahl sein")
 	}
 	return n, nil
+}
+
+// observeEventsRequest ist der Request-Body von /observe-events.
+type observeEventsRequest struct {
+	Subject    string `json:"subject"`
+	Recursive  bool   `json:"recursive"`
+	LowerBound string `json:"lowerBound"`
+}
+
+// handleObserveEvents liefert zuerst die passende History und hält die
+// Verbindung anschließend offen, um neue Events live nachzuliefern (Stufe 2).
+// Reconnect erfolgt clientseitig über lowerBound.
+func (s *Server) handleObserveEvents(w http.ResponseWriter, r *http.Request) {
+	var req observeEventsRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.Subject == "" || req.Subject[0] != '/' {
+		writeError(w, http.StatusBadRequest, "subject muss mit \"/\" beginnen")
+		return
+	}
+	lower, err := parseBound(req.LowerBound, "lowerBound")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "streaming nicht unterstützt")
+		return
+	}
+
+	// Zuerst abonnieren, dann History lesen: so geht kein Event verloren, das
+	// zwischen History-Snapshot und Live-Phase geschrieben wird. Doppelte
+	// werden über die ID (lastID) verworfen.
+	sub := s.broker.Subscribe()
+	defer s.broker.Unsubscribe(sub)
+
+	history, err := s.store.Read(req.Subject, req.Recursive, store.ReadOptions{LowerBound: lower})
+	if err != nil {
+		s.logger.Error("observe-events history fehlgeschlagen", "err", err)
+		writeError(w, http.StatusInternalServerError, "interner fehler beim lesen")
+		return
+	}
+
+	w.Header().Set("Content-Type", ndjsonContentType)
+	w.WriteHeader(http.StatusOK)
+	enc := json.NewEncoder(w)
+
+	// lastID = höchste bereits ausgelieferte ID. Initial untere Grenze − 1,
+	// damit Live-Events ab lowerBound und nur neuer als die History kommen.
+	var lastID uint64
+	if lower > 0 {
+		lastID = lower - 1
+	}
+	for _, ev := range history {
+		if err := enc.Encode(ev); err != nil {
+			return
+		}
+		if id, perr := strconv.ParseUint(ev.ID, 10, 64); perr == nil && id > lastID {
+			lastID = id
+		}
+	}
+	flusher.Flush()
+
+	ctx := r.Context()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-sub.Lost:
+			return
+		case ev := <-sub.Events:
+			id, perr := strconv.ParseUint(ev.ID, 10, 64)
+			if perr != nil || id <= lastID {
+				continue
+			}
+			if !store.MatchSubject(ev.Subject, req.Subject, req.Recursive) {
+				continue
+			}
+			if err := enc.Encode(ev); err != nil {
+				return
+			}
+			flusher.Flush()
+			lastID = id
+		}
+	}
 }
 
 // requireAuth umschließt einen Handler mit der Bearer-Token-Prüfung (ADR-008).

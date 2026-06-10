@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -263,6 +264,125 @@ func TestReadEventsBoundsBadRequest(t *testing.T) {
 	}
 }
 
+func TestReadEventsRecursive(t *testing.T) {
+	srv := newTestServer(t)
+	do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token",
+		`{"events":[
+			{"source":"s","subject":"/r/a","type":"t1"},
+			{"source":"s","subject":"/other","type":"t2"},
+			{"source":"s","subject":"/r/b","type":"t3"}
+		]}`)
+
+	rec := do(t, srv, http.MethodPost, "/api/v1/read-events", "secret-token",
+		`{"subject":"/r","recursive":true}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	got := decodeNDJSON(t, rec.Body.String())
+	if len(got) != 2 || got[0].ID != "1" || got[1].ID != "3" {
+		t.Fatalf("rekursiv /r: %+v", got)
+	}
+}
+
+func TestObserveEventsBadRequest(t *testing.T) {
+	srv := newTestServer(t)
+	tests := []struct {
+		name, token, body string
+		want              int
+	}{
+		{"kein token", "", `{"subject":"/a"}`, http.StatusUnauthorized},
+		{"subject ohne slash", "secret-token", `{"subject":"a"}`, http.StatusBadRequest},
+		{"lowerBound nicht numerisch", "secret-token", `{"subject":"/a","lowerBound":"x"}`, http.StatusBadRequest},
+		{"kaputtes json", "secret-token", `{`, http.StatusBadRequest},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := do(t, srv, http.MethodPost, "/api/v1/observe-events", tt.token, tt.body)
+			if rec.Code != tt.want {
+				t.Fatalf("status = %d, want %d", rec.Code, tt.want)
+			}
+		})
+	}
+}
+
+// TestObserveEventsHistoryAndLive prüft den vollen Ablauf über einen echten
+// HTTP-Server: erst History, dann live nachgelieferte Events.
+func TestObserveEventsHistoryAndLive(t *testing.T) {
+	srv := newTestServer(t)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	// Zwei History-Events vorab schreiben.
+	writeViaHTTP(t, ts.URL, `{"events":[
+		{"source":"s","subject":"/obs","type":"h1"},
+		{"source":"s","subject":"/obs","type":"h2"}
+	]}`)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, ts.URL+"/api/v1/observe-events",
+		strings.NewReader(`{"subject":"/obs"}`))
+	req.Header.Set("Authorization", "Bearer secret-token")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("observe-request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	reader := bufio.NewReader(resp.Body)
+	if h1 := readStreamEvent(t, reader); h1.Type != "h1" {
+		t.Fatalf("history[0] type = %q, want h1", h1.Type)
+	}
+	if h2 := readStreamEvent(t, reader); h2.Type != "h2" {
+		t.Fatalf("history[1] type = %q, want h2", h2.Type)
+	}
+
+	// Jetzt live: ein Event in /obs und eines in /anders (darf NICHT kommen).
+	writeViaHTTP(t, ts.URL, `{"events":[{"source":"s","subject":"/anders","type":"skip"}]}`)
+	writeViaHTTP(t, ts.URL, `{"events":[{"source":"s","subject":"/obs","type":"live"}]}`)
+
+	// /anders bekommt ID 3 (wird gefiltert), /obs bekommt ID 4 und wird live
+	// geliefert — das belegt zugleich die Subject-Filterung.
+	live := readStreamEvent(t, reader)
+	if live.Type != "live" {
+		t.Fatalf("live type = %q, want live (fremdes subject nicht gefiltert?)", live.Type)
+	}
+	if live.ID != "4" {
+		t.Fatalf("live id = %q, want 4", live.ID)
+	}
+}
+
+func writeViaHTTP(t *testing.T, baseURL, body string) {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodPost, baseURL+"/api/v1/write-events", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer secret-token")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("write-request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("write status = %d, want 200", resp.StatusCode)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+}
+
+func readStreamEvent(t *testing.T, r *bufio.Reader) event.Event {
+	t.Helper()
+	line, err := r.ReadBytes('\n')
+	if err != nil {
+		t.Fatalf("stream-zeile lesen: %v", err)
+	}
+	var ev event.Event
+	if err := json.Unmarshal(line, &ev); err != nil {
+		t.Fatalf("stream-zeile dekodieren: %v (%q)", err, line)
+	}
+	return ev
+}
+
 // Geschlossener Store: Lese-/Schreibrouten antworten mit 500.
 func TestDataRoutesStoreError(t *testing.T) {
 	srv := newTestServer(t)
@@ -280,6 +400,20 @@ func TestDataRoutesStoreError(t *testing.T) {
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("read status = %d, want 500", rec.Code)
 	}
+
+	// observe scheitert beim History-Lesen aus dem geschlossenen Store.
+	rec = do(t, srv, http.MethodPost, "/api/v1/observe-events", "secret-token", `{"subject":"/a"}`)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("observe status = %d, want 500", rec.Code)
+	}
+}
+
+// TestObserveStreamingUnsupported: ohne http.Flusher antwortet observe mit 500.
+func TestObserveStreamingUnsupported(t *testing.T) {
+	srv := newTestServer(t)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/observe-events", strings.NewReader(`{"subject":"/a"}`))
+	// failingWriter implementiert kein http.Flusher.
+	srv.handleObserveEvents(&failingWriter{}, req)
 }
 
 // failingWriter schlägt bei jedem Write fehl, um den Fehlerpfad in writeNDJSON

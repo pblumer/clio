@@ -3,9 +3,9 @@
 > **Zweck dieses Dokuments**
 > Dieses Dokument ist die *Single Source of Truth* für das Projekt. Es ist so geschrieben, dass eine KI oder eine Person ohne Vorwissen nach dem Lesen vollständig versteht: **Was** gebaut wird, **warum**, **welche Ziele** verfolgt werden, **welche Entscheidungen** getroffen wurden und **wo das Projekt aktuell steht**. Es kombiniert ein Kontextdokument mit eingebetteten Architecture Decision Records (ADRs).
 >
-> **Status des Gesamtprojekts:** `IN ENTWICKLUNG` — Stufe 0 + 1 abgeschlossen: Write/Read mit `bbolt`, Optimistic Concurrency (Preconditions → HTTP 409) und bereichsgefiltertes Lesen (`lowerBound`/`upperBound`). Nächste Stufe: Observe/Live-Streaming.
+> **Status des Gesamtprojekts:** `IN ENTWICKLUNG` — Stufe 0–2 abgeschlossen: Write/Read mit `bbolt`, Optimistic Concurrency (Preconditions → HTTP 409), bereichsgefiltertes & rekursives Lesen und Live-`observe-events` (NDJSON-Streaming). Nächste Stufe: Robustheit & Betrieb (Crash-Recovery, fsync, Builds).
 > **Letzte Aktualisierung:** 2026-06-10
-> **Dokumentversion:** 1.5
+> **Dokumentversion:** 1.6
 
 ---
 
@@ -159,12 +159,13 @@ Jede Stufe ist für sich lauffähig. Statusmarkierungen: `⬜ offen` · `🟡 in
 - [x] Serialisierte Write-Queue / einzelner Write-Mutex (siehe ADR-003) — durch bbolts Single-Writer-Transaktion erfüllt
 - **Ergebnis:** Optimistic Concurrency und bereichsgefiltertes Lesen. ✅
 
-### Stufe 2 — Observe / Live-Streaming `⬜`
+### Stufe 2 — Observe / Live-Streaming `✅`
 *Schätzung: 1–2 Wochen*
-- [ ] `observe-events`: erst History, dann offene Verbindung
-- [ ] Pub/Sub via Channels, eine Goroutine pro Verbindung, `http.Flusher`
-- [ ] Reconnect via `lowerBound`
-- [ ] `recursive`-Flag + Subject-Prefix-Matching
+- [x] `observe-events`: erst History, dann offene Verbindung (Dedup neuer Events via ID)
+- [x] Pub/Sub via Channels (`internal/pubsub`), `http.Flusher` pro Zeile; langsame Subscriber werden abgehängt (→ Reconnect) statt den Schreibpfad zu blockieren
+- [x] Reconnect via `lowerBound`
+- [x] `recursive`-Flag + Subject-Prefix-Matching (`store.MatchSubject`) — auch für `read-events`; rekursive Reads laufen über den globalen `events`-Bucket und bewahren so die globale Ordnung
+- **Ergebnis:** Live-Beobachtung von Streams inkl. rekursiver Subjects. ✅
 
 ### Stufe 3 — Robustheit & Betrieb `⬜`
 *Schätzung: 2–4 Wochen*

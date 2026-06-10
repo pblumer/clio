@@ -108,6 +108,80 @@ func TestReadSubjectBounds(t *testing.T) {
 	}
 }
 
+func TestMatchSubject(t *testing.T) {
+	tests := []struct {
+		subject, query string
+		recursive      bool
+		want           bool
+	}{
+		{"/books/42", "/books/42", false, true},
+		{"/books/42", "/books", false, false},
+		{"/books", "/books", true, true},
+		{"/books/42", "/books", true, true},
+		{"/books/42/pages", "/books", true, true},
+		{"/booksXYZ", "/books", true, false}, // kein "/"-Grenztreffer
+		{"/anything", "/", true, true},       // Wurzel rekursiv = alles
+		{"/anything", "/", false, false},     // Wurzel nicht-rekursiv ≠ alles
+	}
+	for _, tt := range tests {
+		if got := MatchSubject(tt.subject, tt.query, tt.recursive); got != tt.want {
+			t.Errorf("MatchSubject(%q, %q, %v) = %v, want %v", tt.subject, tt.query, tt.recursive, got, tt.want)
+		}
+	}
+}
+
+func TestReadRecursiveGlobalOrder(t *testing.T) {
+	st := openTemp(t)
+	// Abwechselnd in verschachtelte Subjects schreiben -> IDs 1..4 global.
+	appendAll(t, st,
+		event.Candidate{Source: "s", Subject: "/books/42", Type: "a"},     // 1
+		event.Candidate{Source: "s", Subject: "/users/7", Type: "b"},      // 2
+		event.Candidate{Source: "s", Subject: "/books/99", Type: "c"},     // 3
+		event.Candidate{Source: "s", Subject: "/books/42/log", Type: "d"}, // 4
+	)
+
+	// Rekursiv ab /books: 1,3,4 in globaler Reihenfolge (nicht /users/7).
+	got, err := st.Read("/books", true, ReadOptions{})
+	if err != nil {
+		t.Fatalf("read recursive: %v", err)
+	}
+	wantIDs := []string{"1", "3", "4"}
+	if len(got) != len(wantIDs) {
+		t.Fatalf("ids = %v, want %v", idsOf(got), wantIDs)
+	}
+	for i, id := range wantIDs {
+		if got[i].ID != id {
+			t.Fatalf("ids = %v, want %v (globale ordnung verletzt)", idsOf(got), wantIDs)
+		}
+	}
+
+	// Wurzel rekursiv = alle 4 in globaler Reihenfolge.
+	all, _ := st.Read("/", true, ReadOptions{})
+	if len(all) != 4 || all[0].ID != "1" || all[3].ID != "4" {
+		t.Fatalf("root recursive: %v", idsOf(all))
+	}
+
+	// Rekursiv mit Bounds.
+	bounded, _ := st.Read("/books", true, ReadOptions{LowerBound: 3, UpperBound: 4})
+	if len(bounded) != 2 || bounded[0].ID != "3" || bounded[1].ID != "4" {
+		t.Fatalf("recursive bounds: %v", idsOf(bounded))
+	}
+
+	// Nicht-rekursiv ab /books matcht keinen exakten Stream -> leer.
+	none, _ := st.Read("/books", false, ReadOptions{})
+	if len(none) != 0 {
+		t.Fatalf("nicht-rekursiv /books: %v", idsOf(none))
+	}
+}
+
+func idsOf(events []event.Event) []string {
+	var ids []string
+	for _, e := range events {
+		ids = append(ids, e.ID)
+	}
+	return ids
+}
+
 func TestPreconditionSubjectPristine(t *testing.T) {
 	st := openTemp(t)
 
@@ -279,6 +353,21 @@ func TestReadSubjectDecodeError(t *testing.T) {
 
 	if _, err := st.ReadSubject("/y", ReadOptions{}); err == nil {
 		t.Fatal("erwartete decode-fehler, bekam nil")
+	}
+}
+
+// TestReadRecursiveDecodeError: kaputtes Event muss auch beim rekursiven Lesen
+// einen Fehler liefern.
+func TestReadRecursiveDecodeError(t *testing.T) {
+	st := openTemp(t)
+	err := st.db.Update(func(tx *bolt.Tx) error {
+		return tx.Bucket(bucketEvents).Put(seqKey(1), []byte("kein json"))
+	})
+	if err != nil {
+		t.Fatalf("event präparieren: %v", err)
+	}
+	if _, err := st.Read("/", true, ReadOptions{}); err == nil {
+		t.Fatal("erwartete decode-fehler beim rekursiven lesen, bekam nil")
 	}
 }
 
