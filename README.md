@@ -18,17 +18,22 @@ Concurrency), `read-events` (NDJSON, optionale **`lowerBound`/`upperBound`**,
 **`recursive`**) und **`observe-events`** (Live-Streaming: erst History, dann
 offene Verbindung). Alle Datenrouten Bearer-Token-geschützt.
 
-**Stufe 3 begonnen:** **Group Commit** als Default-Schreibstrategie (hoher
+**Stufe 3 in Arbeit:** **Group Commit** als Default-Schreibstrategie (hoher
 Durchsatz bei voller Durability, umschaltbar via `CLIO_SYNC`) — siehe
-[Performance](#performance--durability). Offen: Kompaktierung, Metrics,
-Cross-Builds, Docker.
+[Performance](#performance--durability) — sowie **Distribution**: statische
+Single-Binaries für alle Plattformen (`make dist`), Docker-Image und
+Release-Workflow. Offen: Kompaktierung, Metrics/Observability.
 
 ## Bauen & Starten
 
 Voraussetzung: Go ≥ 1.24.
 
 ```bash
-# Bauen
+# Bauen (mit eingebetteter Version)
+make build            # -> ./cliostore
+./cliostore -version  # -> cliostore <version>
+
+# oder direkt
 go build -o cliostore ./cmd/cliostore
 
 # Starten (API-Token ist Pflicht)
@@ -38,6 +43,29 @@ CLIO_API_TOKEN=dein-geheimes-token ./cliostore
 curl http://127.0.0.1:3000/api/v1/ping
 # -> {"status":"ok"}
 ```
+
+### Single-Binaries für alle Plattformen
+
+```bash
+make dist   # statische Binaries nach dist/ (linux/darwin/windows × amd64/arm64)
+```
+
+Bei einem Git-Tag `vX.Y.Z` baut der Release-Workflow diese Binaries automatisch
+und hängt sie an ein GitHub-Release.
+
+### Docker
+
+```bash
+make docker                       # Image cliostore:<version> bauen
+docker run --rm -p 3000:3000 \
+  -e CLIO_API_TOKEN=dein-token \
+  -v clio-data:/data \
+  cliostore:latest
+```
+
+Das Image basiert auf `distroless/static` (kein Shell, nonroot-User, statisches
+Binary). Die Datenbank liegt unter `/data` (Volume mounten, um Daten zu
+persistieren).
 
 ### Konfiguration
 
