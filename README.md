@@ -194,6 +194,23 @@ curl -X POST http://127.0.0.1:3000/api/v1/write-events \
       }'
 ```
 
+## Unveränderlichkeit & Tamper-Evidence
+
+Jedes Event wird über eine **SHA-256-Hash-Kette** mit seinem Vorgänger
+verknüpft (`predecessorhash` → `hash`, Genesis = 64 Nullen). Damit ist jede
+nachträgliche Änderung an der Historie **kryptografisch nachweisbar** — nicht
+nur durch die append-only-API verhindert.
+
+```bash
+# Integrität der gesamten Kette prüfen
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:3000/api/v1/verify
+# -> {"ok":true,"count":123,"head":"<hash>"}
+# Bei Manipulation: {"ok":false,"brokenAt":"<id>","reason":"..."}
+```
+
+Eine optionale Signatur (Authentizität) ist als `signature`-Feld vorgesehen,
+im aktuellen Integritäts-Modus aber `null`.
+
 ## Performance & Durability
 
 Writes laufen standardmäßig über **Group Commit** (`CLIO_SYNC=group`): viele

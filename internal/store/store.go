@@ -8,6 +8,7 @@
 package store
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -26,7 +27,12 @@ import (
 var (
 	bucketEvents     = []byte("events")
 	bucketSubjectIdx = []byte("subject_idx")
+	bucketMeta       = []byte("meta")
 )
+
+// metaChainHead speichert im meta-Bucket den Hash des zuletzt geschriebenen
+// Events (Kopf der Hash-Kette).
+var metaChainHead = []byte("chain_head")
 
 // subjectSep trennt im Subject-Index das Subject von der Sequenznummer.
 // 0x00 kommt in Subject-Pfaden nicht vor und ist daher als Separator sicher.
@@ -130,7 +136,7 @@ func OpenWithOptions(path string, opts Options) (*Store, error) {
 	}
 
 	err = db.Update(func(tx *bolt.Tx) error {
-		for _, name := range [][]byte{bucketEvents, bucketSubjectIdx} {
+		for _, name := range [][]byte{bucketEvents, bucketSubjectIdx, bucketMeta} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return err
 			}
@@ -184,6 +190,15 @@ func (s *Store) Append(candidates []event.Candidate, preconditions []Preconditio
 
 		evts := tx.Bucket(bucketEvents)
 		idx := tx.Bucket(bucketSubjectIdx)
+		meta := tx.Bucket(bucketMeta)
+
+		// Kopf der Hash-Kette lesen (Genesis, falls leer). Innerhalb einer
+		// (Group-Commit-)Transaktion sehen Folgeschreiber den aktualisierten
+		// Kopf, sodass die Kette auch über coalesced Aufrufe korrekt bleibt.
+		head := event.GenesisHash
+		if h := meta.Get(metaChainHead); len(h) > 0 {
+			head = string(h)
+		}
 
 		for _, c := range candidates {
 			seq, err := evts.NextSequence()
@@ -191,15 +206,25 @@ func (s *Store) Append(candidates []event.Candidate, preconditions []Preconditio
 				return err
 			}
 
-			ev := event.Event{
-				SpecVersion: event.SpecVersion,
-				ID:          strconv.FormatUint(seq, 10),
-				Time:        now,
-				Source:      c.Source,
-				Subject:     c.Subject,
-				Type:        c.Type,
-				Data:        c.Data,
+			// Data kanonisch (kompakt) speichern, damit der Hash reproduzierbar ist.
+			data, dct, err := canonicalData(c.Data)
+			if err != nil {
+				return err
 			}
+
+			ev := event.Event{
+				SpecVersion:     event.SpecVersion,
+				ID:              strconv.FormatUint(seq, 10),
+				Time:            now,
+				Source:          c.Source,
+				Subject:         c.Subject,
+				Type:            c.Type,
+				DataContentType: dct,
+				Data:            data,
+				PredecessorHash: head,
+			}
+			ev.Hash = event.ComputeHash(ev)
+			head = ev.Hash
 
 			payload, err := json.Marshal(ev)
 			if err != nil {
@@ -216,7 +241,9 @@ func (s *Store) Append(candidates []event.Candidate, preconditions []Preconditio
 
 			events = append(events, ev)
 		}
-		return nil
+
+		// Neuen Ketten-Kopf persistieren.
+		return meta.Put(metaChainHead, []byte(head))
 	})
 	if err != nil {
 		if errors.Is(err, ErrPreconditionFailed) {
@@ -226,6 +253,77 @@ func (s *Store) Append(candidates []event.Candidate, preconditions []Preconditio
 	}
 
 	return events, nil
+}
+
+// canonicalData bringt die Nutzdaten in kompakte (kanonische) Form und liefert
+// den passenden datacontenttype. Leere Daten ergeben leeren content-type.
+func canonicalData(raw json.RawMessage) (json.RawMessage, string, error) {
+	if len(raw) == 0 {
+		return nil, "", nil
+	}
+	var buf bytes.Buffer
+	if err := json.Compact(&buf, raw); err != nil {
+		return nil, "", fmt.Errorf("data kompaktieren: %w", err)
+	}
+	return buf.Bytes(), event.JSONContentType, nil
+}
+
+// VerifyResult ist das Ergebnis einer Integritätsprüfung der Hash-Kette.
+type VerifyResult struct {
+	OK       bool   `json:"ok"`
+	Count    uint64 `json:"count"`              // geprüfte Events
+	Head     string `json:"head"`               // Hash des letzten Events (oder Genesis)
+	BrokenAt string `json:"brokenAt,omitempty"` // Event-ID, an der die Kette bricht
+	Reason   string `json:"reason,omitempty"`
+}
+
+// Verify rechnet die gesamte Hash-Kette in globaler Reihenfolge nach und meldet
+// die erste Bruchstelle. Eine intakte Kette beweist, dass kein historisches
+// Event nachträglich verändert wurde (Tamper-Evidence).
+func (s *Store) Verify() (VerifyResult, error) {
+	res := VerifyResult{OK: true, Head: event.GenesisHash}
+	prev := event.GenesisHash
+
+	err := s.db.View(func(tx *bolt.Tx) error {
+		c := tx.Bucket(bucketEvents).Cursor()
+		for k, v := c.First(); k != nil; k, v = c.Next() {
+			var ev event.Event
+			if err := json.Unmarshal(v, &ev); err != nil {
+				return fmt.Errorf("event dekodieren: %w", err)
+			}
+			res.Count++
+
+			if ev.PredecessorHash != prev {
+				res.OK = false
+				res.BrokenAt = ev.ID
+				res.Reason = "predecessorhash passt nicht zum Vorgänger"
+				return nil
+			}
+			if want := event.ComputeHash(ev); ev.Hash != want {
+				res.OK = false
+				res.BrokenAt = ev.ID
+				res.Reason = "hash stimmt nicht mit dem Inhalt überein"
+				return nil
+			}
+			prev = ev.Hash
+		}
+
+		res.Head = prev
+		// Gespeicherter Ketten-Kopf muss zum letzten Event passen.
+		storedHead := event.GenesisHash
+		if h := tx.Bucket(bucketMeta).Get(metaChainHead); len(h) > 0 {
+			storedHead = string(h)
+		}
+		if storedHead != prev {
+			res.OK = false
+			res.Reason = "gespeicherter Ketten-Kopf passt nicht zum letzten Event"
+		}
+		return nil
+	})
+	if err != nil {
+		return VerifyResult{}, err
+	}
+	return res, nil
 }
 
 // checkPreconditions wertet alle Preconditions innerhalb der Schreibtransaktion

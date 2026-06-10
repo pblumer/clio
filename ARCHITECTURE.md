@@ -5,7 +5,7 @@
 >
 > **Status des Gesamtprojekts:** `IN ENTWICKLUNG` — Stufe 0–2 abgeschlossen; Stufe 3 weit fortgeschritten: **Group Commit** (Durchsatz bei voller Durability, `CLIO_SYNC`), Crash-Recovery durch bbolt-ACID, **Distribution** (statische Cross-Builds via `make dist`, Docker-Image, Release-Workflow). Offen in Stufe 3: Kompaktierung, Metrics/Observability.
 > **Letzte Aktualisierung:** 2026-06-10
-> **Dokumentversion:** 1.11
+> **Dokumentversion:** 1.12
 
 ---
 
@@ -109,6 +109,7 @@ Alle Routen nutzen **POST** (außer ggf. `ping`), weil Parameter im Request-Body
 | `POST /api/v1/write-events` | Ein oder mehrere Event-Candidates atomar schreiben, optional mit Preconditions | 0 → 1 |
 | `POST /api/v1/read-events` | Events eines Subjects lesen; Optionen: `recursive`, `lowerBound`, `upperBound`, `types` (Filter nach Event-Typ) | 0 → 1 |
 | `POST /api/v1/observe-events` | Wie read (inkl. `recursive`, `lowerBound`, `types`), aber Verbindung bleibt offen für Live-Updates; Reconnect via `lowerBound` | 2 |
+| `GET /api/v1/verify` | Integrität der Hash-Kette prüfen (Tamper-Evidence) | 3 |
 | `GET /api/v1/events/<subject>` | Komfort-Leseroute: Subject = URL-Pfad; Optionen als Query (`recursive` (Default true), `lowerBound`, `upperBound`, `type` (wiederholbar), `watch=true` für Live). `GET /api/v1/events` = Wurzel | 3 |
 | `POST /api/v1/run-eventql-query` | EventQL-Abfrage (spätes Ziel) | 4 |
 | `GET /openapi.yaml` · `GET /docs` | OpenAPI-3-Spec bzw. interaktive Swagger UI (eingebettet, ohne Auth) | 3 |
@@ -257,6 +258,12 @@ Jede Stufe ist für sich lauffähig. Statusmarkierungen: `⬜ offen` · `🟡 in
 - **Kontext:** Kunden brauchen eine maschinenlesbare API-Beschreibung und eine Möglichkeit, die API ohne eigenes Setup auszuprobieren.
 - **Entscheidung:** Eine handgepflegte OpenAPI-3-Spec (`internal/apidocs/openapi.yaml`) wird per `go:embed` ins Binary aufgenommen und unter `GET /openapi.yaml` ausgeliefert. Eine interaktive Swagger UI wird unter `GET /docs` bereitgestellt; die UI-Assets sind via Modul `swaggest/swgui` (statigz, `go:embed`) ebenfalls eingebettet — passend zum „abhängigkeitsfreien Single-Binary"-Ziel (ADR-001). Beide Routen sind ohne Auth erreichbar (nicht sensibel); „Try it out" nutzt das vom Nutzer eingegebene Bearer-Token gegen dieselbe Instanz (same-origin, kein CORS).
 - **Konsequenzen:** Selbsterklärende, sofort testbare API ohne externe Dienste. Zwei zusätzliche (build-time/eingebettete) Abhängigkeiten und ein größeres Binary (~1,5 MB UI-Assets). Die Spec wird manuell gepflegt — bei API-Änderungen mitziehen.
+
+### ADR-012: Hash-Kette für Tamper-Evidence
+- **Status:** Akzeptiert
+- **Kontext:** „Garantierte Unveränderlichkeit" war bisher nur organisatorisch (append-only API). Wer Zugriff auf die Datei hat, könnte die Historie offline und unbemerkt ändern. Gewünscht ist ein *mathematischer* Nachweis der Unverändertheit (wie beim Vorbild: `predecessorhash`/`hash`).
+- **Entscheidung:** Jedes Event erhält einen SHA-256-`hash` über seinen Inhalt **und** den `predecessorhash` (Hash des Vorgängers; Genesis = 64 Nullen). Der Ketten-Kopf wird transaktional im `meta`-Bucket fortgeschrieben — die global serialisierte Schreibstelle (ADR-003) macht die Kette eindeutig. Felder werden längenpräfigiert kanonisch serialisiert; `data` wird kompakt gespeichert, damit die Prüfung reproduzierbar ist. `GET /api/v1/verify` rechnet die Kette nach. Signaturen (Authentizität) sind ein optionaler späterer Schritt; das `signature`-Feld ist vorhanden, aber im Integritäts-Modus `null`.
+- **Konsequenzen:** Jede nachträgliche Änderung an einem historischen Event ist beweisbar erkennbar (Tamper-Evidence). Mehraufwand pro Write (ein SHA-256) ist vernachlässigbar. Die Kette bezieht sich auf die globale Schreibreihenfolge; sie setzt eine konsistente Storage-Engine voraus (gegeben). Byte-genaue Kompatibilität mit den Hashes des Vorbilds ist **nicht** garantiert (eigenes, dokumentiertes Kanonisierungsschema).
 
 ---
 

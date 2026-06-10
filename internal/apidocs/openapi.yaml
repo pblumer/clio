@@ -143,6 +143,23 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "500": { $ref: "#/components/responses/InternalError" }
 
+  /api/v1/verify:
+    get:
+      tags: [Events]
+      summary: Integrität der Hash-Kette prüfen (Tamper-Evidence)
+      description: |
+        Rechnet die gesamte SHA-256-Hash-Kette nach. `ok=true` beweist, dass
+        kein historisches Event nachträglich verändert wurde. Eine erkannte
+        Manipulation ergibt HTTP 200 mit `ok=false` und `brokenAt`.
+      responses:
+        "200":
+          description: Prüfergebnis
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VerifyResult" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
   /api/v1/events/{subject}:
     get:
       tags: [Events]
@@ -241,7 +258,10 @@ components:
           nullable: true
     Event:
       type: object
-      description: Gespeichertes, unveränderliches Event (CloudEvents)
+      description: |
+        Gespeichertes, unveränderliches Event (CloudEvents). Über
+        `predecessorhash`/`hash` bilden die Events eine fortlaufende SHA-256-
+        Hash-Kette (Tamper-Evidence) — siehe `GET /api/v1/verify`.
       properties:
         specversion: { type: string, example: "1.0" }
         id: { type: string, description: "global monoton steigend", example: "42" }
@@ -249,7 +269,26 @@ components:
         source: { type: string }
         subject: { type: string }
         type: { type: string }
+        datacontenttype: { type: string, example: "application/json" }
         data: { nullable: true }
+        predecessorhash:
+          type: string
+          description: SHA-256-Hash des Vorgängers (Genesis = 64 Nullen)
+        hash:
+          type: string
+          description: SHA-256-Hash dieses Events über Inhalt + predecessorhash
+        signature:
+          type: string
+          nullable: true
+          description: Optionale Signatur (im Integritäts-Modus null)
+    VerifyResult:
+      type: object
+      properties:
+        ok: { type: boolean, description: "true, wenn die Hash-Kette intakt ist" }
+        count: { type: integer, description: "Anzahl geprüfter Events" }
+        head: { type: string, description: "Hash des letzten Events" }
+        brokenAt: { type: string, description: "Event-ID der ersten Bruchstelle (falls ok=false)" }
+        reason: { type: string }
     EventStream:
       type: string
       description: |
