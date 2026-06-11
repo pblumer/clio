@@ -3,9 +3,9 @@
 > **Zweck dieses Dokuments**
 > Dieses Dokument ist die *Single Source of Truth* für das Projekt. Es ist so geschrieben, dass eine KI oder eine Person ohne Vorwissen nach dem Lesen vollständig versteht: **Was** gebaut wird, **warum**, **welche Ziele** verfolgt werden, **welche Entscheidungen** getroffen wurden und **wo das Projekt aktuell steht**. Es kombiniert ein Kontextdokument mit eingebetteten Architecture Decision Records (ADRs).
 >
-> **Status des Gesamtprojekts:** `IN ENTWICKLUNG` — **Stufe 0–3 abgeschlossen** plus **Ed25519-Signaturen** (Authentizität). Write/Read/Observe, Optimistic Concurrency, Hash-Kette + Signaturen (`/verify`, `/public-key`), Event-Typen + JSON-Schemas, Group Commit (`CLIO_SYNC`), Observability (`/metrics`), Distribution (Cross-Builds/Docker/Release), Kompaktierung (`cliostore compact`), OpenAPI/Swagger UI. Offen: Stufe 4 (Snapshots, EventQL).
-> **Letzte Aktualisierung:** 2026-06-10
-> **Dokumentversion:** 1.17
+> **Status des Gesamtprojekts:** `IN ENTWICKLUNG` — **Stufe 0–3 abgeschlossen** plus **Ed25519-Signaturen** (Authentizität). Write/Read/Observe, Optimistic Concurrency, Hash-Kette + Signaturen (`/verify`, `/public-key`), Event-Typen + JSON-Schemas, Group Commit (`CLIO_SYNC`), Observability (`/metrics`), Distribution (Cross-Builds/Docker/Release), Kompaktierung (`cliostore compact`), OpenAPI/Swagger UI. Geplant (Stufe 4): CEL-basierte Abfrageschicht (`run-query`, ADR-017) statt eigener EventQL-Sprache.
+> **Letzte Aktualisierung:** 2026-06-11
+> **Dokumentversion:** 1.18
 
 ---
 
@@ -114,7 +114,7 @@ Alle Routen nutzen **POST** (außer ggf. `ping`), weil Parameter im Request-Body
 | `GET /api/v1/read-event-types` | Alle bisher geschriebenen Event-Typen (Anzahl + `hasSchema`) | 3 |
 | `POST /api/v1/register-event-schema` · `GET /api/v1/read-event-schema` | JSON-Schema je Typ registrieren/lesen; Validierung beim Write (ADR-014) | 3 |
 | `GET /api/v1/events/<subject>` | Komfort-Leseroute: Subject = URL-Pfad; Optionen als Query (`recursive` (Default true), `lowerBound`, `upperBound`, `type` (wiederholbar), `watch=true` für Live). `GET /api/v1/events` = Wurzel | 3 |
-| `POST /api/v1/run-eventql-query` | EventQL-Abfrage (spätes Ziel) | 4 |
+| `POST /api/v1/run-query` | CEL-basierte Abfrage (Scope + Prädikat), NDJSON — geplant (ADR-017) | 4 |
 | `GET /openapi.yaml` · `GET /docs` | OpenAPI-3-Spec bzw. interaktive Swagger UI (eingebettet, ohne Auth) | 3 |
 | `GET /metrics` | Prometheus-Metriken (ohne Auth) | 3 |
 
@@ -184,13 +184,20 @@ Jede Stufe ist für sich lauffähig. Statusmarkierungen: `⬜ offen` · `🟡 in
 - [x] Docker-Image — mehrstufig, `distroless/static`, nonroot, `/data`-Volume
 - **Ergebnis:** Betriebsreif — Durability-Tuning, Observability, Distribution, Wartung. ✅
 
-### Stufe 4 — Snapshots & EventQL `⬜`
-*Schätzung: 1–3 Monate (EventQL dominiert)*
-- [ ] Snapshots (Speichern/Laden aggregierten Zustands)
-- [ ] EventQL: Lexer, Parser, Planner, Executor (größter Einzelposten — siehe ADR-007)
-- [ ] `isEventQlQueryTrue`-Precondition
+### Stufe 4 — Abfragen (CEL-basiert) & Snapshots `⬜`
+*Schätzung: mehrere überschaubare PRs statt Parser-Marathon (siehe ADR-017)*
 
-**Gesamteinschätzung:** Funktional brauchbarer Klon (Stufen 0–3, ohne EventQL) realistisch in **6–10 Wochen** für eine erfahrene Go-Person. Das produktreife „letzte Stück" (vollwertiges EventQL, Performance-Tuning, Format-Migrationen) nochmals **3–6+ Monate**.
+Statt EventQL syntaxgetreu nachzubauen (kein offener Parser verfügbar, eigener Lexer/Parser/Planner nötig) setzen wir auf **CEL** (`google/cel-go`) für die Prädikate und wiederverwenden unsere vorhandenen Scan-Primitive für die Struktur. Etappen, jede für sich lauffähig:
+
+1. [ ] **CEL-Prädikat-Layer** (`internal/query`): Ausdruck mit `event`-Variable kompilieren (Metadaten typisiert, `event.data` als dynamische Map), gegen ein Event auswerten → bool; Compile-Cache + Tests.
+2. [ ] **`POST /api/v1/run-query`** (read-only): `{subject, recursive, where, lowerBound/upperBound, limit}` → `store.Read` + CEL-Filter → NDJSON. *Liefert „alle Events mit `data.amount > 100` unter `/orders`".*
+3. [ ] **Precondition `isQueryTrue`/`isQueryFalse`**: Optimistic Concurrency auf einer CEL-Bedingung (unser `isEventQlQueryTrue`-Äquivalent), Auswertung im Write-Pfad.
+4. [ ] **Projektion** (optional): Ausgabe via CEL/Feldliste formen.
+5. [ ] **Aggregation/Grouping** (später) sowie **Snapshots** (App-geliefert; semantisch optional, da wir bewusst keine Aggregate berechnen).
+
+> **Bewusste Abweichung:** Der Endpoint heißt `run-query` (nicht `run-eventql-query`) — wir bauen *CEL*-basiert, nicht die EventQL-Syntax. Keine Byte-Kompatibilität zu EventSourcingDB; dafür ein Bruchteil des Aufwands. Strikte EventQL-Kompatibilität bliebe ein separater, großer Schritt.
+
+**Gesamteinschätzung:** Funktional brauchbarer Klon (Stufen 0–3) ist erreicht. Die Abfrage-Schicht (Etappen 1–3) ist das „brauchbare 80 %" und besteht aus wenigen normalen PRs statt eines Monatsbrockens.
 
 ---
 
@@ -293,6 +300,12 @@ Jede Stufe ist für sich lauffähig. Statusmarkierungen: `⬜ offen` · `🟡 in
 - **Kontext:** Die Hash-Kette (ADR-012) beweist *Integrität* (nichts wurde nachträglich geändert), aber nicht *Authentizität* (von wem stammen die Events). Das `signature`-Feld war dafür bereits vorgesehen.
 - **Entscheidung:** Ist ein Ed25519-Schlüssel über `CLIO_SIGNING_KEY` konfiguriert, signiert der Server jedes Event über seinen Hash (`signature` = base64). `cliostore gen-key` erzeugt ein Schlüsselpaar; `GET /api/v1/public-key` liefert den öffentlichen Schlüssel, sodass Clients unabhängig prüfen können. `GET /api/v1/verify` prüft die Signaturen mit, sofern ein Schlüssel aktiv ist. Ohne Schlüssel bleibt `signature` `null` (abwärtskompatibel).
 - **Konsequenzen:** Nachweisbare Urheberschaft zusätzlich zur Integrität. Die Signatur geht bewusst **nicht** in den Hash ein (Trennung von Integrität und Authentizität; Verfälschen der Signatur bricht nur die Signaturprüfung). Schlüsselverwaltung/-rotation liegt beim Betreiber; nur ein aktiver Schlüssel wird unterstützt (Rotation alter Signaturen ist nicht abgedeckt).
+
+### ADR-017: Abfrageschicht auf CEL statt eigener EventQL-Sprache
+- **Status:** Vorgeschlagen (Stufe 4, noch nicht umgesetzt)
+- **Kontext:** Das Vorbild EventSourcingDB nutzt eine selbst entworfene, SQL-inspirierte Sprache (EventQL) mit eigenem Parser/Executor. Es gibt **keine offene EventQL-Grammatik/Bibliothek** zum Aufsetzen; ein syntaxgetreuer Nachbau bedeutete Lexer+Parser+Planner+Executor (Monatsaufwand). PartiQL (offene SQL-für-JSON-Spec) hat keine reife Go-Implementierung.
+- **Entscheidung:** Die Abfrageschicht wird **CEL-basiert** (`google/cel-go`) statt als eigene Sprache gebaut. Eine Query = Subject-Scope (vorhandene Primitive) + **CEL-Prädikat** über das Event (`event.type`, `event.data.*` …) + optionale Projektion/Limit. Der `isEventQlQueryTrue`-Gedanke wird zu einer Precondition mit CEL-Bedingung. Endpoint: `POST /api/v1/run-query` (bewusst nicht `run-eventql-query`, da keine EventQL-Syntax).
+- **Konsequenzen:** Drastisch geringerer Aufwand und Risiko; die wertvollen Teile (Bedingungen auf `data`, Precondition) entstehen mit einer reifen, getesteten Engine. Eine zusätzliche Abhängigkeit (`cel-go` + protobuf). **Keine** Byte-Kompatibilität mit EventSourcingDB-EventQL — strikte Kompatibilität bliebe ein separates, großes Vorhaben. Ersetzt die EventQL-Annahme in ADR-007 für die Umsetzung (ADR-007 bleibt als Kontext gültig).
 
 ---
 
