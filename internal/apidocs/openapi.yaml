@@ -251,6 +251,45 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
 
+  /api/v1/run-query:
+    post:
+      tags: [Events]
+      summary: Events per CEL-Prädikat abfragen
+      description: |
+        Liest die Events eines Scopes (`subject`, ggf. `recursive`, `lowerBound`/
+        `upperBound`) und filtert sie mit dem CEL-Ausdruck `where` über die
+        Variable `event` (z. B. `event.type == 'placed' && event.data.amount > 100`).
+        Leeres `where` = alle im Scope. Ergebnis als NDJSON.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [subject]
+              properties:
+                subject: { type: string, example: "/orders" }
+                recursive: { type: boolean, default: false }
+                where: { type: string, description: "CEL-Prädikat (bool); leer = alle" }
+                lowerBound: { type: string }
+                upperBound: { type: string }
+                limit: { type: integer, description: "max. Treffer; 0 = unbegrenzt" }
+            examples:
+              filter:
+                value:
+                  subject: "/orders"
+                  recursive: true
+                  where: "event.type == 'placed' && has(event.data.amount) && event.data.amount > 100"
+      responses:
+        "200":
+          description: Passende Events als NDJSON
+          content:
+            application/x-ndjson:
+              schema: { $ref: "#/components/schemas/EventStream" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
   /api/v1/verify:
     get:
       tags: [Events]
