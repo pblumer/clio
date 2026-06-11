@@ -9,6 +9,7 @@ package store
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -111,6 +112,9 @@ const (
 // Options konfiguriert den Store.
 type Options struct {
 	SyncMode SyncMode
+	// SigningKey aktiviert (falls gesetzt) die Ed25519-Signatur jedes Events
+	// über seinen Hash. nil = nicht signieren.
+	SigningKey ed25519.PrivateKey
 }
 
 // Store kapselt die bbolt-Datenbank.
@@ -124,6 +128,10 @@ type Store struct {
 	// Schlüssel).
 	schemaMu    sync.RWMutex
 	schemaCache map[string]*jsonschema.Schema
+
+	// signKey signiert Events (optional); verifyKey prüft Signaturen.
+	signKey   ed25519.PrivateKey
+	verifyKey ed25519.PublicKey
 }
 
 // Open öffnet (oder erstellt) die Datenbank unter path mit Standardoptionen
@@ -158,12 +166,26 @@ func OpenWithOptions(path string, opts Options) (*Store, error) {
 		return nil, fmt.Errorf("buckets anlegen: %w", err)
 	}
 
-	return &Store{
+	s := &Store{
 		db:          db,
 		now:         time.Now,
 		syncMode:    opts.SyncMode,
 		schemaCache: make(map[string]*jsonschema.Schema),
-	}, nil
+	}
+	if opts.SigningKey != nil {
+		s.signKey = opts.SigningKey
+		s.verifyKey = opts.SigningKey.Public().(ed25519.PublicKey)
+	}
+	return s, nil
+}
+
+// PublicKey liefert den öffentlichen Signaturschlüssel, sofern Signieren aktiv
+// ist.
+func (s *Store) PublicKey() (ed25519.PublicKey, bool) {
+	if s.verifyKey == nil {
+		return nil, false
+	}
+	return s.verifyKey, true
 }
 
 // write führt eine Schreibtransaktion gemäß dem konfigurierten SyncMode aus.
@@ -298,6 +320,15 @@ func (s *Store) Append(candidates []event.Candidate, preconditions []Preconditio
 			ev.Hash = event.ComputeHash(ev)
 			head = ev.Hash
 
+			// Optional: Event über seinen Hash signieren (Authentizität).
+			if s.signKey != nil {
+				sig, err := signHash(s.signKey, ev.Hash)
+				if err != nil {
+					return err
+				}
+				ev.Signature = &sig
+			}
+
 			payload, err := json.Marshal(ev)
 			if err != nil {
 				return err
@@ -379,6 +410,15 @@ func (s *Store) Verify() (VerifyResult, error) {
 				res.BrokenAt = ev.ID
 				res.Reason = "hash stimmt nicht mit dem Inhalt überein"
 				return nil
+			}
+			// Signatur prüfen, sofern vorhanden und ein Schlüssel konfiguriert ist.
+			if s.verifyKey != nil && ev.Signature != nil {
+				if err := verifySignature(s.verifyKey, ev.Hash, *ev.Signature); err != nil {
+					res.OK = false
+					res.BrokenAt = ev.ID
+					res.Reason = "signatur ungültig: " + err.Error()
+					return nil
+				}
 			}
 			prev = ev.Hash
 		}

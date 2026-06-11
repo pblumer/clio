@@ -33,6 +33,12 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "gen-key":
+			if err := runGenKey(os.Stdout); err != nil {
+				fmt.Fprintln(os.Stderr, "gen-key:", err)
+				os.Exit(1)
+			}
+			return
 		}
 	}
 
@@ -54,6 +60,17 @@ func dbPath() string {
 		return p
 	}
 	return "clio.db"
+}
+
+// runGenKey erzeugt ein neues Ed25519-Schlüsselpaar zum Signieren von Events.
+func runGenKey(w io.Writer) error {
+	seed, pub, err := store.GenerateKey()
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(w, "CLIO_SIGNING_KEY=%s\n", seed)
+	fmt.Fprintf(w, "# public key (zum Verifizieren): %s\n", pub)
+	return nil
 }
 
 // runCompact kompaktiert die Datenbankdatei (offline) und meldet die Größen.
@@ -91,7 +108,18 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		return err
 	}
 
-	st, err := store.OpenWithOptions(cfg.DBPath, store.Options{SyncMode: syncMode(cfg.Sync)})
+	opts := store.Options{SyncMode: syncMode(cfg.Sync)}
+	signing := false
+	if cfg.SigningKey != "" {
+		key, err := store.ParsePrivateKey(cfg.SigningKey)
+		if err != nil {
+			return fmt.Errorf("CLIO_SIGNING_KEY: %w", err)
+		}
+		opts.SigningKey = key
+		signing = true
+	}
+
+	st, err := store.OpenWithOptions(cfg.DBPath, opts)
 	if err != nil {
 		return err
 	}
@@ -100,7 +128,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 			logger.Error("store schließen fehlgeschlagen", "err", err)
 		}
 	}()
-	logger.Info("store geöffnet", "path", cfg.DBPath, "sync", cfg.Sync)
+	logger.Info("store geöffnet", "path", cfg.DBPath, "sync", cfg.Sync, "signing", signing)
 
 	srv := &http.Server{
 		Addr:              cfg.Addr,

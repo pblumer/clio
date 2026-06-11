@@ -22,14 +22,19 @@ type Config struct {
 	// "group" (Default, Group Commit), "always" (fsync pro Write) oder
 	// "off" (kein fsync, maximaler Durchsatz).
 	Sync string
+
+	// SigningKey ist ein optionaler base64-kodierter Ed25519-Schlüssel. Ist er
+	// gesetzt, werden Events signiert (Authentizität).
+	SigningKey string
 }
 
 // Environment-Variablen, aus denen die Konfiguration gelesen wird.
 const (
-	envAddr   = "CLIO_ADDR"
-	envToken  = "CLIO_API_TOKEN"
-	envDBPath = "CLIO_DB_PATH"
-	envSync   = "CLIO_SYNC"
+	envAddr    = "CLIO_ADDR"
+	envToken   = "CLIO_API_TOKEN"
+	envDBPath  = "CLIO_DB_PATH"
+	envSync    = "CLIO_SYNC"
+	envSignKey = "CLIO_SIGNING_KEY"
 
 	defaultAddr   = ":3000"
 	defaultDBPath = "clio.db"
@@ -43,10 +48,11 @@ var validSync = map[string]bool{"group": true, "always": true, "off": true}
 // CLIO_API_TOKEN ist Pflicht; übrige Variablen sind optional mit Defaults.
 func FromEnv() (Config, error) {
 	cfg := Config{
-		Addr:     getenvDefault(envAddr, defaultAddr),
-		APIToken: os.Getenv(envToken),
-		DBPath:   getenvDefault(envDBPath, defaultDBPath),
-		Sync:     getenvDefault(envSync, defaultSync),
+		Addr:       getenvDefault(envAddr, defaultAddr),
+		APIToken:   os.Getenv(envToken),
+		DBPath:     getenvDefault(envDBPath, defaultDBPath),
+		Sync:       getenvDefault(envSync, defaultSync),
+		SigningKey: os.Getenv(envSignKey),
 	}
 
 	if cfg.APIToken == "" {

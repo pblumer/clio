@@ -229,6 +229,28 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
 
+  /api/v1/public-key:
+    get:
+      tags: [Events]
+      summary: Öffentlicher Signaturschlüssel
+      description: Liefert den Ed25519-Public-Key (base64). 404, wenn Signieren inaktiv.
+      responses:
+        "200":
+          description: Öffentlicher Schlüssel
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  algorithm: { type: string, example: "ed25519" }
+                  publicKey: { type: string, description: "base64" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404":
+          description: Signieren ist nicht aktiviert
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
   /api/v1/verify:
     get:
       tags: [Events]
@@ -366,7 +388,7 @@ components:
         signature:
           type: string
           nullable: true
-          description: Optionale Signatur (im Integritäts-Modus null)
+          description: Ed25519-Signatur über den Hash (base64); null, wenn Signieren inaktiv
     TypeInfo:
       type: object
       properties:

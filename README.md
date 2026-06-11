@@ -86,6 +86,7 @@ persistieren).
 | `CLIO_ADDR`       | nein    | `:3000`    | Listen-Adresse des HTTP-Servers    |
 | `CLIO_DB_PATH`    | nein    | `clio.db`  | Pfad zur bbolt-Datenbankdatei      |
 | `CLIO_SYNC`       | nein    | `group`    | Schreibstrategie: `group`/`always`/`off` (siehe Performance) |
+| `CLIO_SIGNING_KEY`| nein    | —          | base64-Ed25519-Schlüssel; aktiviert Event-Signaturen        |
 
 ### Events schreiben & lesen
 
@@ -208,8 +209,26 @@ curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:3000/api/v1/verify
 # Bei Manipulation: {"ok":false,"brokenAt":"<id>","reason":"..."}
 ```
 
-Eine optionale Signatur (Authentizität) ist als `signature`-Feld vorgesehen,
-im aktuellen Integritäts-Modus aber `null`.
+### Signaturen (Authentizität)
+
+Optional signiert der Server jedes Event mit einem **Ed25519**-Schlüssel über
+seinen Hash — das beweist zusätzlich die *Urheberschaft* (nicht nur Integrität).
+
+```bash
+# Schlüsselpaar erzeugen
+./cliostore gen-key
+# -> CLIO_SIGNING_KEY=<seed-base64>
+#    # public key (zum Verifizieren): <public-base64>
+
+# Server mit Signieren starten
+CLIO_API_TOKEN=… CLIO_SIGNING_KEY=<seed-base64> ./cliostore
+
+# Öffentlichen Schlüssel abrufen (Clients prüfen damit selbst)
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:3000/api/v1/public-key
+```
+
+`verify` prüft dann auch die Signaturen mit. Ohne `CLIO_SIGNING_KEY` bleibt
+`signature` `null` (abwärtskompatibel).
 
 ### Verfügbare Event-Typen
 

@@ -60,6 +60,22 @@ func TestRunCompact(t *testing.T) {
 	}
 }
 
+func TestRunGenKey(t *testing.T) {
+	var buf bytes.Buffer
+	if err := runGenKey(&buf); err != nil {
+		t.Fatalf("runGenKey: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "CLIO_SIGNING_KEY=") || !strings.Contains(out, "public key") {
+		t.Fatalf("ausgabe = %q", out)
+	}
+	// Der ausgegebene Schlüssel muss parsebar sein.
+	seed := strings.TrimSpace(strings.TrimPrefix(strings.SplitN(out, "\n", 2)[0], "CLIO_SIGNING_KEY="))
+	if _, err := store.ParsePrivateKey(seed); err != nil {
+		t.Fatalf("generierter schlüssel nicht parsebar: %v", err)
+	}
+}
+
 func TestSyncMode(t *testing.T) {
 	tests := map[string]store.SyncMode{
 		"group":   store.SyncGroup,
