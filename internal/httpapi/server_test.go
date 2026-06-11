@@ -161,6 +161,71 @@ func TestWriteThenReadRoundTrip(t *testing.T) {
 	}
 }
 
+func TestRunQuery(t *testing.T) {
+	srv := newTestServer(t)
+	do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token",
+		`{"events":[
+			{"source":"s","subject":"/orders/1","type":"placed","data":{"amount":250}},
+			{"source":"s","subject":"/orders/2","type":"placed","data":{"amount":50}},
+			{"source":"s","subject":"/orders/3","type":"cancelled","data":{"amount":999}},
+			{"source":"s","subject":"/orders/4","type":"placed"}
+		]}`)
+
+	// Filter: placed mit amount > 100 -> nur ID 1.
+	rec := do(t, srv, http.MethodPost, "/api/v1/run-query", "secret-token",
+		`{"subject":"/orders","recursive":true,"where":"event.type == 'placed' && has(event.data.amount) && event.data.amount > 100"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; %s", rec.Code, rec.Body.String())
+	}
+	got := decodeNDJSON(t, rec.Body.String())
+	if len(got) != 1 || got[0].ID != "1" {
+		t.Fatalf("filter-ergebnis: %+v", idsOfEvents(got))
+	}
+
+	// Eval-Fehler (event ohne data, Prädikat referenziert data) -> kein Treffer,
+	// nicht 500. /orders/4 hat kein data.
+	rec = do(t, srv, http.MethodPost, "/api/v1/run-query", "secret-token",
+		`{"subject":"/orders","recursive":true,"where":"event.data.amount > 0"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("eval-fehler status = %d, want 200", rec.Code)
+	}
+	// IDs 1,2,3 haben data; 4 nicht und wird (Fehler) übersprungen.
+	if n := len(decodeNDJSON(t, rec.Body.String())); n != 3 {
+		t.Fatalf("eval-fehler: %d treffer, want 3", n)
+	}
+
+	// Limit.
+	rec = do(t, srv, http.MethodPost, "/api/v1/run-query", "secret-token",
+		`{"subject":"/orders","recursive":true,"limit":2}`)
+	if n := len(decodeNDJSON(t, rec.Body.String())); n != 2 {
+		t.Fatalf("limit: %d treffer, want 2", n)
+	}
+
+	// Ohne where -> alle 4 im Scope.
+	rec = do(t, srv, http.MethodPost, "/api/v1/run-query", "secret-token",
+		`{"subject":"/orders","recursive":true}`)
+	if n := len(decodeNDJSON(t, rec.Body.String())); n != 4 {
+		t.Fatalf("ohne where: %d treffer, want 4", n)
+	}
+}
+
+func TestRunQueryBadRequest(t *testing.T) {
+	srv := newTestServer(t)
+	tests := []string{
+		`{"subject":"orders"}`,                      // subject ohne /
+		`{"subject":"/o","where":"event.type ==="}`, // CEL-syntaxfehler
+		`{"subject":"/o","where":"event.type"}`,     // nicht-bool
+		`{"subject":"/o","limit":-1}`,               // negatives limit
+		`{"subject":"/o","lowerBound":"x"}`,         // ungültige grenze
+	}
+	for _, body := range tests {
+		rec := do(t, srv, http.MethodPost, "/api/v1/run-query", "secret-token", body)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("body %s: status = %d, want 400", body, rec.Code)
+		}
+	}
+}
+
 func TestReadEventsBadRequest(t *testing.T) {
 	srv := newTestServer(t)
 	tests := []struct {

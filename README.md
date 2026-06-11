@@ -230,6 +230,22 @@ curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:3000/api/v1/public-key
 `verify` prüft dann auch die Signaturen mit. Ohne `CLIO_SIGNING_KEY` bleibt
 `signature` `null` (abwärtskompatibel).
 
+### Abfragen mit CEL (`run-query`)
+
+Events lassen sich über ein **CEL-Prädikat** (`where`) filtern — über die
+Variable `event` (Metadaten + `event.data`). Scope wie beim Lesen
+(`subject`/`recursive`/Bounds), optionales `limit`.
+
+```bash
+curl -X POST http://127.0.0.1:3000/api/v1/run-query \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"subject":"/orders","recursive":true,
+       "where":"event.type == '\''placed'\'' && has(event.data.amount) && event.data.amount > 100"}'
+```
+
+`has(event.data.x)` schützt vor fehlenden Feldern; ein Auswertungsfehler eines
+Events gilt als „kein Treffer".
+
 ### Verfügbare Event-Typen
 
 ```bash

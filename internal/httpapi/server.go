@@ -22,6 +22,7 @@ import (
 	"github.com/pblumer/clio/internal/event"
 	"github.com/pblumer/clio/internal/metrics"
 	"github.com/pblumer/clio/internal/pubsub"
+	"github.com/pblumer/clio/internal/query"
 	"github.com/pblumer/clio/internal/store"
 )
 
@@ -34,6 +35,7 @@ type Server struct {
 	store   *store.Store
 	broker  *pubsub.Broker
 	metrics *metrics.Metrics
+	queryC  *query.Compiler
 	logger  *slog.Logger
 	mux     *http.ServeMux
 }
@@ -44,11 +46,18 @@ func New(cfg config.Config, st *store.Store, logger *slog.Logger) *Server {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	qc, err := query.NewCompiler()
+	if err != nil {
+		// Statische Umgebung — sollte nicht fehlschlagen; run-query meldet sonst 500.
+		logger.Error("query-compiler konnte nicht erstellt werden", "err", err)
+	}
+
 	s := &Server{
 		cfg:     cfg,
 		store:   st,
 		broker:  pubsub.New(),
 		metrics: metrics.New(),
+		queryC:  qc,
 		logger:  logger,
 		mux:     http.NewServeMux(),
 	}
@@ -126,6 +135,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/write-events", s.requireAuth(s.handleWriteEvents))
 	s.mux.HandleFunc("POST /api/v1/read-events", s.requireAuth(s.handleReadEvents))
 	s.mux.HandleFunc("POST /api/v1/observe-events", s.requireAuth(s.handleObserveEvents))
+	s.mux.HandleFunc("POST /api/v1/run-query", s.requireAuth(s.handleRunQuery))
 	s.mux.HandleFunc("GET /api/v1/verify", s.requireAuth(s.handleVerify))
 	s.mux.HandleFunc("GET /api/v1/public-key", s.requireAuth(s.handlePublicKey))
 	s.mux.HandleFunc("GET /api/v1/read-event-types", s.requireAuth(s.handleReadEventTypes))
@@ -632,6 +642,87 @@ func (s *Server) doObserve(w http.ResponseWriter, r *http.Request, subject strin
 			lastID = id
 		}
 	}
+}
+
+// runQueryRequest ist der Body von /run-query (CEL-basierte Abfrage, ADR-017).
+type runQueryRequest struct {
+	Subject    string `json:"subject"`
+	Recursive  bool   `json:"recursive"`
+	Where      string `json:"where"` // CEL-Prädikat; leer = alle im Scope
+	LowerBound string `json:"lowerBound"`
+	UpperBound string `json:"upperBound"`
+	Limit      int    `json:"limit"` // 0 = unbegrenzt
+}
+
+// handleRunQuery liest die Events eines Scopes und filtert sie mit einem
+// CEL-Prädikat (`where`). Ergebnis als NDJSON. Auswertungsfehler eines einzelnen
+// Events (z. B. Zugriff auf ein fehlendes data-Feld ohne has()) gelten als
+// „kein Treffer".
+func (s *Server) handleRunQuery(w http.ResponseWriter, r *http.Request) {
+	if s.queryC == nil {
+		writeError(w, http.StatusInternalServerError, "abfrage-engine nicht verfügbar")
+		return
+	}
+	var req runQueryRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.Subject == "" || req.Subject[0] != '/' {
+		writeError(w, http.StatusBadRequest, "subject muss mit \"/\" beginnen")
+		return
+	}
+	if req.Limit < 0 {
+		writeError(w, http.StatusBadRequest, "limit darf nicht negativ sein")
+		return
+	}
+	lower, err := parseBound(req.LowerBound, "lowerBound")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	upper, err := parseBound(req.UpperBound, "upperBound")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if lower != 0 && upper != 0 && lower > upper {
+		writeError(w, http.StatusBadRequest, "lowerBound darf nicht größer als upperBound sein")
+		return
+	}
+
+	var pred *query.Predicate
+	if strings.TrimSpace(req.Where) != "" {
+		p, err := s.queryC.Compile(req.Where)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "where: "+err.Error())
+			return
+		}
+		pred = p
+	}
+
+	events, err := s.store.Read(req.Subject, req.Recursive, store.ReadOptions{LowerBound: lower, UpperBound: upper})
+	if err != nil {
+		s.logger.Error("run-query fehlgeschlagen", "err", err)
+		writeError(w, http.StatusInternalServerError, "interner fehler beim lesen")
+		return
+	}
+
+	result := make([]event.Event, 0, len(events))
+	for _, ev := range events {
+		if pred != nil {
+			ok, err := pred.Eval(ev)
+			if err != nil || !ok {
+				continue
+			}
+		}
+		result = append(result, ev)
+		if req.Limit > 0 && len(result) >= req.Limit {
+			break
+		}
+	}
+
+	writeNDJSON(w, s.logger, result)
 }
 
 // requireAuth umschließt einen Handler mit der Bearer-Token-Prüfung (ADR-008).
