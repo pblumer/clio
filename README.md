@@ -193,7 +193,20 @@ curl -X POST http://127.0.0.1:3000/api/v1/write-events \
         "events":[{"source":"lib","subject":"/books/42","type":"borrowed"}],
         "preconditions":[{"type":"isSubjectOnEventId","payload":{"subject":"/books/42","eventId":"7"}}]
       }'
+
+# Nur schreiben, wenn die CEL-Abfrage über den Scope kein Treffer-Event liefert
+# (z. B. ein Konto nur einmal eröffnen)
+curl -X POST http://127.0.0.1:3000/api/v1/write-events \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{
+        "events":[{"source":"bank","subject":"/accounts/42","type":"opened"}],
+        "preconditions":[{"type":"isQueryResultEmpty",
+          "payload":{"subject":"/accounts/42","where":"event.type == '\''opened'\''"}}]
+      }'
 ```
+
+Query-Preconditions (`isQueryResultEmpty`/`isQueryResultNonEmpty`) prüfen eine
+CEL-Bedingung über den Scope und sind das `isEventQlQueryTrue`-Äquivalent.
 
 ## Unveränderlichkeit & Tamper-Evidence
 

@@ -291,12 +291,15 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 }
 
 // preconditionWire ist die Drahtdarstellung einer Precondition im
-// Request-Body: {"type": "...", "payload": {"subject": "...", "eventId": "..."}}.
+// Request-Body: {"type": "...", "payload": {"subject": "...", ...}}.
+// recursive/where gelten nur für die Query-Preconditions.
 type preconditionWire struct {
 	Type    string `json:"type"`
 	Payload struct {
-		Subject string `json:"subject"`
-		EventID string `json:"eventId"`
+		Subject   string `json:"subject"`
+		EventID   string `json:"eventId"`
+		Recursive bool   `json:"recursive"`
+		Where     string `json:"where"`
 	} `json:"payload"`
 }
 
@@ -323,7 +326,7 @@ func (s *Server) handleWriteEvents(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	preconditions, err := parsePreconditions(req.Preconditions)
+	preconditions, err := s.parsePreconditions(req.Preconditions)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -354,8 +357,9 @@ func (s *Server) handleWriteEvents(w http.ResponseWriter, r *http.Request) {
 }
 
 // parsePreconditions validiert die Drahtdarstellung und übersetzt sie in
-// store.Precondition. Format-/Typfehler ergeben 400 (kein 409).
-func parsePreconditions(wire []preconditionWire) ([]store.Precondition, error) {
+// store.Precondition. Format-/Typfehler (inkl. ungültiger CEL-Ausdruck) ergeben
+// 400 (kein 409).
+func (s *Server) parsePreconditions(wire []preconditionWire) ([]store.Precondition, error) {
 	if len(wire) == 0 {
 		return nil, nil
 	}
@@ -365,20 +369,33 @@ func parsePreconditions(wire []preconditionWire) ([]store.Precondition, error) {
 		if p.Payload.Subject == "" || p.Payload.Subject[0] != '/' {
 			return nil, errors.New(prefix + "subject muss mit \"/\" beginnen")
 		}
+		pc := store.Precondition{
+			Type:      p.Type,
+			Subject:   p.Payload.Subject,
+			EventID:   p.Payload.EventID,
+			Recursive: p.Payload.Recursive,
+		}
 		switch p.Type {
 		case store.PreconditionSubjectPristine:
 		case store.PreconditionSubjectOnEventID:
 			if _, err := strconv.ParseUint(p.Payload.EventID, 10, 64); err != nil {
 				return nil, errors.New(prefix + "eventId muss eine nicht-negative ganze Zahl sein")
 			}
+		case store.PreconditionQueryResultEmpty, store.PreconditionQueryResultNonEmpty:
+			if strings.TrimSpace(p.Payload.Where) != "" {
+				if s.queryC == nil {
+					return nil, errors.New(prefix + "abfrage-engine nicht verfügbar")
+				}
+				pred, err := s.queryC.Compile(p.Payload.Where)
+				if err != nil {
+					return nil, errors.New(prefix + "where: " + err.Error())
+				}
+				pc.Predicate = pred
+			}
 		default:
 			return nil, errors.New(prefix + "unbekannter typ " + strconv.Quote(p.Type))
 		}
-		out = append(out, store.Precondition{
-			Type:    p.Type,
-			Subject: p.Payload.Subject,
-			EventID: p.Payload.EventID,
-		})
+		out = append(out, pc)
 	}
 	return out, nil
 }
