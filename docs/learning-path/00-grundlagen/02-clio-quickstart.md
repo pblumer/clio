@@ -15,23 +15,44 @@ Nach diesem Modul kannst du:
 ## Voraussetzungen
 
 - **Go ≥ 1.24** und ein Terminal.
-- `curl` (für die Hands-on-Teile).
+- Für die Hands-on-Teile: `curl` (Linux/macOS) **oder** PowerShell (Windows).
+
+> **Windows-Nutzer:innen:** Die Beispiele gibt es in zwei Varianten —
+> Bash/`curl` (`.sh`) und **native PowerShell** (`.ps1`). Unten stehen beide
+> Wege nebeneinander. Die `.ps1`-Skripte laufen mit Windows PowerShell 5.1
+> (vorinstalliert) und PowerShell 7+ und brauchen kein `curl`.
 
 ## Schritt 1 — Bauen
 
+**Linux/macOS:**
 ```bash
 # Im Repo-Wurzelverzeichnis
 make build            # erzeugt ./cliostore
 ./cliostore -version  # -> cliostore <version>
 ```
 
+**Windows (PowerShell):**
+```powershell
+# Im Repo-Wurzelverzeichnis
+go build -o cliostore.exe ./cmd/cliostore
+.\cliostore.exe -version   # -> cliostore <version>
+```
+
 ## Schritt 2 — Starten
 
 Clio braucht **zwingend** ein API-Token. Wähle ein beliebiges Geheimnis:
 
+**Linux/macOS:**
 ```bash
 export TOKEN=dein-geheimes-token
 CLIO_API_TOKEN=$TOKEN ./cliostore
+```
+
+**Windows (PowerShell):**
+```powershell
+$env:TOKEN = 'dein-geheimes-token'
+$env:CLIO_API_TOKEN = $env:TOKEN
+.\cliostore.exe
 ```
 
 Du siehst eine Log-Zeile wie `cliostore lauscht addr=:3000`. Lass diesen
@@ -45,9 +66,15 @@ Prozess laufen und öffne ein **zweites Terminal** für die nächsten Schritte.
 
 `ping` ist die einzige Route ohne Auth:
 
+**Linux/macOS:**
 ```bash
 curl http://127.0.0.1:3000/api/v1/ping
 # -> {"status":"ok"}
+```
+**Windows (PowerShell):**
+```powershell
+Invoke-RestMethod http://127.0.0.1:3000/api/v1/ping
+# -> status: ok
 ```
 
 ## Schritt 4 — Erstes Event schreiben
@@ -55,10 +82,18 @@ curl http://127.0.0.1:3000/api/v1/ping
 Alle Datenrouten brauchen den Bearer-Header. Wir schreiben in den Stream
 `/books/42` (das wird unser durchgehendes Beispiel):
 
+**Linux/macOS:**
 ```bash
 curl -X POST http://127.0.0.1:3000/api/v1/write-events \
   -H "Authorization: Bearer $TOKEN" \
   -d '{"events":[{"source":"library","subject":"/books/42","type":"acquired","data":{"title":"Dune"}}]}'
+```
+**Windows (PowerShell):**
+```powershell
+$headers = @{ Authorization = "Bearer $($env:TOKEN)" }
+$body = '{"events":[{"source":"library","subject":"/books/42","type":"acquired","data":{"title":"Dune"}}]}'
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:3000/api/v1/write-events `
+  -Headers $headers -Body $body -ContentType 'application/json'
 ```
 
 Der Server ergänzt `id`, `time` und `specversion` selbst und antwortet mit dem
@@ -66,11 +101,21 @@ gespeicherten Event (inkl. `hash` der Tamper-Evidence-Kette).
 
 ## Schritt 5 — Event lesen
 
+**Linux/macOS:**
 ```bash
 curl -X POST http://127.0.0.1:3000/api/v1/read-events \
   -H "Authorization: Bearer $TOKEN" \
   -d '{"subject":"/books/42"}'
 ```
+**Windows (PowerShell):**
+```powershell
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:3000/api/v1/read-events `
+  -Headers $headers -Body '{"subject":"/books/42"}' -ContentType 'application/json'
+```
+
+> Bequemer für ganze Lerneinheiten: die fertigen Skripte unter
+> [`examples/bibliothek/`](../../../examples/bibliothek/) — `.sh` für
+> Linux/macOS, `.ps1` für Windows.
 
 Du bekommst dein Event als **NDJSON** zurück (ein JSON-Objekt pro Zeile).
 Glückwunsch — du hast Event Sourcing in Aktion gesehen. 🎉

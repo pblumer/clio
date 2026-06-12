@@ -8,24 +8,37 @@ das klassische Event-Sourcing-Lehrbeispiel. Domäne: Konten unter
 Diese Beispiele gehören zu
 [M04 — Optimistic Concurrency](../../docs/learning-path/module/M04-optimistic-concurrency.md).
 
+Jedes Skript gibt es als **`.sh`** (Linux/macOS, Bash+curl) und **`.ps1`**
+(Windows, PowerShell 5.1 / 7+).
+
 ## Voraussetzungen
 
+**Linux/macOS (Bash):**
 ```bash
 export TOKEN=dein-geheimes-token        # = CLIO_API_TOKEN des Servers
 export CLIO_BASE=http://127.0.0.1:3000  # optional
 ```
+**Windows (PowerShell):**
+```powershell
+$env:TOKEN = 'dein-geheimes-token'         # = CLIO_API_TOKEN des Servers
+$env:CLIO_BASE = 'http://127.0.0.1:3000'   # optional
+```
 
 ## Skripte
 
-| Skript | Zeigt |
+| Skript (`.sh` / `.ps1`) | Zeigt |
 |---|---|
-| `04-preconditions.sh` | Beide Invarianten: „nur einmal eröffnen" + optimistisches Sperren (kein verlorenes Update) |
+| `04-preconditions` | Beide Invarianten: „nur einmal eröffnen" + optimistisches Sperren (kein verlorenes Update) |
 
 ## Ausführen
 
+**Linux/macOS:**
 ```bash
-export TOKEN=dein-geheimes-token
 examples/bankkonto/04-preconditions.sh
+```
+**Windows:**
+```powershell
+.\examples\bankkonto\04-preconditions.ps1
 ```
 
 > Das Skript nutzt ein eindeutiges Konto-Subject pro Lauf, ist also wiederholbar.
