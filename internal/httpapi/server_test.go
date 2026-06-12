@@ -275,6 +275,41 @@ func TestWriteEventsPreconditions(t *testing.T) {
 	}
 }
 
+func TestWriteEventsQueryPrecondition(t *testing.T) {
+	srv := newTestServer(t)
+	emptyPre := `{"events":[{"source":"s","subject":"/accounts/42","type":"opened"}],
+		"preconditions":[{"type":"isQueryResultEmpty","payload":{"subject":"/accounts/42","where":"event.type == 'opened'"}}]}`
+
+	// Erster Write: kein opened vorhanden -> 200.
+	if rec := do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token", emptyPre); rec.Code != http.StatusOK {
+		t.Fatalf("erster write = %d, want 200; %s", rec.Code, rec.Body.String())
+	}
+	// Zweiter Write mit gleicher Empty-Precondition -> 409.
+	if rec := do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token", emptyPre); rec.Code != http.StatusConflict {
+		t.Fatalf("zweiter write = %d, want 409", rec.Code)
+	}
+
+	// NonEmpty: closed nur, wenn opened existiert -> 200.
+	nonEmpty := `{"events":[{"source":"s","subject":"/accounts/42","type":"closed"}],
+		"preconditions":[{"type":"isQueryResultNonEmpty","payload":{"subject":"/accounts/42","where":"event.type == 'opened'"}}]}`
+	if rec := do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token", nonEmpty); rec.Code != http.StatusOK {
+		t.Fatalf("nonEmpty erfüllt = %d, want 200", rec.Code)
+	}
+	// NonEmpty auf leerem Scope -> 409.
+	nonEmptyEmpty := `{"events":[{"source":"s","subject":"/accounts/99","type":"closed"}],
+		"preconditions":[{"type":"isQueryResultNonEmpty","payload":{"subject":"/accounts/99","where":"event.type == 'opened'"}}]}`
+	if rec := do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token", nonEmptyEmpty); rec.Code != http.StatusConflict {
+		t.Fatalf("nonEmpty leer = %d, want 409", rec.Code)
+	}
+
+	// Ungültiges where -> 400.
+	bad := `{"events":[{"source":"s","subject":"/x","type":"t"}],
+		"preconditions":[{"type":"isQueryResultEmpty","payload":{"subject":"/x","where":"event.type ==="}}]}`
+	if rec := do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token", bad); rec.Code != http.StatusBadRequest {
+		t.Fatalf("ungültiges where = %d, want 400", rec.Code)
+	}
+}
+
 func TestWriteEventsPreconditionBadRequest(t *testing.T) {
 	srv := newTestServer(t)
 	ev := `"events":[{"source":"s","subject":"/p","type":"t"}]`

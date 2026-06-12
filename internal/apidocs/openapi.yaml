@@ -449,18 +449,30 @@ components:
     Precondition:
       type: object
       required: [type, payload]
+      description: |
+        Optimistic Concurrency. Subject-Bedingungen (`isSubjectPristine`,
+        `isSubjectOnEventId`) oder CEL-Abfrage-Bedingungen
+        (`isQueryResultEmpty`/`isQueryResultNonEmpty`): erfüllt, wenn eine CEL-
+        Abfrage über den Scope kein bzw. mindestens ein Treffer-Event liefert.
       properties:
         type:
           type: string
-          enum: [isSubjectPristine, isSubjectOnEventId]
+          enum: [isSubjectPristine, isSubjectOnEventId, isQueryResultEmpty, isQueryResultNonEmpty]
         payload:
           type: object
           properties:
-            subject: { type: string, example: "/books/42" }
+            subject: { type: string, example: "/accounts/42" }
             eventId:
               type: string
               description: nur für isSubjectOnEventId
               example: "7"
+            recursive:
+              type: boolean
+              description: nur für Query-Preconditions (Scope rekursiv)
+            where:
+              type: string
+              description: nur für Query-Preconditions (CEL-Prädikat; leer = Scope-Existenz)
+              example: "event.type == 'opened'"
     WriteEventsRequest:
       type: object
       required: [events]
