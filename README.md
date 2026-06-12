@@ -338,6 +338,25 @@ curl -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:3000/api/v1/read-subjec
 (z. B. `/booksstore` zu `/books`) werden korrekt ausgeschlossen. Praktisch, um
 zu sehen, welche Streams existieren, oder um eine UI hierarchisch zu befüllen.
 
+Mit `tree=true` kommt stattdessen ein **hierarchischer Baum** als ein JSON-Objekt;
+`count` sind die Events direkt auf einem Subject, `total` die Summe im Teilbaum:
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:3000/api/v1/read-subjects?tree=true"
+```
+```json
+{ "subject": "/", "count": 0, "total": 3, "children": [
+    { "subject": "/books", "count": 0, "total": 2, "children": [
+        { "subject": "/books/42", "count": 2, "total": 2, "children": [] }
+    ]},
+    { "subject": "/movies", "count": 0, "total": 1, "children": [
+        { "subject": "/movies/7", "count": 1, "total": 1, "children": [] }
+    ]}
+]}
+```
+
+`prefix` setzt im Tree-Modus die Wurzel (`?tree=true&prefix=/books`).
+
 ### Event-Schemas
 
 Pro Event-Typ lässt sich ein **JSON Schema** registrieren; danach wird `data`
