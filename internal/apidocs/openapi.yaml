@@ -229,6 +229,67 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
 
+  /api/v1/public-key:
+    get:
+      tags: [Events]
+      summary: Öffentlicher Signaturschlüssel
+      description: Liefert den Ed25519-Public-Key (base64). 404, wenn Signieren inaktiv.
+      responses:
+        "200":
+          description: Öffentlicher Schlüssel
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  algorithm: { type: string, example: "ed25519" }
+                  publicKey: { type: string, description: "base64" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404":
+          description: Signieren ist nicht aktiviert
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /api/v1/run-query:
+    post:
+      tags: [Events]
+      summary: Events per CEL-Prädikat abfragen
+      description: |
+        Liest die Events eines Scopes (`subject`, ggf. `recursive`, `lowerBound`/
+        `upperBound`) und filtert sie mit dem CEL-Ausdruck `where` über die
+        Variable `event` (z. B. `event.type == 'placed' && event.data.amount > 100`).
+        Leeres `where` = alle im Scope. Ergebnis als NDJSON.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [subject]
+              properties:
+                subject: { type: string, example: "/orders" }
+                recursive: { type: boolean, default: false }
+                where: { type: string, description: "CEL-Prädikat (bool); leer = alle" }
+                lowerBound: { type: string }
+                upperBound: { type: string }
+                limit: { type: integer, description: "max. Treffer; 0 = unbegrenzt" }
+            examples:
+              filter:
+                value:
+                  subject: "/orders"
+                  recursive: true
+                  where: "event.type == 'placed' && has(event.data.amount) && event.data.amount > 100"
+      responses:
+        "200":
+          description: Passende Events als NDJSON
+          content:
+            application/x-ndjson:
+              schema: { $ref: "#/components/schemas/EventStream" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
   /api/v1/verify:
     get:
       tags: [Events]
@@ -366,7 +427,7 @@ components:
         signature:
           type: string
           nullable: true
-          description: Optionale Signatur (im Integritäts-Modus null)
+          description: Ed25519-Signatur über den Hash (base64); null, wenn Signieren inaktiv
     TypeInfo:
       type: object
       properties:
@@ -388,18 +449,30 @@ components:
     Precondition:
       type: object
       required: [type, payload]
+      description: |
+        Optimistic Concurrency. Subject-Bedingungen (`isSubjectPristine`,
+        `isSubjectOnEventId`) oder CEL-Abfrage-Bedingungen
+        (`isQueryResultEmpty`/`isQueryResultNonEmpty`): erfüllt, wenn eine CEL-
+        Abfrage über den Scope kein bzw. mindestens ein Treffer-Event liefert.
       properties:
         type:
           type: string
-          enum: [isSubjectPristine, isSubjectOnEventId]
+          enum: [isSubjectPristine, isSubjectOnEventId, isQueryResultEmpty, isQueryResultNonEmpty]
         payload:
           type: object
           properties:
-            subject: { type: string, example: "/books/42" }
+            subject: { type: string, example: "/accounts/42" }
             eventId:
               type: string
               description: nur für isSubjectOnEventId
               example: "7"
+            recursive:
+              type: boolean
+              description: nur für Query-Preconditions (Scope rekursiv)
+            where:
+              type: string
+              description: nur für Query-Preconditions (CEL-Prädikat; leer = Scope-Existenz)
+              example: "event.type == 'opened'"
     WriteEventsRequest:
       type: object
       required: [events]

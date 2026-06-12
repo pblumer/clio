@@ -22,6 +22,7 @@ import (
 	"github.com/pblumer/clio/internal/event"
 	"github.com/pblumer/clio/internal/metrics"
 	"github.com/pblumer/clio/internal/pubsub"
+	"github.com/pblumer/clio/internal/query"
 	"github.com/pblumer/clio/internal/store"
 )
 
@@ -34,6 +35,7 @@ type Server struct {
 	store     *store.Store
 	broker    *pubsub.Broker
 	metrics   *metrics.Metrics
+	queryC    *query.Compiler
 	logger    *slog.Logger
 	mux       *http.ServeMux
 	version   string
@@ -61,11 +63,18 @@ func New(cfg config.Config, st *store.Store, logger *slog.Logger, opts ...Option
 	if logger == nil {
 		logger = slog.Default()
 	}
+	qc, err := query.NewCompiler()
+	if err != nil {
+		// Statische Umgebung — sollte nicht fehlschlagen; run-query meldet sonst 500.
+		logger.Error("query-compiler konnte nicht erstellt werden", "err", err)
+	}
+
 	s := &Server{
 		cfg:       cfg,
 		store:     st,
 		broker:    pubsub.New(),
 		metrics:   metrics.New(),
+		queryC:    qc,
 		logger:    logger,
 		mux:       http.NewServeMux(),
 		version:   "dev",
@@ -151,7 +160,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/write-events", s.requireAuth(s.handleWriteEvents))
 	s.mux.HandleFunc("POST /api/v1/read-events", s.requireAuth(s.handleReadEvents))
 	s.mux.HandleFunc("POST /api/v1/observe-events", s.requireAuth(s.handleObserveEvents))
+	s.mux.HandleFunc("POST /api/v1/run-query", s.requireAuth(s.handleRunQuery))
 	s.mux.HandleFunc("GET /api/v1/verify", s.requireAuth(s.handleVerify))
+	s.mux.HandleFunc("GET /api/v1/public-key", s.requireAuth(s.handlePublicKey))
 	s.mux.HandleFunc("GET /api/v1/read-event-types", s.requireAuth(s.handleReadEventTypes))
 	s.mux.HandleFunc("POST /api/v1/register-event-schema", s.requireAuth(s.handleRegisterEventSchema))
 	s.mux.HandleFunc("GET /api/v1/read-event-schema", s.requireAuth(s.handleReadEventSchema))
@@ -286,16 +297,37 @@ func (s *Server) handleReadEventSchema(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"type": typ, "schema": schema})
 }
 
+// handlePublicKey liefert den öffentlichen Signaturschlüssel (base64), mit dem
+// Clients die Event-Signaturen selbst prüfen können. 404, wenn nicht signiert
+// wird.
+func (s *Server) handlePublicKey(w http.ResponseWriter, r *http.Request) {
+	pub, ok := s.store.PublicKey()
+	if !ok {
+		writeError(w, http.StatusNotFound, "signieren ist nicht aktiviert")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{
+		"algorithm": "ed25519",
+		"publicKey": store.EncodePublicKey(pub),
+	})
+}
+
 // handleMetrics liefert die Metriken im Prometheus-Textformat.
 func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	count, err := s.store.Count()
 	if err != nil {
 		s.logger.Error("events zählen fehlgeschlagen", "err", err)
 	}
+	size, err := s.store.Size()
+	if err != nil {
+		s.logger.Error("db-größe ermitteln fehlgeschlagen", "err", err)
+		size = -1
+	}
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	s.metrics.Write(w, metrics.Gauges{
 		ActiveObservers: s.broker.SubscriberCount(),
 		EventsTotal:     count,
+		DBSizeBytes:     size,
 	})
 }
 
@@ -313,12 +345,15 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 }
 
 // preconditionWire ist die Drahtdarstellung einer Precondition im
-// Request-Body: {"type": "...", "payload": {"subject": "...", "eventId": "..."}}.
+// Request-Body: {"type": "...", "payload": {"subject": "...", ...}}.
+// recursive/where gelten nur für die Query-Preconditions.
 type preconditionWire struct {
 	Type    string `json:"type"`
 	Payload struct {
-		Subject string `json:"subject"`
-		EventID string `json:"eventId"`
+		Subject   string `json:"subject"`
+		EventID   string `json:"eventId"`
+		Recursive bool   `json:"recursive"`
+		Where     string `json:"where"`
 	} `json:"payload"`
 }
 
@@ -345,7 +380,7 @@ func (s *Server) handleWriteEvents(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	preconditions, err := parsePreconditions(req.Preconditions)
+	preconditions, err := s.parsePreconditions(req.Preconditions)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -376,8 +411,9 @@ func (s *Server) handleWriteEvents(w http.ResponseWriter, r *http.Request) {
 }
 
 // parsePreconditions validiert die Drahtdarstellung und übersetzt sie in
-// store.Precondition. Format-/Typfehler ergeben 400 (kein 409).
-func parsePreconditions(wire []preconditionWire) ([]store.Precondition, error) {
+// store.Precondition. Format-/Typfehler (inkl. ungültiger CEL-Ausdruck) ergeben
+// 400 (kein 409).
+func (s *Server) parsePreconditions(wire []preconditionWire) ([]store.Precondition, error) {
 	if len(wire) == 0 {
 		return nil, nil
 	}
@@ -387,20 +423,33 @@ func parsePreconditions(wire []preconditionWire) ([]store.Precondition, error) {
 		if p.Payload.Subject == "" || p.Payload.Subject[0] != '/' {
 			return nil, errors.New(prefix + "subject muss mit \"/\" beginnen")
 		}
+		pc := store.Precondition{
+			Type:      p.Type,
+			Subject:   p.Payload.Subject,
+			EventID:   p.Payload.EventID,
+			Recursive: p.Payload.Recursive,
+		}
 		switch p.Type {
 		case store.PreconditionSubjectPristine:
 		case store.PreconditionSubjectOnEventID:
 			if _, err := strconv.ParseUint(p.Payload.EventID, 10, 64); err != nil {
 				return nil, errors.New(prefix + "eventId muss eine nicht-negative ganze Zahl sein")
 			}
+		case store.PreconditionQueryResultEmpty, store.PreconditionQueryResultNonEmpty:
+			if strings.TrimSpace(p.Payload.Where) != "" {
+				if s.queryC == nil {
+					return nil, errors.New(prefix + "abfrage-engine nicht verfügbar")
+				}
+				pred, err := s.queryC.Compile(p.Payload.Where)
+				if err != nil {
+					return nil, errors.New(prefix + "where: " + err.Error())
+				}
+				pc.Predicate = pred
+			}
 		default:
 			return nil, errors.New(prefix + "unbekannter typ " + strconv.Quote(p.Type))
 		}
-		out = append(out, store.Precondition{
-			Type:    p.Type,
-			Subject: p.Payload.Subject,
-			EventID: p.Payload.EventID,
-		})
+		out = append(out, pc)
 	}
 	return out, nil
 }
@@ -664,6 +713,87 @@ func (s *Server) doObserve(w http.ResponseWriter, r *http.Request, subject strin
 			lastID = id
 		}
 	}
+}
+
+// runQueryRequest ist der Body von /run-query (CEL-basierte Abfrage, ADR-017).
+type runQueryRequest struct {
+	Subject    string `json:"subject"`
+	Recursive  bool   `json:"recursive"`
+	Where      string `json:"where"` // CEL-Prädikat; leer = alle im Scope
+	LowerBound string `json:"lowerBound"`
+	UpperBound string `json:"upperBound"`
+	Limit      int    `json:"limit"` // 0 = unbegrenzt
+}
+
+// handleRunQuery liest die Events eines Scopes und filtert sie mit einem
+// CEL-Prädikat (`where`). Ergebnis als NDJSON. Auswertungsfehler eines einzelnen
+// Events (z. B. Zugriff auf ein fehlendes data-Feld ohne has()) gelten als
+// „kein Treffer".
+func (s *Server) handleRunQuery(w http.ResponseWriter, r *http.Request) {
+	if s.queryC == nil {
+		writeError(w, http.StatusInternalServerError, "abfrage-engine nicht verfügbar")
+		return
+	}
+	var req runQueryRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.Subject == "" || req.Subject[0] != '/' {
+		writeError(w, http.StatusBadRequest, "subject muss mit \"/\" beginnen")
+		return
+	}
+	if req.Limit < 0 {
+		writeError(w, http.StatusBadRequest, "limit darf nicht negativ sein")
+		return
+	}
+	lower, err := parseBound(req.LowerBound, "lowerBound")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	upper, err := parseBound(req.UpperBound, "upperBound")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if lower != 0 && upper != 0 && lower > upper {
+		writeError(w, http.StatusBadRequest, "lowerBound darf nicht größer als upperBound sein")
+		return
+	}
+
+	var pred *query.Predicate
+	if strings.TrimSpace(req.Where) != "" {
+		p, err := s.queryC.Compile(req.Where)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "where: "+err.Error())
+			return
+		}
+		pred = p
+	}
+
+	events, err := s.store.Read(req.Subject, req.Recursive, store.ReadOptions{LowerBound: lower, UpperBound: upper})
+	if err != nil {
+		s.logger.Error("run-query fehlgeschlagen", "err", err)
+		writeError(w, http.StatusInternalServerError, "interner fehler beim lesen")
+		return
+	}
+
+	result := make([]event.Event, 0, len(events))
+	for _, ev := range events {
+		if pred != nil {
+			ok, err := pred.Eval(ev)
+			if err != nil || !ok {
+				continue
+			}
+		}
+		result = append(result, ev)
+		if req.Limit > 0 && len(result) >= req.Limit {
+			break
+		}
+	}
+
+	writeNDJSON(w, s.logger, result)
 }
 
 // requireAuth umschließt einen Handler mit der Bearer-Token-Prüfung (ADR-008).

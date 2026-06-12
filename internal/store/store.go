@@ -9,6 +9,7 @@ package store
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -22,6 +23,7 @@ import (
 	bolt "go.etcd.io/bbolt"
 
 	"github.com/pblumer/clio/internal/event"
+	"github.com/pblumer/clio/internal/query"
 )
 
 // Bucket-Namen. `events` hält die Events nach globaler Sequenz; `subjectIdx`
@@ -51,14 +53,21 @@ var ErrPreconditionFailed = errors.New("precondition nicht erfüllt")
 const (
 	PreconditionSubjectPristine  = "isSubjectPristine"
 	PreconditionSubjectOnEventID = "isSubjectOnEventId"
+	// Query-Preconditions (ADR-017): erfüllt, wenn eine CEL-Abfrage über einen
+	// Scope kein bzw. mindestens ein Treffer-Event liefert.
+	PreconditionQueryResultEmpty    = "isQueryResultEmpty"
+	PreconditionQueryResultNonEmpty = "isQueryResultNonEmpty"
 )
 
 // Precondition ist eine vor dem Write zu erfüllende Bedingung. Subject ist für
-// alle Typen relevant; EventID nur für isSubjectOnEventId.
+// alle Typen relevant; EventID nur für isSubjectOnEventId; Recursive und
+// Predicate nur für die Query-Preconditions (Predicate nil = nur Scope-Existenz).
 type Precondition struct {
-	Type    string
-	Subject string
-	EventID string
+	Type      string
+	Subject   string
+	EventID   string
+	Recursive bool
+	Predicate *query.Predicate
 }
 
 // ReadOptions filtert ein Read auf einen Bereich globaler Event-IDs und
@@ -111,6 +120,9 @@ const (
 // Options konfiguriert den Store.
 type Options struct {
 	SyncMode SyncMode
+	// SigningKey aktiviert (falls gesetzt) die Ed25519-Signatur jedes Events
+	// über seinen Hash. nil = nicht signieren.
+	SigningKey ed25519.PrivateKey
 }
 
 // Store kapselt die bbolt-Datenbank.
@@ -124,6 +136,10 @@ type Store struct {
 	// Schlüssel).
 	schemaMu    sync.RWMutex
 	schemaCache map[string]*jsonschema.Schema
+
+	// signKey signiert Events (optional); verifyKey prüft Signaturen.
+	signKey   ed25519.PrivateKey
+	verifyKey ed25519.PublicKey
 }
 
 // Open öffnet (oder erstellt) die Datenbank unter path mit Standardoptionen
@@ -158,12 +174,26 @@ func OpenWithOptions(path string, opts Options) (*Store, error) {
 		return nil, fmt.Errorf("buckets anlegen: %w", err)
 	}
 
-	return &Store{
+	s := &Store{
 		db:          db,
 		now:         time.Now,
 		syncMode:    opts.SyncMode,
 		schemaCache: make(map[string]*jsonschema.Schema),
-	}, nil
+	}
+	if opts.SigningKey != nil {
+		s.signKey = opts.SigningKey
+		s.verifyKey = opts.SigningKey.Public().(ed25519.PublicKey)
+	}
+	return s, nil
+}
+
+// PublicKey liefert den öffentlichen Signaturschlüssel, sofern Signieren aktiv
+// ist.
+func (s *Store) PublicKey() (ed25519.PublicKey, bool) {
+	if s.verifyKey == nil {
+		return nil, false
+	}
+	return s.verifyKey, true
 }
 
 // write führt eine Schreibtransaktion gemäß dem konfigurierten SyncMode aus.
@@ -298,6 +328,15 @@ func (s *Store) Append(candidates []event.Candidate, preconditions []Preconditio
 			ev.Hash = event.ComputeHash(ev)
 			head = ev.Hash
 
+			// Optional: Event über seinen Hash signieren (Authentizität).
+			if s.signKey != nil {
+				sig, err := signHash(s.signKey, ev.Hash)
+				if err != nil {
+					return err
+				}
+				ev.Signature = &sig
+			}
+
 			payload, err := json.Marshal(ev)
 			if err != nil {
 				return err
@@ -380,6 +419,15 @@ func (s *Store) Verify() (VerifyResult, error) {
 				res.Reason = "hash stimmt nicht mit dem Inhalt überein"
 				return nil
 			}
+			// Signatur prüfen, sofern vorhanden und ein Schlüssel konfiguriert ist.
+			if s.verifyKey != nil && ev.Signature != nil {
+				if err := verifySignature(s.verifyKey, ev.Hash, *ev.Signature); err != nil {
+					res.OK = false
+					res.BrokenAt = ev.ID
+					res.Reason = "signatur ungültig: " + err.Error()
+					return nil
+				}
+			}
 			prev = ev.Hash
 		}
 
@@ -407,11 +455,9 @@ func checkPreconditions(tx *bolt.Tx, preconditions []Precondition) error {
 	idx := tx.Bucket(bucketSubjectIdx)
 
 	for _, p := range preconditions {
-		last, exists := lastSeq(idx, p.Subject)
-
 		switch p.Type {
 		case PreconditionSubjectPristine:
-			if exists {
+			if _, exists := lastSeq(idx, p.Subject); exists {
 				return fmt.Errorf("%w: subject %q ist nicht leer", ErrPreconditionFailed, p.Subject)
 			}
 		case PreconditionSubjectOnEventID:
@@ -419,17 +465,74 @@ func checkPreconditions(tx *bolt.Tx, preconditions []Precondition) error {
 			if err != nil {
 				return fmt.Errorf("%w: ungültige eventId %q", ErrPreconditionFailed, p.EventID)
 			}
+			last, exists := lastSeq(idx, p.Subject)
 			if !exists {
 				return fmt.Errorf("%w: subject %q ist leer, erwartet eventId %s", ErrPreconditionFailed, p.Subject, p.EventID)
 			}
 			if last != want {
 				return fmt.Errorf("%w: subject %q steht auf eventId %d, erwartet %d", ErrPreconditionFailed, p.Subject, last, want)
 			}
+		case PreconditionQueryResultEmpty, PreconditionQueryResultNonEmpty:
+			matched, err := anyMatch(tx, p.Subject, p.Recursive, p.Predicate)
+			if err != nil {
+				return err
+			}
+			if p.Type == PreconditionQueryResultEmpty && matched {
+				return fmt.Errorf("%w: abfrage über %q liefert treffer, erwartet leeres ergebnis", ErrPreconditionFailed, p.Subject)
+			}
+			if p.Type == PreconditionQueryResultNonEmpty && !matched {
+				return fmt.Errorf("%w: abfrage über %q liefert kein ergebnis, erwartet mindestens einen treffer", ErrPreconditionFailed, p.Subject)
+			}
 		default:
 			return fmt.Errorf("%w: unbekannter precondition-typ %q", ErrPreconditionFailed, p.Type)
 		}
 	}
 	return nil
+}
+
+// anyMatch prüft, ob im Scope (subject, recursive) mindestens ein Event zum
+// Prädikat passt (pred nil = jedes Event zählt). Auswertungsfehler eines Events
+// gelten als „kein Treffer". Läuft innerhalb der Schreibtransaktion.
+func anyMatch(tx *bolt.Tx, subject string, recursive bool, pred *query.Predicate) (bool, error) {
+	check := func(ev event.Event) bool {
+		if pred == nil {
+			return true
+		}
+		ok, err := pred.Eval(ev)
+		return err == nil && ok
+	}
+
+	if recursive {
+		cur := tx.Bucket(bucketEvents).Cursor()
+		for k, v := cur.First(); k != nil; k, v = cur.Next() {
+			var ev event.Event
+			if err := json.Unmarshal(v, &ev); err != nil {
+				return false, fmt.Errorf("event dekodieren: %w", err)
+			}
+			if MatchSubject(ev.Subject, subject, true) && check(ev) {
+				return true, nil
+			}
+		}
+		return false, nil
+	}
+
+	evts := tx.Bucket(bucketEvents)
+	cur := tx.Bucket(bucketSubjectIdx).Cursor()
+	prefix := append([]byte(subject), subjectSep)
+	for k, evKey := cur.Seek(prefix); k != nil && hasPrefix(k, prefix); k, evKey = cur.Next() {
+		raw := evts.Get(evKey)
+		if raw == nil {
+			return false, fmt.Errorf("inkonsistenter index: event %x fehlt", evKey)
+		}
+		var ev event.Event
+		if err := json.Unmarshal(raw, &ev); err != nil {
+			return false, fmt.Errorf("event dekodieren: %w", err)
+		}
+		if check(ev) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // lastSeq liefert die Sequenznummer des letzten Events eines Subjects und ob

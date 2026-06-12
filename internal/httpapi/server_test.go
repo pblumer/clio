@@ -195,6 +195,71 @@ func TestWriteThenReadRoundTrip(t *testing.T) {
 	}
 }
 
+func TestRunQuery(t *testing.T) {
+	srv := newTestServer(t)
+	do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token",
+		`{"events":[
+			{"source":"s","subject":"/orders/1","type":"placed","data":{"amount":250}},
+			{"source":"s","subject":"/orders/2","type":"placed","data":{"amount":50}},
+			{"source":"s","subject":"/orders/3","type":"cancelled","data":{"amount":999}},
+			{"source":"s","subject":"/orders/4","type":"placed"}
+		]}`)
+
+	// Filter: placed mit amount > 100 -> nur ID 1.
+	rec := do(t, srv, http.MethodPost, "/api/v1/run-query", "secret-token",
+		`{"subject":"/orders","recursive":true,"where":"event.type == 'placed' && has(event.data.amount) && event.data.amount > 100"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; %s", rec.Code, rec.Body.String())
+	}
+	got := decodeNDJSON(t, rec.Body.String())
+	if len(got) != 1 || got[0].ID != "1" {
+		t.Fatalf("filter-ergebnis: %+v", idsOfEvents(got))
+	}
+
+	// Eval-Fehler (event ohne data, Prädikat referenziert data) -> kein Treffer,
+	// nicht 500. /orders/4 hat kein data.
+	rec = do(t, srv, http.MethodPost, "/api/v1/run-query", "secret-token",
+		`{"subject":"/orders","recursive":true,"where":"event.data.amount > 0"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("eval-fehler status = %d, want 200", rec.Code)
+	}
+	// IDs 1,2,3 haben data; 4 nicht und wird (Fehler) übersprungen.
+	if n := len(decodeNDJSON(t, rec.Body.String())); n != 3 {
+		t.Fatalf("eval-fehler: %d treffer, want 3", n)
+	}
+
+	// Limit.
+	rec = do(t, srv, http.MethodPost, "/api/v1/run-query", "secret-token",
+		`{"subject":"/orders","recursive":true,"limit":2}`)
+	if n := len(decodeNDJSON(t, rec.Body.String())); n != 2 {
+		t.Fatalf("limit: %d treffer, want 2", n)
+	}
+
+	// Ohne where -> alle 4 im Scope.
+	rec = do(t, srv, http.MethodPost, "/api/v1/run-query", "secret-token",
+		`{"subject":"/orders","recursive":true}`)
+	if n := len(decodeNDJSON(t, rec.Body.String())); n != 4 {
+		t.Fatalf("ohne where: %d treffer, want 4", n)
+	}
+}
+
+func TestRunQueryBadRequest(t *testing.T) {
+	srv := newTestServer(t)
+	tests := []string{
+		`{"subject":"orders"}`,                      // subject ohne /
+		`{"subject":"/o","where":"event.type ==="}`, // CEL-syntaxfehler
+		`{"subject":"/o","where":"event.type"}`,     // nicht-bool
+		`{"subject":"/o","limit":-1}`,               // negatives limit
+		`{"subject":"/o","lowerBound":"x"}`,         // ungültige grenze
+	}
+	for _, body := range tests {
+		rec := do(t, srv, http.MethodPost, "/api/v1/run-query", "secret-token", body)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("body %s: status = %d, want 400", body, rec.Code)
+		}
+	}
+}
+
 func TestReadEventsBadRequest(t *testing.T) {
 	srv := newTestServer(t)
 	tests := []struct {
@@ -241,6 +306,41 @@ func TestWriteEventsPreconditions(t *testing.T) {
 		"preconditions":[{"type":"isSubjectOnEventId","payload":{"subject":"/p","eventId":"1"}}]}`
 	if rec := do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token", staleBody); rec.Code != http.StatusConflict {
 		t.Fatalf("veralteter onEventId-write status = %d, want 409", rec.Code)
+	}
+}
+
+func TestWriteEventsQueryPrecondition(t *testing.T) {
+	srv := newTestServer(t)
+	emptyPre := `{"events":[{"source":"s","subject":"/accounts/42","type":"opened"}],
+		"preconditions":[{"type":"isQueryResultEmpty","payload":{"subject":"/accounts/42","where":"event.type == 'opened'"}}]}`
+
+	// Erster Write: kein opened vorhanden -> 200.
+	if rec := do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token", emptyPre); rec.Code != http.StatusOK {
+		t.Fatalf("erster write = %d, want 200; %s", rec.Code, rec.Body.String())
+	}
+	// Zweiter Write mit gleicher Empty-Precondition -> 409.
+	if rec := do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token", emptyPre); rec.Code != http.StatusConflict {
+		t.Fatalf("zweiter write = %d, want 409", rec.Code)
+	}
+
+	// NonEmpty: closed nur, wenn opened existiert -> 200.
+	nonEmpty := `{"events":[{"source":"s","subject":"/accounts/42","type":"closed"}],
+		"preconditions":[{"type":"isQueryResultNonEmpty","payload":{"subject":"/accounts/42","where":"event.type == 'opened'"}}]}`
+	if rec := do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token", nonEmpty); rec.Code != http.StatusOK {
+		t.Fatalf("nonEmpty erfüllt = %d, want 200", rec.Code)
+	}
+	// NonEmpty auf leerem Scope -> 409.
+	nonEmptyEmpty := `{"events":[{"source":"s","subject":"/accounts/99","type":"closed"}],
+		"preconditions":[{"type":"isQueryResultNonEmpty","payload":{"subject":"/accounts/99","where":"event.type == 'opened'"}}]}`
+	if rec := do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token", nonEmptyEmpty); rec.Code != http.StatusConflict {
+		t.Fatalf("nonEmpty leer = %d, want 409", rec.Code)
+	}
+
+	// Ungültiges where -> 400.
+	bad := `{"events":[{"source":"s","subject":"/x","type":"t"}],
+		"preconditions":[{"type":"isQueryResultEmpty","payload":{"subject":"/x","where":"event.type ==="}}]}`
+	if rec := do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token", bad); rec.Code != http.StatusBadRequest {
+		t.Fatalf("ungültiges where = %d, want 400", rec.Code)
 	}
 }
 
@@ -346,6 +446,42 @@ func TestReadEventsTypesBadRequest(t *testing.T) {
 		`{"subject":"/o","types":["placed",""]}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestPublicKeyEndpoint(t *testing.T) {
+	// Ohne Signieren -> 404.
+	plain := newTestServer(t)
+	if rec := do(t, plain, http.MethodGet, "/api/v1/public-key", "secret-token", ""); rec.Code != http.StatusNotFound {
+		t.Fatalf("ohne signieren: status = %d, want 404", rec.Code)
+	}
+
+	// Mit Signieren -> 200 + ed25519 public key.
+	seed, _, err := store.GenerateKey()
+	if err != nil {
+		t.Fatalf("gen-key: %v", err)
+	}
+	key, err := store.ParsePrivateKey(seed)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	st, err := store.OpenWithOptions(filepath.Join(t.TempDir(), "s.db"), store.Options{SigningKey: key})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	srv := New(config.Config{APIToken: "secret-token"}, st, nil)
+
+	rec := do(t, srv, http.MethodGet, "/api/v1/public-key", "secret-token", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var body map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("dekodieren: %v", err)
+	}
+	if body["algorithm"] != "ed25519" || body["publicKey"] == "" {
+		t.Fatalf("unerwartete antwort: %v", body)
 	}
 }
 

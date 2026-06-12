@@ -86,6 +86,7 @@ persistieren).
 | `CLIO_ADDR`       | nein    | `:3000`    | Listen-Adresse des HTTP-Servers    |
 | `CLIO_DB_PATH`    | nein    | `clio.db`  | Pfad zur bbolt-Datenbankdatei      |
 | `CLIO_SYNC`       | nein    | `group`    | Schreibstrategie: `group`/`always`/`off` (siehe Performance) |
+| `CLIO_SIGNING_KEY`| nein    | —          | base64-Ed25519-Schlüssel; aktiviert Event-Signaturen        |
 
 ### Events schreiben & lesen
 
@@ -192,7 +193,20 @@ curl -X POST http://127.0.0.1:3000/api/v1/write-events \
         "events":[{"source":"lib","subject":"/books/42","type":"borrowed"}],
         "preconditions":[{"type":"isSubjectOnEventId","payload":{"subject":"/books/42","eventId":"7"}}]
       }'
+
+# Nur schreiben, wenn die CEL-Abfrage über den Scope kein Treffer-Event liefert
+# (z. B. ein Konto nur einmal eröffnen)
+curl -X POST http://127.0.0.1:3000/api/v1/write-events \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{
+        "events":[{"source":"bank","subject":"/accounts/42","type":"opened"}],
+        "preconditions":[{"type":"isQueryResultEmpty",
+          "payload":{"subject":"/accounts/42","where":"event.type == '\''opened'\''"}}]
+      }'
 ```
+
+Query-Preconditions (`isQueryResultEmpty`/`isQueryResultNonEmpty`) prüfen eine
+CEL-Bedingung über den Scope und sind das `isEventQlQueryTrue`-Äquivalent.
 
 ## Unveränderlichkeit & Tamper-Evidence
 
@@ -208,8 +222,42 @@ curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:3000/api/v1/verify
 # Bei Manipulation: {"ok":false,"brokenAt":"<id>","reason":"..."}
 ```
 
-Eine optionale Signatur (Authentizität) ist als `signature`-Feld vorgesehen,
-im aktuellen Integritäts-Modus aber `null`.
+### Signaturen (Authentizität)
+
+Optional signiert der Server jedes Event mit einem **Ed25519**-Schlüssel über
+seinen Hash — das beweist zusätzlich die *Urheberschaft* (nicht nur Integrität).
+
+```bash
+# Schlüsselpaar erzeugen
+./cliostore gen-key
+# -> CLIO_SIGNING_KEY=<seed-base64>
+#    # public key (zum Verifizieren): <public-base64>
+
+# Server mit Signieren starten
+CLIO_API_TOKEN=… CLIO_SIGNING_KEY=<seed-base64> ./cliostore
+
+# Öffentlichen Schlüssel abrufen (Clients prüfen damit selbst)
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:3000/api/v1/public-key
+```
+
+`verify` prüft dann auch die Signaturen mit. Ohne `CLIO_SIGNING_KEY` bleibt
+`signature` `null` (abwärtskompatibel).
+
+### Abfragen mit CEL (`run-query`)
+
+Events lassen sich über ein **CEL-Prädikat** (`where`) filtern — über die
+Variable `event` (Metadaten + `event.data`). Scope wie beim Lesen
+(`subject`/`recursive`/Bounds), optionales `limit`.
+
+```bash
+curl -X POST http://127.0.0.1:3000/api/v1/run-query \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"subject":"/orders","recursive":true,
+       "where":"event.type == '\''placed'\'' && has(event.data.amount) && event.data.amount > 100"}'
+```
+
+`has(event.data.x)` schützt vor fehlenden Feldern; ein Auswertungsfehler eines
+Events gilt als „kein Treffer".
 
 ### Verfügbare Event-Typen
 
@@ -252,7 +300,20 @@ curl http://127.0.0.1:3000/metrics
 
 Enthalten u. a.: `clio_http_requests_total{method,route,status}`,
 `clio_http_request_duration_seconds` (Histogramm), `clio_events_written_total`,
-`clio_precondition_failures_total`, `clio_active_observers`, `clio_events_total`.
+`clio_precondition_failures_total`, `clio_active_observers`, `clio_events_total`,
+`clio_db_size_bytes`.
+
+### Wartung: Kompaktierung
+
+Die Datenbank wächst monoton (Events sind unveränderlich). `compact`
+defragmentiert die bbolt-Datei **offline** (atomarer Swap), ohne Events zu
+löschen oder zu verändern — die Hash-Kette bleibt gültig:
+
+```bash
+# Server vorher stoppen (der Befehl scheitert sonst am Datei-Lock)
+CLIO_DB_PATH=clio.db ./cliostore compact
+# -> kompaktiert: clio.db — 2097152 -> 1048576 bytes (50.0% kleiner)
+```
 
 ## Performance & Durability
 

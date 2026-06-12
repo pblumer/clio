@@ -3,9 +3,9 @@
 > **Zweck dieses Dokuments**
 > Dieses Dokument ist die *Single Source of Truth* für das Projekt. Es ist so geschrieben, dass eine KI oder eine Person ohne Vorwissen nach dem Lesen vollständig versteht: **Was** gebaut wird, **warum**, **welche Ziele** verfolgt werden, **welche Entscheidungen** getroffen wurden und **wo das Projekt aktuell steht**. Es kombiniert ein Kontextdokument mit eingebetteten Architecture Decision Records (ADRs).
 >
-> **Status des Gesamtprojekts:** `IN ENTWICKLUNG` — Stufe 0–2 abgeschlossen; Stufe 3 weit fortgeschritten: **Group Commit** (Durchsatz bei voller Durability, `CLIO_SYNC`), Crash-Recovery durch bbolt-ACID, **Distribution** (statische Cross-Builds via `make dist`, Docker-Image, Release-Workflow). Offen in Stufe 3: Kompaktierung, Metrics/Observability.
-> **Letzte Aktualisierung:** 2026-06-10
-> **Dokumentversion:** 1.15
+> **Status des Gesamtprojekts:** `IN ENTWICKLUNG` — **Stufe 0–3 abgeschlossen** plus **Ed25519-Signaturen** (Authentizität). Write/Read/Observe, Optimistic Concurrency, Hash-Kette + Signaturen (`/verify`, `/public-key`), Event-Typen + JSON-Schemas, Group Commit (`CLIO_SYNC`), Observability (`/metrics`), Distribution (Cross-Builds/Docker/Release), Kompaktierung (`cliostore compact`), OpenAPI/Swagger UI. Geplant (Stufe 4): CEL-basierte Abfrageschicht (`run-query`, ADR-017) statt eigener EventQL-Sprache.
+> **Letzte Aktualisierung:** 2026-06-11
+> **Dokumentversion:** 1.21
 
 ---
 
@@ -109,11 +109,12 @@ Alle Routen nutzen **POST** (außer ggf. `ping`), weil Parameter im Request-Body
 | `POST /api/v1/write-events` | Ein oder mehrere Event-Candidates atomar schreiben, optional mit Preconditions | 0 → 1 |
 | `POST /api/v1/read-events` | Events eines Subjects lesen; Optionen: `recursive`, `lowerBound`, `upperBound`, `types` (Filter nach Event-Typ) | 0 → 1 |
 | `POST /api/v1/observe-events` | Wie read (inkl. `recursive`, `lowerBound`, `types`), aber Verbindung bleibt offen für Live-Updates; Reconnect via `lowerBound` | 2 |
-| `GET /api/v1/verify` | Integrität der Hash-Kette prüfen (Tamper-Evidence) | 3 |
+| `GET /api/v1/verify` | Integrität der Hash-Kette (und ggf. Signaturen) prüfen | 3 |
+| `GET /api/v1/public-key` | Öffentlicher Ed25519-Schlüssel (falls Signieren aktiv) | 3 |
 | `GET /api/v1/read-event-types` | Alle bisher geschriebenen Event-Typen (Anzahl + `hasSchema`) | 3 |
 | `POST /api/v1/register-event-schema` · `GET /api/v1/read-event-schema` | JSON-Schema je Typ registrieren/lesen; Validierung beim Write (ADR-014) | 3 |
 | `GET /api/v1/events/<subject>` | Komfort-Leseroute: Subject = URL-Pfad; Optionen als Query (`recursive` (Default true), `lowerBound`, `upperBound`, `type` (wiederholbar), `watch=true` für Live). `GET /api/v1/events` = Wurzel | 3 |
-| `POST /api/v1/run-eventql-query` | EventQL-Abfrage (spätes Ziel) | 4 |
+| `POST /api/v1/run-query` | CEL-basierte Abfrage (Scope + Prädikat), NDJSON (ADR-017) | 4 |
 | `GET /openapi.yaml` · `GET /docs` | OpenAPI-3-Spec bzw. interaktive Swagger UI (eingebettet, ohne Auth) | 3 |
 | `GET /metrics` | Prometheus-Metriken (ohne Auth) | 3 |
 
@@ -173,22 +174,30 @@ Jede Stufe ist für sich lauffähig. Statusmarkierungen: `⬜ offen` · `🟡 in
 - [x] `recursive`-Flag + Subject-Prefix-Matching (`store.MatchSubject`) — auch für `read-events`; rekursive Reads laufen über den globalen `events`-Bucket und bewahren so die globale Ordnung
 - **Ergebnis:** Live-Beobachtung von Streams inkl. rekursiver Subjects. ✅
 
-### Stufe 3 — Robustheit & Betrieb `🟡`
+### Stufe 3 — Robustheit & Betrieb `✅`
 *Schätzung: 2–4 Wochen*
 - [x] Crash-Recovery: durch bbolts ACID-Transaktionen gegeben — Index ist Teil derselben DB und damit immer konsistent; ein separater Rebuild entfällt (siehe ADR-006).
 - [x] fsync-Strategie (Durability vs. Performance) → **Group Commit** als Default (ADR-009), umschaltbar via `CLIO_SYNC` (`group`/`always`/`off`). Benchmarks belegen den Effekt.
-- [ ] Kompaktierung / Dateirotation
-- [x] Observability: strukturiertes Request-Logging (slog) + Prometheus-`/metrics` (Requests, Latenz-Histogramm, geschriebene Events, 409-Failures, aktive Observer, Event-Count) — ADR-013, ohne Prometheus-Client-Dependency
+- [x] Kompaktierung — `cliostore compact` (offline, atomarer Swap) defragmentiert die bbolt-Datei ohne Events zu löschen; `clio_db_size_bytes`-Metrik (ADR-015). *Rotation/Archivierung bewusst nicht: widerspricht der Unveränderlichkeit (siehe ADR-015).*
+- [x] Observability: strukturiertes Request-Logging (slog) + Prometheus-`/metrics` (Requests, Latenz-Histogramm, geschriebene Events, 409-Failures, aktive Observer, Event-Count, DB-Größe) — ADR-013, ohne Prometheus-Client-Dependency
 - [x] Single-Binary-Builds für alle Plattformen (`GOOS`/`GOARCH`) — `make dist` (linux/darwin/windows × amd64/arm64), Version via `-ldflags` eingebettet; Release-Workflow bei Tags `v*`
 - [x] Docker-Image — mehrstufig, `distroless/static`, nonroot, `/data`-Volume
+- **Ergebnis:** Betriebsreif — Durability-Tuning, Observability, Distribution, Wartung. ✅
 
-### Stufe 4 — Snapshots & EventQL `⬜`
-*Schätzung: 1–3 Monate (EventQL dominiert)*
-- [ ] Snapshots (Speichern/Laden aggregierten Zustands)
-- [ ] EventQL: Lexer, Parser, Planner, Executor (größter Einzelposten — siehe ADR-007)
-- [ ] `isEventQlQueryTrue`-Precondition
+### Stufe 4 — Abfragen (CEL-basiert) & Snapshots `⬜`
+*Schätzung: mehrere überschaubare PRs statt Parser-Marathon (siehe ADR-017)*
 
-**Gesamteinschätzung:** Funktional brauchbarer Klon (Stufen 0–3, ohne EventQL) realistisch in **6–10 Wochen** für eine erfahrene Go-Person. Das produktreife „letzte Stück" (vollwertiges EventQL, Performance-Tuning, Format-Migrationen) nochmals **3–6+ Monate**.
+Statt EventQL syntaxgetreu nachzubauen (kein offener Parser verfügbar, eigener Lexer/Parser/Planner nötig) setzen wir auf **CEL** (`google/cel-go`) für die Prädikate und wiederverwenden unsere vorhandenen Scan-Primitive für die Struktur. Etappen, jede für sich lauffähig:
+
+1. [x] **CEL-Prädikat-Layer** (`internal/query`): Ausdruck mit `event`-Variable kompilieren (Metadaten typisiert, `event.data` als dynamische Map), gegen ein Event auswerten → bool; Compile-Cache + Tests. *(Etappe 1 — umgesetzt.)*
+2. [x] **`POST /api/v1/run-query`** (read-only): `{subject, recursive, where, lowerBound/upperBound, limit}` → `store.Read` + CEL-Filter → NDJSON. *(Etappe 2 — umgesetzt.)*
+3. [x] **Query-Precondition** `isQueryResultEmpty`/`isQueryResultNonEmpty`: Optimistic Concurrency auf einer CEL-Bedingung (unser `isEventQlQueryTrue`-Äquivalent), atomar im Write-Pfad ausgewertet. *(Etappe 3 — umgesetzt.)*
+4. [ ] **Projektion** (optional): Ausgabe via CEL/Feldliste formen.
+5. [ ] **Aggregation/Grouping** (später) sowie **Snapshots** (App-geliefert; semantisch optional, da wir bewusst keine Aggregate berechnen).
+
+> **Bewusste Abweichung:** Der Endpoint heißt `run-query` (nicht `run-eventql-query`) — wir bauen *CEL*-basiert, nicht die EventQL-Syntax. Keine Byte-Kompatibilität zu EventSourcingDB; dafür ein Bruchteil des Aufwands. Strikte EventQL-Kompatibilität bliebe ein separater, großer Schritt.
+
+**Gesamteinschätzung:** Funktional brauchbarer Klon (Stufen 0–3) ist erreicht. Die Abfrage-Schicht (Etappen 1–3) ist das „brauchbare 80 %" und besteht aus wenigen normalen PRs statt eines Monatsbrockens.
 
 ---
 
@@ -279,6 +288,24 @@ Jede Stufe ist für sich lauffähig. Statusmarkierungen: `⬜ offen` · `🟡 in
 - **Kontext:** Produzenten/Konsumenten brauchen einen Vertrag über die Struktur der `data` eines Event-Typs (wie `registerEventSchema` beim Vorbild). JSON Schema selbst nachzubauen wäre unverhältnismäßig.
 - **Entscheidung:** Pro Event-Typ kann ein **JSON Schema** registriert werden (`POST /api/v1/register-event-schema`); beim `write-events` wird `data` dagegen validiert (Verstoß → 400). Schemas sind **unveränderlich** (erneute Registrierung → 409), und eine Registrierung gelingt nur, wenn **alle bereits gespeicherten Events** des Typs konform sind — so erfüllt jeder Typ mit Schema durchgängig seinen Vertrag. Validierung über `github.com/santhosh-tekuri/jsonschema/v6`; kompilierte Schemas werden inhaltsbasiert gecacht (window-frei).
 - **Konsequenzen:** Starke Strukturgarantien ohne EventQL. Eine zusätzliche Abhängigkeit (bewusst, wie bbolt/swgui). Schemas können nicht gelockert werden — das schützt die Historie, erfordert aber Sorgfalt beim ersten Entwurf. Typen ohne Schema bleiben frei (abwärtskompatibel).
+
+### ADR-015: Kompaktierung defragmentiert, löscht aber keine Events
+- **Status:** Akzeptiert
+- **Kontext:** Die Datenbank wächst monoton (Events sind unveränderlich und werden nie gelöscht); zugleich fragmentiert bbolt intern. „Kompaktierung/Rotation" im klassischen Sinn (alte Daten löschen, Retention, Log-Compaction nach Key) widerspricht dem Kernprinzip und würde die Hash-Kette (ADR-012) brechen.
+- **Entscheidung:** Kompaktierung bedeutet ausschließlich **bbolt-Defragmentierung** über `cliostore compact`: die Datei wird offline neu geschrieben (temp-Datei + atomarer Rename) und damit verkleinert/entfragmentiert — **ohne** Events zu löschen oder zu verändern. Der Befehl scheitert bewusst, wenn eine Instanz die Datei hält (Datei-Lock). Die DB-Größe ist als `clio_db_size_bytes` beobachtbar.
+- **Konsequenzen:** Wiedergewinnung von Speicher-Overhead bei voller Erhaltung der Historie (verify bleibt grün). Echte Archivierung/Segmentierung alter Events (Cold Storage, Kette über Segmente) bleibt ein separater, größerer Architektur-Schritt gegen das Single-File-Design — bewusst zurückgestellt.
+
+### ADR-016: Ed25519-Signaturen für Authentizität
+- **Status:** Akzeptiert
+- **Kontext:** Die Hash-Kette (ADR-012) beweist *Integrität* (nichts wurde nachträglich geändert), aber nicht *Authentizität* (von wem stammen die Events). Das `signature`-Feld war dafür bereits vorgesehen.
+- **Entscheidung:** Ist ein Ed25519-Schlüssel über `CLIO_SIGNING_KEY` konfiguriert, signiert der Server jedes Event über seinen Hash (`signature` = base64). `cliostore gen-key` erzeugt ein Schlüsselpaar; `GET /api/v1/public-key` liefert den öffentlichen Schlüssel, sodass Clients unabhängig prüfen können. `GET /api/v1/verify` prüft die Signaturen mit, sofern ein Schlüssel aktiv ist. Ohne Schlüssel bleibt `signature` `null` (abwärtskompatibel).
+- **Konsequenzen:** Nachweisbare Urheberschaft zusätzlich zur Integrität. Die Signatur geht bewusst **nicht** in den Hash ein (Trennung von Integrität und Authentizität; Verfälschen der Signatur bricht nur die Signaturprüfung). Schlüsselverwaltung/-rotation liegt beim Betreiber; nur ein aktiver Schlüssel wird unterstützt (Rotation alter Signaturen ist nicht abgedeckt).
+
+### ADR-017: Abfrageschicht auf CEL statt eigener EventQL-Sprache
+- **Status:** Akzeptiert, in Umsetzung (Etappen 1–3 umgesetzt: CEL-Prädikat-Layer, `run-query`-Endpoint, Query-Preconditions; `google/cel-go` als Abhängigkeit)
+- **Kontext:** Das Vorbild EventSourcingDB nutzt eine selbst entworfene, SQL-inspirierte Sprache (EventQL) mit eigenem Parser/Executor. Es gibt **keine offene EventQL-Grammatik/Bibliothek** zum Aufsetzen; ein syntaxgetreuer Nachbau bedeutete Lexer+Parser+Planner+Executor (Monatsaufwand). PartiQL (offene SQL-für-JSON-Spec) hat keine reife Go-Implementierung.
+- **Entscheidung:** Die Abfrageschicht wird **CEL-basiert** (`google/cel-go`) statt als eigene Sprache gebaut. Eine Query = Subject-Scope (vorhandene Primitive) + **CEL-Prädikat** über das Event (`event.type`, `event.data.*` …) + optionale Projektion/Limit. Der `isEventQlQueryTrue`-Gedanke wird zu einer Precondition mit CEL-Bedingung. Endpoint: `POST /api/v1/run-query` (bewusst nicht `run-eventql-query`, da keine EventQL-Syntax).
+- **Konsequenzen:** Drastisch geringerer Aufwand und Risiko; die wertvollen Teile (Bedingungen auf `data`, Precondition) entstehen mit einer reifen, getesteten Engine. Eine zusätzliche Abhängigkeit (`cel-go` + protobuf). **Keine** Byte-Kompatibilität mit EventSourcingDB-EventQL — strikte Kompatibilität bliebe ein separates, großes Vorhaben. Ersetzt die EventQL-Annahme in ADR-007 für die Umsetzung (ADR-007 bleibt als Kontext gültig).
 
 ---
 
