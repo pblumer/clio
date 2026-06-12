@@ -31,18 +31,35 @@ const ndjsonContentType = "application/x-ndjson"
 
 // Server kapselt Konfiguration, Storage und Router des HTTP-API-Layers.
 type Server struct {
-	cfg     config.Config
-	store   *store.Store
-	broker  *pubsub.Broker
-	metrics *metrics.Metrics
-	queryC  *query.Compiler
-	logger  *slog.Logger
-	mux     *http.ServeMux
+	cfg       config.Config
+	store     *store.Store
+	broker    *pubsub.Broker
+	metrics   *metrics.Metrics
+	queryC    *query.Compiler
+	logger    *slog.Logger
+	mux       *http.ServeMux
+	version   string
+	startedAt time.Time
+}
+
+// Option konfiguriert optionale Server-Metadaten.
+type Option func(*Server)
+
+// WithBuildInfo setzt Build-Version und Startzeit für /api/v1/info.
+func WithBuildInfo(version string, startedAt time.Time) Option {
+	return func(s *Server) {
+		if strings.TrimSpace(version) != "" {
+			s.version = version
+		}
+		if !startedAt.IsZero() {
+			s.startedAt = startedAt
+		}
+	}
 }
 
 // New erzeugt einen konfigurierten Server. Ist logger nil, wird der
 // Default-Logger verwendet.
-func New(cfg config.Config, st *store.Store, logger *slog.Logger) *Server {
+func New(cfg config.Config, st *store.Store, logger *slog.Logger, opts ...Option) *Server {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -53,13 +70,20 @@ func New(cfg config.Config, st *store.Store, logger *slog.Logger) *Server {
 	}
 
 	s := &Server{
-		cfg:     cfg,
-		store:   st,
-		broker:  pubsub.New(),
-		metrics: metrics.New(),
-		queryC:  qc,
-		logger:  logger,
-		mux:     http.NewServeMux(),
+		cfg:       cfg,
+		store:     st,
+		broker:    pubsub.New(),
+		metrics:   metrics.New(),
+		queryC:    qc,
+		logger:    logger,
+		mux:       http.NewServeMux(),
+		version:   "dev",
+		startedAt: time.Now().UTC(),
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(s)
+		}
 	}
 	s.routes()
 	return s
@@ -132,6 +156,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/ping", s.handlePing)
 
 	// Datenrouten sind durch das Bearer-Token geschützt (ADR-008).
+	s.mux.HandleFunc("GET /api/v1/info", s.requireAuth(s.handleInfo))
 	s.mux.HandleFunc("POST /api/v1/write-events", s.requireAuth(s.handleWriteEvents))
 	s.mux.HandleFunc("POST /api/v1/read-events", s.requireAuth(s.handleReadEvents))
 	s.mux.HandleFunc("POST /api/v1/observe-events", s.requireAuth(s.handleObserveEvents))
@@ -167,6 +192,35 @@ func (s *Server) handleOpenAPISpec(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handlePing(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleInfo liefert Laufzeit-Infos (Version, Uptime, Startzeit) plus
+// grundlegende Store-Infos für Diagnose und Deploy-Verifikation.
+func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
+	count, err := s.store.Count()
+	if err != nil {
+		s.logger.Error("info: events zählen fehlgeschlagen", "err", err)
+		writeError(w, http.StatusInternalServerError, "interner fehler beim lesen")
+		return
+	}
+
+	now := time.Now().UTC()
+	uptime := now.Sub(s.startedAt)
+	if uptime < 0 {
+		uptime = 0
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"name":             "cliostore",
+		"version":          s.version,
+		"startedAt":        s.startedAt.Format(time.RFC3339Nano),
+		"uptimeSeconds":    int64(uptime.Seconds()),
+		"serverTime":       now.Format(time.RFC3339Nano),
+		"eventsTotal":      count,
+		"syncMode":         s.cfg.Sync,
+		"httpListenAddr":   s.cfg.Addr,
+		"databaseFilePath": s.cfg.DBPath,
+	})
 }
 
 // handleReadEventTypes liefert alle bisher geschriebenen Event-Typen als NDJSON

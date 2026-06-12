@@ -65,6 +65,40 @@ func TestPing(t *testing.T) {
 	}
 }
 
+func TestInfoEndpoint(t *testing.T) {
+	srv := newTestServer(t)
+
+	// Ohne Auth muss /info verweigern.
+	rec := do(t, srv, http.MethodGet, "/api/v1/info", "", "")
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status ohne auth = %d, want 401", rec.Code)
+	}
+
+	// Mit Auth liefert /info Build- und Laufzeitinformationen.
+	rec = do(t, srv, http.MethodGet, "/api/v1/info", "secret-token", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status mit auth = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+
+	var body map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("info-antwort dekodieren: %v", err)
+	}
+
+	if body["name"] != "cliostore" {
+		t.Fatalf("name = %v, want cliostore", body["name"])
+	}
+	if body["version"] == "" {
+		t.Fatalf("version fehlt/leer")
+	}
+	if _, ok := body["uptimeSeconds"]; !ok {
+		t.Fatalf("uptimeSeconds fehlt")
+	}
+	if _, ok := body["eventsTotal"]; !ok {
+		t.Fatalf("eventsTotal fehlt")
+	}
+}
+
 func TestWriteEventsAuth(t *testing.T) {
 	srv := newTestServer(t)
 	body := `{"events":[{"source":"s","subject":"/a","type":"t"}]}`
