@@ -10,6 +10,15 @@ info:
 
     Alle Datenrouten sind per **Bearer-Token** geschützt (`Authorize`-Button).
   version: "1.0"
+  # x-audience nach Swiss API Guidelines: die API-Spec ist öffentlich
+  # dokumentiert und für jeden nutzbar, der eine clio-Instanz betreibt.
+  x-audience: external-public
+  contact:
+    name: cliostore
+    url: https://github.com/pblumer/clio
+  license:
+    name: MIT
+    url: https://github.com/pblumer/clio/blob/main/LICENSE
 
 servers:
   - url: /

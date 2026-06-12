@@ -5,7 +5,7 @@
 >
 > **Status des Gesamtprojekts:** `IN ENTWICKLUNG` — **Stufe 0–3 abgeschlossen** plus **Ed25519-Signaturen** (Authentizität). Write/Read/Observe, Optimistic Concurrency, Hash-Kette + Signaturen (`/verify`, `/public-key`), Event-Typen + JSON-Schemas, Group Commit (`CLIO_SYNC`), Observability (`/metrics`), Distribution (Cross-Builds/Docker/Release), Kompaktierung (`cliostore compact`), OpenAPI/Swagger UI. Geplant (Stufe 4): CEL-basierte Abfrageschicht (`run-query`, ADR-017) statt eigener EventQL-Sprache.
 > **Letzte Aktualisierung:** 2026-06-12
-> **Dokumentversion:** 1.27
+> **Dokumentversion:** 1.28
 
 ---
 
@@ -317,9 +317,9 @@ Statt EventQL syntaxgetreu nachzubauen (kein offener Parser verfügbar, eigener 
 - **Nachtrag:** Die hier vorgemerkten Quick Wins `problem+json` und `Cache-Control: no-store` sind inzwischen umgesetzt (siehe ADR-019). Die drei harten Konflikte bleiben unverändert dokumentierte Abweichungen.
 
 ### ADR-019: Swiss-Guidelines Quick Wins — problem+json & Cache-Control
-- **Status:** Akzeptiert (in Umsetzung: problem+json und `Cache-Control: no-store` umgesetzt; OpenAPI-Meta `x-audience`/`license`/`contact` als möglicher Folgeschritt offen)
+- **Status:** Akzeptiert (umgesetzt: problem+json, `Cache-Control: no-store` und OpenAPI-Meta `x-audience: external-public`/`license`/`contact` im `info`-Block)
 - **Kontext:** ADR-018 führt die zentralen Swiss-Guidelines-Konflikte bewusst als Abweichungen, hält aber fest, dass ein Teil der Regeln **konfliktfrei** erfüllbar ist (Quick Wins). Davon bringen ein **einheitliches, maschinenlesbares Fehlerformat** und ein **Cache-Default** echten Client-Nutzen ohne Designkonflikt.
-- **Entscheidung:** Fehlerantworten werden als **`application/problem+json`** (RFC 7807) ausgeliefert: `{type:"about:blank", title:<HTTP-Statustext>, status:<code>, detail:<Meldung>}`. Die zentrale `writeError`-Funktion erzeugt sie, sodass alle Routen ohne Aufrufänderung profitieren. Zusätzlich setzt die Observability-Middleware **`Cache-Control: no-store`** als Default auf alle Antworten (dynamische Daten, kein Caching); Handler können dies bei Bedarf überschreiben (z. B. statische Doc-Assets). Die OpenAPI-Spec referenziert ein `ProblemDetails`-Schema.
+- **Entscheidung:** Fehlerantworten werden als **`application/problem+json`** (RFC 7807) ausgeliefert: `{type:"about:blank", title:<HTTP-Statustext>, status:<code>, detail:<Meldung>}`. Die zentrale `writeError`-Funktion erzeugt sie, sodass alle Routen ohne Aufrufänderung profitieren. Zusätzlich setzt die Observability-Middleware **`Cache-Control: no-store`** als Default auf alle Antworten (dynamische Daten, kein Caching); Handler können dies bei Bedarf überschreiben (z. B. statische Doc-Assets). Die OpenAPI-Spec referenziert ein `ProblemDetails`-Schema und trägt im `info`-Block die Meta-Felder `x-audience: external-public`, `license` (MIT) und `contact`.
 - **Konsequenzen:** Konsistente, RFC-konforme Fehler erleichtern die Client-Verarbeitung; `no-store` verhindert versehentliches Caching sensibler/aktueller Daten. Bewusst **kein** problemspezifischer `type`-URI-Katalog (generisches `about:blank` genügt) und **keine** Änderung des Erfolgs-Antwortformats (NDJSON/JSON bleiben — die harten Konflikte aus ADR-018 sind weiterhin Abweichungen). Byte-Kompatibilität mit EventSourcingDB ist davon unberührt.
 
 ### ADR-020: Eingebettetes Betriebs-Dashboard unter `/ui`
