@@ -317,6 +317,58 @@ func TestRunQueryBadRequest(t *testing.T) {
 	}
 }
 
+func TestProblemJSONError(t *testing.T) {
+	srv := newTestServer(t)
+	// Ungültige Anfrage -> 400 als application/problem+json (RFC 7807).
+	rec := do(t, srv, http.MethodPost, "/api/v1/read-events", "secret-token", `{"subject":"a"}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/problem+json") {
+		t.Fatalf("Content-Type = %q, want application/problem+json", ct)
+	}
+	var p struct {
+		Type   string `json:"type"`
+		Title  string `json:"title"`
+		Status int    `json:"status"`
+		Detail string `json:"detail"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&p); err != nil {
+		t.Fatalf("problem-body dekodieren: %v", err)
+	}
+	if p.Type != "about:blank" || p.Title != "Bad Request" || p.Status != 400 {
+		t.Fatalf("problem-felder falsch: %+v", p)
+	}
+	if p.Detail == "" {
+		t.Fatalf("detail fehlt: %+v", p)
+	}
+
+	// Auch 401 (requireAuth) nutzt problem+json.
+	rec = do(t, srv, http.MethodPost, "/api/v1/read-events", "wrong-token", `{"subject":"/a"}`)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/problem+json") {
+		t.Fatalf("401 Content-Type = %q, want application/problem+json", ct)
+	}
+}
+
+func TestCacheControlDefault(t *testing.T) {
+	srv := newTestServer(t)
+	// Default-Header no-store auf einer Datenroute (Erfolg).
+	do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token",
+		`{"events":[{"source":"s","subject":"/a","type":"t"}]}`)
+	rec := do(t, srv, http.MethodPost, "/api/v1/read-events", "secret-token", `{"subject":"/a"}`)
+	if cc := rec.Header().Get("Cache-Control"); cc != "no-store" {
+		t.Fatalf("Cache-Control = %q, want no-store", cc)
+	}
+	// Auch auf Fehlerantworten gesetzt.
+	rec = do(t, srv, http.MethodPost, "/api/v1/read-events", "secret-token", `{"subject":"a"}`)
+	if cc := rec.Header().Get("Cache-Control"); cc != "no-store" {
+		t.Fatalf("Cache-Control (fehler) = %q, want no-store", cc)
+	}
+}
+
 func TestReadEventsBadRequest(t *testing.T) {
 	srv := newTestServer(t)
 	tests := []struct {

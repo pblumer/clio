@@ -131,6 +131,11 @@ func (s *Server) instrument(next http.Handler) http.Handler {
 		start := time.Now()
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 
+		// Default-Header: Antworten enthalten dynamische Daten und sollen nicht
+		// gecacht werden (Swiss-Guidelines Quick Win, ADR-019). Handler können
+		// dies bei Bedarf überschreiben (z. B. statische Doc-Assets).
+		rec.Header().Set("Cache-Control", "no-store")
+
 		next.ServeHTTP(rec, r)
 
 		dur := time.Since(start)
@@ -846,8 +851,31 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 	_ = json.NewEncoder(w).Encode(body)
 }
 
+// problemContentType ist der Media-Type für RFC-7807-Fehler.
+const problemContentType = "application/problem+json"
+
+// problemDetails ist ein strukturierter Fehler-Body nach RFC 7807
+// (application/problem+json). `type` bleibt generisch ("about:blank"); `title`
+// ist der HTTP-Statustext, `detail` die konkrete Meldung.
+type problemDetails struct {
+	Type   string `json:"type"`
+	Title  string `json:"title"`
+	Status int    `json:"status"`
+	Detail string `json:"detail,omitempty"`
+}
+
+// writeError schreibt einen Fehler als application/problem+json (RFC 7807) —
+// ein konfliktfreier Quick Win Richtung Swiss API Guidelines (ADR-019). Die
+// Signatur bleibt unverändert, damit alle Aufrufstellen profitieren.
 func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
+	w.Header().Set("Content-Type", problemContentType)
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(problemDetails{
+		Type:   "about:blank",
+		Title:  http.StatusText(status),
+		Status: status,
+		Detail: msg,
+	})
 }
 
 // writeNDJSON schreibt eine Werteliste als Newline-Delimited JSON (ein JSON-

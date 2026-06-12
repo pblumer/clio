@@ -93,6 +93,19 @@ persistieren).
 | `CLIO_SYNC`       | nein    | `group`    | Schreibstrategie: `group`/`always`/`off` (siehe Performance) |
 | `CLIO_SIGNING_KEY`| nein    | —          | base64-Ed25519-Schlüssel; aktiviert Event-Signaturen        |
 
+### Fehlerformat
+
+Fehlerantworten folgen **RFC 7807** (`application/problem+json`):
+
+```json
+{ "type": "about:blank", "title": "Bad Request", "status": 400,
+  "detail": "subject muss mit \"/\" beginnen" }
+```
+
+Alle Antworten tragen zudem `Cache-Control: no-store` (dynamische Daten, kein
+Caching). Beides sind bewusste, konfliktfreie Annäherungen an die Swiss API
+Guidelines (ADR-019); die übrigen Abweichungen bleiben dokumentiert (ADR-018).
+
 ### Events schreiben & lesen
 
 ```bash
