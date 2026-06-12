@@ -829,6 +829,31 @@ func TestDocsUI(t *testing.T) {
 	}
 }
 
+func TestDashboardUI(t *testing.T) {
+	srv := newTestServer(t)
+
+	// /ui -> statische Dashboard-Seite, bewusst ohne Auth (wie /docs).
+	rec := do(t, srv, http.MethodGet, "/ui", "", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/ui status = %d, want 200", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
+		t.Fatalf("/ui Content-Type = %q, want text/html…", ct)
+	}
+	if !strings.Contains(rec.Body.String(), "Betriebs-Dashboard") {
+		t.Fatal("/ui liefert nicht die Dashboard-Seite")
+	}
+
+	// /ui/ -> Redirect auf /ui.
+	rec = do(t, srv, http.MethodGet, "/ui/", "", "")
+	if rec.Code != http.StatusMovedPermanently {
+		t.Fatalf("/ui/ status = %d, want 301", rec.Code)
+	}
+	if loc := rec.Header().Get("Location"); loc != "/ui" {
+		t.Fatalf("Location = %q, want /ui", loc)
+	}
+}
+
 func TestEventsPathRead(t *testing.T) {
 	srv := newTestServer(t)
 	do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token",

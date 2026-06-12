@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>clio · Dashboard</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --panel-2: #1d212b; --border: #272c38;
+    --fg: #e6e9ef; --muted: #8b93a7; --accent: #6ea8fe; --ok: #4ade80;
+    --warn: #fbbf24; --err: #f87171; --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 14px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  }
+  header {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    padding: 14px 20px; background: var(--panel); border-bottom: 1px solid var(--border);
+    position: sticky; top: 0; z-index: 10;
+  }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; letter-spacing: .3px; }
+  header h1 .muse { color: var(--muted); font-weight: 400; }
+  .status { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
+  .dot.ok { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+  .dot.err { background: var(--err); box-shadow: 0 0 8px var(--err); }
+  .spacer { flex: 1; }
+  input, select, button {
+    font: inherit; color: var(--fg); background: var(--panel-2);
+    border: 1px solid var(--border); border-radius: 7px; padding: 7px 10px;
+  }
+  input { min-width: 220px; }
+  button { cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); color: #0b1020; border-color: var(--accent); font-weight: 600; }
+  main { padding: 20px; max-width: 1100px; margin: 0 auto; }
+  .grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    padding: 16px 18px;
+  }
+  .card .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .6px; }
+  .card .value { font-size: 26px; font-weight: 600; margin-top: 6px; font-variant-numeric: tabular-nums; }
+  .card .sub { color: var(--muted); font-size: 12px; margin-top: 4px; }
+  .card .value.mono, .sub.mono { font-family: var(--mono); }
+  section h2 { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .6px; margin: 26px 0 12px; }
+  .kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 18px; }
+  .kv dt { color: var(--muted); }
+  .kv dd { margin: 0; font-family: var(--mono); word-break: break-all; }
+  .notice { background: var(--panel); border: 1px solid var(--border); border-left: 3px solid var(--warn);
+            border-radius: 10px; padding: 12px 16px; color: var(--muted); margin-bottom: 18px; }
+  .notice.err { border-left-color: var(--err); color: var(--err); }
+  footer { color: var(--muted); font-size: 12px; text-align: center; padding: 24px; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<header>
+  <h1>clio <span class="muse">· Betriebs-Dashboard</span></h1>
+  <span class="status"><span id="dot" class="dot"></span><span id="statusText">getrennt</span></span>
+  <span class="spacer"></span>
+  <input id="token" type="password" placeholder="Bearer-Token" autocomplete="off" spellcheck="false">
+  <select id="interval" title="Aktualisierungsintervall">
+    <option value="2000">2&nbsp;s</option>
+    <option value="5000" selected>5&nbsp;s</option>
+    <option value="10000">10&nbsp;s</option>
+    <option value="0">manuell</option>
+  </select>
+  <button id="connect" class="primary">Verbinden</button>
+</header>
+
+<main>
+  <div id="notice" class="notice">
+    Token eingeben und <strong>Verbinden</strong> — die Seite ist statisch und
+    spricht dieselbe Instanz an (<code>/api/v1/info</code> + <code>/metrics</code>).
+    Das Token bleibt nur im Tab (sessionStorage).
+  </div>
+
+  <div class="grid">
+    <div class="card"><div class="label">Events gesamt</div><div id="m-events" class="value">–</div><div id="m-events-sub" class="sub">gespeichert</div></div>
+    <div class="card"><div class="label">DB-Größe</div><div id="m-dbsize" class="value">–</div><div class="sub">Datenbankdatei</div></div>
+    <div class="card"><div class="label">Aktive Observer</div><div id="m-observers" class="value">–</div><div class="sub">offene Streams</div></div>
+    <div class="card"><div class="label">Uptime</div><div id="m-uptime" class="value">–</div><div id="m-started" class="sub">seit Start</div></div>
+    <div class="card"><div class="label">HTTP-Anfragen</div><div id="m-requests" class="value">–</div><div id="m-rate" class="sub">gesamt</div></div>
+    <div class="card"><div class="label">Latenz p50 / p99</div><div id="m-latency" class="value mono">–</div><div class="sub">geschätzt aus Histogramm</div></div>
+    <div class="card"><div class="label">Geschriebene Events</div><div id="m-written" class="value">–</div><div class="sub">seit Start</div></div>
+    <div class="card"><div class="label">Precondition-Fehler</div><div id="m-pc" class="value">–</div><div class="sub">HTTP 409</div></div>
+  </div>
+
+  <section>
+    <h2>Instanz</h2>
+    <dl class="kv">
+      <dt>Version</dt><dd id="i-version">–</dd>
+      <dt>Sync-Modus</dt><dd id="i-sync">–</dd>
+      <dt>Listen-Adresse</dt><dd id="i-addr">–</dd>
+      <dt>Datenbankpfad</dt><dd id="i-db">–</dd>
+      <dt>Serverzeit</dt><dd id="i-time">–</dd>
+    </dl>
+  </section>
+
+  <footer>
+    clio · <a href="/docs">API-Doku</a> · <a href="/metrics">/metrics</a> ·
+    <span id="lastUpdate">noch nicht aktualisiert</span>
+  </footer>
+</main>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const tokenInput = $("token"), intervalSel = $("interval");
+let timer = null, lastReqTotal = null, lastReqAt = null;
+
+// Token im Tab merken (nicht persistent über Tabs hinweg).
+tokenInput.value = sessionStorage.getItem("clioToken") || "";
+
+function setStatus(state, text) {
+  $("dot").className = "dot" + (state ? " " + state : "");
+  $("statusText").textContent = text;
+}
+function fmtInt(n) { return (n == null || isNaN(n)) ? "–" : Number(n).toLocaleString("de-CH"); }
+function fmtBytes(b) {
+  if (b == null || b < 0) return "–";
+  const u = ["B", "KiB", "MiB", "GiB", "TiB"]; let i = 0;
+  while (b >= 1024 && i < u.length - 1) { b /= 1024; i++; }
+  return (i === 0 ? b : b.toFixed(1)) + " " + u[i];
+}
+function fmtDuration(s) {
+  if (s == null || s < 0) return "–";
+  s = Math.floor(s);
+  const d = Math.floor(s / 86400); s %= 86400;
+  const h = Math.floor(s / 3600); s %= 3600;
+  const m = Math.floor(s / 60); const sec = s % 60;
+  if (d > 0) return `${d}d ${h}h ${m}m`;
+  if (h > 0) return `${h}h ${m}m ${sec}s`;
+  if (m > 0) return `${m}m ${sec}s`;
+  return `${sec}s`;
+}
+function fmtMs(sec) {
+  if (sec == null) return "–";
+  const ms = sec * 1000;
+  return ms < 10 ? ms.toFixed(2) + " ms" : ms < 1000 ? ms.toFixed(1) + " ms" : (ms / 1000).toFixed(2) + " s";
+}
+
+// Minimaler Parser für das Prometheus-Textformat: liefert je Metrikname eine
+// Liste {labels, value}.
+function parseProm(text) {
+  const out = {};
+  for (const raw of text.split("\n")) {
+    const line = raw.trim();
+    if (!line || line[0] === "#") continue;
+    const sp = line.lastIndexOf(" ");
+    if (sp < 0) continue;
+    const left = line.slice(0, sp), value = parseFloat(line.slice(sp + 1));
+    const brace = left.indexOf("{");
+    const name = brace < 0 ? left : left.slice(0, brace);
+    const labels = {};
+    if (brace >= 0) {
+      const inner = left.slice(brace + 1, left.lastIndexOf("}"));
+      for (const m of inner.matchAll(/(\w+)="([^"]*)"/g)) labels[m[1]] = m[2];
+    }
+    (out[name] ||= []).push({ labels, value });
+  }
+  return out;
+}
+function gauge(m, name) { return m[name] && m[name].length ? m[name][0].value : null; }
+function sum(m, name) { return (m[name] || []).reduce((a, s) => a + s.value, 0); }
+
+// Quantil-Schätzung aus dem kumulativen Histogramm (lineare Interpolation im
+// Treffer-Bucket) — dieselbe Idee wie histogram_quantile in PromQL.
+function quantile(buckets, count, q) {
+  if (!buckets || !buckets.length || !count) return null;
+  const sorted = buckets
+    .map((b) => ({ le: b.labels.le === "+Inf" ? Infinity : parseFloat(b.labels.le), c: b.value }))
+    .sort((a, b) => a.le - b.le);
+  const target = q * count;
+  let prevLe = 0, prevC = 0;
+  for (const b of sorted) {
+    if (b.c >= target) {
+      if (b.le === Infinity) return prevLe;
+      const span = b.c - prevC;
+      if (span <= 0) return b.le;
+      return prevLe + (b.le - prevLe) * ((target - prevC) / span);
+    }
+    prevLe = b.le; prevC = b.c;
+  }
+  return prevLe;
+}
+
+async function refresh() {
+  const token = tokenInput.value.trim();
+  if (!token) { setStatus("err", "Token fehlt"); return; }
+  try {
+    const headers = { Authorization: "Bearer " + token };
+    const [infoRes, metricsRes] = await Promise.all([
+      fetch("/api/v1/info", { headers, cache: "no-store" }),
+      fetch("/metrics", { cache: "no-store" }),
+    ]);
+    if (infoRes.status === 401) { setStatus("err", "Token ungültig (401)"); markNotice("Token ungültig — Zugriff verweigert (401).", true); return; }
+    if (!infoRes.ok) throw new Error("info HTTP " + infoRes.status);
+    if (!metricsRes.ok) throw new Error("metrics HTTP " + metricsRes.status);
+
+    const info = await infoRes.json();
+    const m = parseProm(await metricsRes.text());
+    render(info, m);
+    setStatus("ok", "verbunden");
+    clearNotice();
+    $("lastUpdate").textContent = "aktualisiert " + new Date().toLocaleTimeString("de-CH");
+  } catch (e) {
+    setStatus("err", "Fehler");
+    markNotice("Verbindung fehlgeschlagen: " + e.message, true);
+  }
+}
+
+function render(info, m) {
+  $("m-events").textContent = fmtInt(gauge(m, "clio_events_total") ?? info.eventsTotal);
+  $("m-dbsize").textContent = fmtBytes(gauge(m, "clio_db_size_bytes"));
+  $("m-observers").textContent = fmtInt(gauge(m, "clio_active_observers"));
+  $("m-uptime").textContent = fmtDuration(info.uptimeSeconds);
+  $("m-started").textContent = info.startedAt ? "seit " + new Date(info.startedAt).toLocaleString("de-CH") : "seit Start";
+  $("m-written").textContent = fmtInt(sum(m, "clio_events_written_total"));
+  $("m-pc").textContent = fmtInt(sum(m, "clio_precondition_failures_total"));
+
+  const reqTotal = sum(m, "clio_http_requests_total");
+  $("m-requests").textContent = fmtInt(reqTotal);
+  const now = Date.now();
+  if (lastReqTotal != null && lastReqAt != null && now > lastReqAt) {
+    const rate = (reqTotal - lastReqTotal) / ((now - lastReqAt) / 1000);
+    $("m-rate").textContent = rate >= 0 ? rate.toFixed(2) + " req/s" : "gesamt";
+  }
+  lastReqTotal = reqTotal; lastReqAt = now;
+
+  const count = gauge(m, "clio_http_request_duration_seconds_count");
+  const p50 = quantile(m["clio_http_request_duration_seconds_bucket"], count, 0.5);
+  const p99 = quantile(m["clio_http_request_duration_seconds_bucket"], count, 0.99);
+  $("m-latency").textContent = (p50 == null) ? "–" : fmtMs(p50) + " / " + fmtMs(p99);
+
+  $("i-version").textContent = info.version ?? "–";
+  $("i-sync").textContent = info.syncMode ?? "–";
+  $("i-addr").textContent = info.httpListenAddr ?? "–";
+  $("i-db").textContent = info.databaseFilePath ?? "–";
+  $("i-time").textContent = info.serverTime ? new Date(info.serverTime).toLocaleString("de-CH") : "–";
+}
+
+function markNotice(text, isErr) {
+  const n = $("notice"); n.style.display = "block";
+  n.className = "notice" + (isErr ? " err" : ""); n.innerHTML = text;
+}
+function clearNotice() { $("notice").style.display = "none"; }
+
+function schedule() {
+  if (timer) { clearInterval(timer); timer = null; }
+  const ms = parseInt(intervalSel.value, 10);
+  if (ms > 0) timer = setInterval(refresh, ms);
+}
+function connect() {
+  sessionStorage.setItem("clioToken", tokenInput.value.trim());
+  refresh(); schedule();
+}
+
+$("connect").addEventListener("click", connect);
+tokenInput.addEventListener("keydown", (e) => { if (e.key === "Enter") connect(); });
+intervalSel.addEventListener("change", schedule);
+
+// Auto-Start, falls bereits ein Token im Tab liegt.
+if (tokenInput.value) connect();
+</script>
+</body>
+</html>
