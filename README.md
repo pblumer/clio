@@ -10,6 +10,11 @@ liest und live beobachtbar macht.
 Die vollständige Architektur, Roadmap und alle Entscheidungen stehen in
 [`ARCHITECTURE.md`](./ARCHITECTURE.md).
 
+> **Neu hier?** Der [**Clio Learning Path**](./docs/learning-path/) führt dich
+> rollenbasiert ein (Einsteiger:in, Anwendungsentwickler:in, Betrieb,
+> Contributor, Architekt:in) — mit Modulen und lauffähigen Beispielen unter
+> [`examples/`](./examples/).
+
 ## Status
 
 **Stufe 0–2 — abgeschlossen.** Lauffähig: `ping`, `write-events` (atomar,
