@@ -24,6 +24,7 @@ import (
 	"github.com/pblumer/clio/internal/pubsub"
 	"github.com/pblumer/clio/internal/query"
 	"github.com/pblumer/clio/internal/store"
+	"github.com/pblumer/clio/internal/webui"
 )
 
 // ndjsonContentType ist der Content-Type für Newline-Delimited JSON.
@@ -168,6 +169,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/run-query", s.requireAuth(s.handleRunQuery))
 	s.mux.HandleFunc("GET /api/v1/verify", s.requireAuth(s.handleVerify))
 	s.mux.HandleFunc("GET /api/v1/public-key", s.requireAuth(s.handlePublicKey))
+	s.mux.HandleFunc("GET /api/v1/read-subjects", s.requireAuth(s.handleReadSubjects))
 	s.mux.HandleFunc("GET /api/v1/read-event-types", s.requireAuth(s.handleReadEventTypes))
 	s.mux.HandleFunc("POST /api/v1/register-event-schema", s.requireAuth(s.handleRegisterEventSchema))
 	s.mux.HandleFunc("GET /api/v1/read-event-schema", s.requireAuth(s.handleReadEventSchema))
@@ -180,6 +182,14 @@ func (s *Server) routes() {
 	// `GET /api/v1/events` ohne Subject = Wurzel (alle Events).
 	s.mux.HandleFunc("GET /api/v1/events", s.requireAuth(s.handleEventsPath))
 	s.mux.HandleFunc("GET /api/v1/events/{subject...}", s.requireAuth(s.handleEventsPath))
+
+	// Betriebs-Dashboard (ADR-020): statische, eingebettete Seite unter /ui.
+	// Wie /docs bewusst ohne Auth (nicht sensibel); die Daten holt die Seite
+	// clientseitig von /api/v1/info (Bearer-Token) und /metrics.
+	s.mux.Handle("GET /ui", webui.Handler())
+	s.mux.HandleFunc("GET /ui/", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/ui", http.StatusMovedPermanently)
+	})
 
 	// API-Doku: OpenAPI-Spec + interaktive UI. Bewusst ohne Auth (nicht
 	// sensibel); „Try it out" nutzt das Bearer-Token, das der Nutzer eingibt.
@@ -226,6 +236,104 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 		"httpListenAddr":   s.cfg.Addr,
 		"databaseFilePath": s.cfg.DBPath,
 	})
+}
+
+// handleReadSubjects liefert alle bisher beschriebenen Subjects (Streams) als
+// NDJSON ({"subject":...,"count":...} pro Zeile), sortiert. Optionaler
+// Query-Parameter `prefix` schränkt auf den rekursiven Scope eines Pfads ein
+// (z. B. ?prefix=/books). Mit `tree=true` wird stattdessen ein hierarchischer
+// Baum als einzelnes JSON-Objekt zurückgegeben.
+func (s *Server) handleReadSubjects(w http.ResponseWriter, r *http.Request) {
+	prefix := r.URL.Query().Get("prefix")
+	if prefix != "" && prefix[0] != '/' {
+		writeError(w, http.StatusBadRequest, "prefix muss mit \"/\" beginnen")
+		return
+	}
+	subjects, err := s.store.Subjects(prefix)
+	if err != nil {
+		s.logger.Error("read-subjects fehlgeschlagen", "err", err)
+		writeError(w, http.StatusInternalServerError, "interner fehler beim lesen")
+		return
+	}
+	if r.URL.Query().Get("tree") == "true" {
+		root := prefix
+		if root == "" {
+			root = "/"
+		}
+		writeJSON(w, http.StatusOK, buildSubjectTree(subjects, root))
+		return
+	}
+	writeNDJSON(w, s.logger, subjects)
+}
+
+// subjectTreeNode ist ein Knoten im Subject-Baum. `count` sind die Events exakt
+// auf diesem Subject (0 für reine Zwischenknoten), `total` die aggregierte
+// Anzahl im gesamten Teilbaum. `children` ist nie null (leeres Array bei
+// Blättern).
+type subjectTreeNode struct {
+	Subject  string             `json:"subject"`
+	Count    uint64             `json:"count"`
+	Total    uint64             `json:"total"`
+	Children []*subjectTreeNode `json:"children"`
+}
+
+func newSubjectTreeNode(subject string) *subjectTreeNode {
+	return &subjectTreeNode{Subject: subject, Children: []*subjectTreeNode{}}
+}
+
+// buildSubjectTree formt die flache, alphabetisch sortierte Subject-Liste in
+// einen hierarchischen Baum mit Wurzel root ("/" oder ein prefix). Zwischen-
+// segmente, die selbst kein Subject sind (z. B. "/books" bei vorhandenem
+// "/books/42"), entstehen als Knoten mit count=0. Da die Eingabe sortiert ist,
+// erscheinen Kinder in sortierter Reihenfolge.
+func buildSubjectTree(subjects []store.SubjectInfo, root string) *subjectTreeNode {
+	rootNode := newSubjectTreeNode(root)
+	nodes := map[string]*subjectTreeNode{root: rootNode}
+
+	for _, si := range subjects {
+		var rel string
+		switch {
+		case si.Subject == root:
+			rel = ""
+		case root == "/":
+			rel = strings.TrimPrefix(si.Subject, "/")
+		default:
+			rel = strings.TrimPrefix(si.Subject, root+"/")
+		}
+
+		cur, curPath := rootNode, root
+		for _, seg := range strings.Split(rel, "/") {
+			if seg == "" {
+				continue
+			}
+			childPath := curPath + "/" + seg
+			if curPath == "/" {
+				childPath = "/" + seg
+			}
+			child := nodes[childPath]
+			if child == nil {
+				child = newSubjectTreeNode(childPath)
+				nodes[childPath] = child
+				cur.Children = append(cur.Children, child)
+			}
+			cur, curPath = child, childPath
+		}
+		cur.Count = si.Count
+	}
+
+	computeSubtreeTotals(rootNode)
+	return rootNode
+}
+
+// computeSubtreeTotals summiert die Events je Teilbaum (Post-Order) und liefert
+// die Summe des Teilbaums.
+func computeSubtreeTotals(n *subjectTreeNode) uint64 {
+	sum := n.Count
+	for _, c := range n.Children {
+		sum += computeSubtreeTotals(c)
+	}
+	n.Total = sum
+	return sum
 }
 
 // handleReadEventTypes liefert alle bisher geschriebenen Event-Typen als NDJSON

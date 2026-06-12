@@ -717,6 +717,145 @@ func TestReadEventTypes(t *testing.T) {
 	}
 }
 
+func TestReadSubjects(t *testing.T) {
+	srv := newTestServer(t)
+	do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token",
+		`{"events":[
+			{"source":"s","subject":"/books/42","type":"acquired"},
+			{"source":"s","subject":"/books/42","type":"borrowed"},
+			{"source":"s","subject":"/books/99","type":"acquired"},
+			{"source":"s","subject":"/movies/7","type":"x"}
+		]}`)
+
+	// Ohne Token -> 401.
+	if rec := do(t, srv, http.MethodGet, "/api/v1/read-subjects", "", ""); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("ohne token: status = %d, want 401", rec.Code)
+	}
+
+	// Ohne prefix: alle Subjects, alphabetisch, mit Count.
+	rec := do(t, srv, http.MethodGet, "/api/v1/read-subjects", "secret-token", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	rows := decodeNDJSONMaps(t, rec.Body.String())
+	want := []struct {
+		subject string
+		count   float64
+	}{{"/books/42", 2}, {"/books/99", 1}, {"/movies/7", 1}}
+	if len(rows) != len(want) {
+		t.Fatalf("got %d zeilen, want %d: %+v", len(rows), len(want), rows)
+	}
+	for i, w := range want {
+		if rows[i]["subject"] != w.subject || rows[i]["count"].(float64) != w.count {
+			t.Fatalf("zeile %d = %+v, want %s/%v", i, rows[i], w.subject, w.count)
+		}
+	}
+
+	// Mit prefix: nur Subjects unter /books.
+	rec = do(t, srv, http.MethodGet, "/api/v1/read-subjects?prefix=/books", "secret-token", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("prefix status = %d, want 200", rec.Code)
+	}
+	rows = decodeNDJSONMaps(t, rec.Body.String())
+	if len(rows) != 2 || rows[0]["subject"] != "/books/42" || rows[1]["subject"] != "/books/99" {
+		t.Fatalf("prefix /books = %+v, want /books/42 + /books/99", rows)
+	}
+
+	// Ungültiger prefix (ohne /) -> 400.
+	if rec := do(t, srv, http.MethodGet, "/api/v1/read-subjects?prefix=books", "secret-token", ""); rec.Code != http.StatusBadRequest {
+		t.Fatalf("prefix ohne slash: status = %d, want 400", rec.Code)
+	}
+}
+
+func TestReadSubjectsTree(t *testing.T) {
+	srv := newTestServer(t)
+	do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token",
+		`{"events":[
+			{"source":"s","subject":"/books/42","type":"acquired"},
+			{"source":"s","subject":"/books/42","type":"borrowed"},
+			{"source":"s","subject":"/books/99","type":"acquired"},
+			{"source":"s","subject":"/movies/7","type":"y"},
+			{"source":"s","subject":"/movies/7","type":"z"}
+		]}`)
+
+	rec := do(t, srv, http.MethodGet, "/api/v1/read-subjects?tree=true", "secret-token", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; %s", rec.Code, rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		t.Fatalf("Content-Type = %q, want application/json", ct)
+	}
+
+	var root subjectTreeNode
+	if err := json.Unmarshal(rec.Body.Bytes(), &root); err != nil {
+		t.Fatalf("tree dekodieren: %v", err)
+	}
+	if root.Subject != "/" || root.Count != 0 || root.Total != 5 {
+		t.Fatalf("root = %+v, want subject=/ count=0 total=5", root)
+	}
+	if len(root.Children) != 2 || root.Children[0].Subject != "/books" || root.Children[1].Subject != "/movies" {
+		t.Fatalf("root.children falsch: %+v", root.Children)
+	}
+	books := root.Children[0]
+	if books.Count != 0 || books.Total != 3 {
+		t.Fatalf("/books = %+v, want count=0 total=3", books)
+	}
+	if len(books.Children) != 2 || books.Children[0].Subject != "/books/42" || books.Children[0].Count != 2 {
+		t.Fatalf("/books.children falsch: %+v", books.Children)
+	}
+	// Blatt: children ist nicht-null (leeres Array).
+	if books.Children[0].Children == nil {
+		t.Fatalf("blatt-children sollte [] sein, nicht null")
+	}
+
+	// Mit prefix: Wurzel = prefix.
+	rec = do(t, srv, http.MethodGet, "/api/v1/read-subjects?tree=true&prefix=/books", "secret-token", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("prefix-tree status = %d, want 200", rec.Code)
+	}
+	var br subjectTreeNode
+	if err := json.Unmarshal(rec.Body.Bytes(), &br); err != nil {
+		t.Fatalf("prefix-tree dekodieren: %v", err)
+	}
+	if br.Subject != "/books" || br.Total != 3 || len(br.Children) != 2 {
+		t.Fatalf("prefix-tree root = %+v, want /books total=3 mit 2 kindern", br)
+	}
+}
+
+func TestBuildSubjectTree(t *testing.T) {
+	// Direkter Unit-Test des Baum-Bauers, inkl. Subject auf einem Zwischenknoten.
+	subjects := []store.SubjectInfo{
+		{Subject: "/a", Count: 1},     // Subject exakt auf Zwischenknoten
+		{Subject: "/a/b", Count: 2},   // Kind
+		{Subject: "/a/b/c", Count: 3}, // Enkel
+		{Subject: "/x", Count: 5},     // separater Ast
+	}
+	root := buildSubjectTree(subjects, "/")
+	if root.Subject != "/" || root.Total != 11 || root.Count != 0 {
+		t.Fatalf("root = %+v, want total=11 count=0", root)
+	}
+	if len(root.Children) != 2 || root.Children[0].Subject != "/a" || root.Children[1].Subject != "/x" {
+		t.Fatalf("root.children = %+v", root.Children)
+	}
+	a := root.Children[0]
+	if a.Count != 1 || a.Total != 6 { // 1 + 2 + 3
+		t.Fatalf("/a = %+v, want count=1 total=6", a)
+	}
+	ab := a.Children[0]
+	if ab.Subject != "/a/b" || ab.Count != 2 || ab.Total != 5 { // 2 + 3
+		t.Fatalf("/a/b = %+v, want count=2 total=5", ab)
+	}
+	if ab.Children[0].Subject != "/a/b/c" || ab.Children[0].Count != 3 || ab.Children[0].Total != 3 {
+		t.Fatalf("/a/b/c falsch: %+v", ab.Children[0])
+	}
+
+	// Leere Eingabe -> Wurzel mit total=0 und leeren children.
+	empty := buildSubjectTree(nil, "/")
+	if empty.Total != 0 || empty.Children == nil || len(empty.Children) != 0 {
+		t.Fatalf("leerer baum = %+v", empty)
+	}
+}
+
 func TestMetricsEndpoint(t *testing.T) {
 	srv := newTestServer(t)
 	do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token",
@@ -776,6 +915,38 @@ func TestDocsUI(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "Swagger UI") {
 		t.Fatal("/docs/ liefert keine Swagger-UI-Seite")
+	}
+}
+
+func TestDashboardUI(t *testing.T) {
+	srv := newTestServer(t)
+
+	// /ui -> statische Dashboard-Seite, bewusst ohne Auth (wie /docs).
+	rec := do(t, srv, http.MethodGet, "/ui", "", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/ui status = %d, want 200", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
+		t.Fatalf("/ui Content-Type = %q, want text/html…", ct)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "<title>clio · Dashboard</title>") {
+		t.Fatal("/ui liefert nicht die Dashboard-Seite")
+	}
+	if !strings.Contains(body, "Live-Events") {
+		t.Fatal("/ui enthält nicht den Live-Event-Viewer")
+	}
+	if !strings.Contains(body, "tab-explorer") {
+		t.Fatal("/ui enthält nicht den Explorer")
+	}
+
+	// /ui/ -> Redirect auf /ui.
+	rec = do(t, srv, http.MethodGet, "/ui/", "", "")
+	if rec.Code != http.StatusMovedPermanently {
+		t.Fatalf("/ui/ status = %d, want 301", rec.Code)
+	}
+	if loc := rec.Header().Get("Location"); loc != "/ui" {
+		t.Fatalf("Location = %q, want /ui", loc)
 	}
 }
 

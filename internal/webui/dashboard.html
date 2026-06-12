@@ -1,0 +1,701 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>clio · Dashboard</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --panel-2: #1d212b; --border: #272c38;
+    --fg: #e6e9ef; --muted: #8b93a7; --accent: #6ea8fe; --ok: #4ade80;
+    --warn: #fbbf24; --err: #f87171; --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 14px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  }
+  header {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    padding: 14px 20px; background: var(--panel); border-bottom: 1px solid var(--border);
+    position: sticky; top: 0; z-index: 10;
+  }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; letter-spacing: .3px; }
+  header h1 .muse { color: var(--muted); font-weight: 400; }
+  .status { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
+  .dot.ok { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+  .dot.err { background: var(--err); box-shadow: 0 0 8px var(--err); }
+  .dot.live { background: var(--accent); box-shadow: 0 0 8px var(--accent); animation: pulse 1.4s infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+  .spacer { flex: 1; }
+  input, select, button {
+    font: inherit; color: var(--fg); background: var(--panel-2);
+    border: 1px solid var(--border); border-radius: 7px; padding: 7px 10px;
+  }
+  input { min-width: 200px; }
+  input.short { min-width: 90px; }
+  button { cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  button.primary { background: var(--accent); color: #0b1020; border-color: var(--accent); font-weight: 600; }
+  label.inline { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+  nav.tabs { display: flex; gap: 4px; padding: 0 20px; background: var(--panel); border-bottom: 1px solid var(--border); }
+  nav.tabs button {
+    background: none; border: none; border-bottom: 2px solid transparent; border-radius: 0;
+    padding: 11px 14px; color: var(--muted); font-weight: 600;
+  }
+  nav.tabs button.active { color: var(--fg); border-bottom-color: var(--accent); }
+  nav.tabs button:hover { color: var(--fg); }
+  main { padding: 20px; max-width: 1100px; margin: 0 auto; }
+  .view { display: none; }
+  .view.active { display: block; }
+  .grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    padding: 16px 18px;
+  }
+  .card .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .6px; }
+  .card .value { font-size: 26px; font-weight: 600; margin-top: 6px; font-variant-numeric: tabular-nums; }
+  .card .sub { color: var(--muted); font-size: 12px; margin-top: 4px; }
+  .card .value.mono, .sub.mono { font-family: var(--mono); }
+  section h2 { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .6px; margin: 26px 0 12px; }
+  .kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 18px; }
+  .kv dt { color: var(--muted); }
+  .kv dd { margin: 0; font-family: var(--mono); word-break: break-all; }
+  .notice { background: var(--panel); border: 1px solid var(--border); border-left: 3px solid var(--warn);
+            border-radius: 10px; padding: 12px 16px; color: var(--muted); margin-bottom: 18px; }
+  .notice.err { border-left-color: var(--err); color: var(--err); }
+  footer { color: var(--muted); font-size: 12px; text-align: center; padding: 24px; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  /* Live-Viewer */
+  .controls { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
+  .badge { background: var(--panel-2); border: 1px solid var(--border); border-radius: 20px; padding: 3px 10px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .badge.pending { border-color: var(--accent); color: var(--accent); cursor: pointer; }
+  #events { display: flex; flex-direction: column; gap: 6px; }
+  .ev { background: var(--panel); border: 1px solid var(--border); border-radius: 9px; padding: 9px 12px; }
+  .ev-head { display: flex; gap: 10px; align-items: baseline; cursor: pointer; font-family: var(--mono); font-size: 13px; }
+  .ev-id { color: var(--muted); min-width: 52px; }
+  .ev-type { color: #0b1020; background: var(--accent); border-radius: 5px; padding: 1px 7px; font-weight: 600; font-size: 12px; }
+  .ev-subject { color: var(--fg); flex: 1; word-break: break-all; }
+  .ev-time { color: var(--muted); font-size: 12px; white-space: nowrap; }
+  .ev-data { margin: 8px 0 0; padding: 9px 11px; background: var(--bg); border: 1px solid var(--border); border-radius: 7px;
+             font-family: var(--mono); font-size: 12px; white-space: pre-wrap; word-break: break-word; display: none; }
+  .ev.open .ev-data { display: block; }
+  .empty { color: var(--muted); text-align: center; padding: 40px; }
+  /* Explorer */
+  .explorer-grid { display: grid; gap: 14px; grid-template-columns: minmax(220px, 340px) 1fr; align-items: start; }
+  @media (max-width: 760px) { .explorer-grid { grid-template-columns: 1fr; } }
+  .tree { font-family: var(--mono); font-size: 13px; max-height: 420px; overflow: auto; }
+  .tnode { display: flex; align-items: center; gap: 4px; padding: 1px 0; }
+  .tnode .tog { width: 14px; text-align: center; cursor: pointer; color: var(--muted); user-select: none; }
+  .tnode .tlabel { cursor: pointer; flex: 1; padding: 1px 6px; border-radius: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tnode .tlabel:hover { background: var(--panel-2); }
+  .tnode .tlabel.sel { background: var(--accent); color: #0b1020; }
+  .tnode .tcount { color: var(--muted); font-size: 11px; white-space: nowrap; }
+  .tchildren.collapsed { display: none; }
+  #exp-events { max-height: 460px; overflow: auto; display: flex; flex-direction: column; gap: 6px; }
+  .type-item { border-bottom: 1px solid var(--border); }
+  .type-row { display: flex; align-items: center; gap: 10px; padding: 7px 2px; }
+  .type-row .tname { font-family: var(--mono); flex: 1; word-break: break-all; }
+  .type-item.open .ev-data { display: block; margin: 0 0 8px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>clio <span class="muse">· Betrieb</span></h1>
+  <span class="status"><span id="dot" class="dot"></span><span id="statusText">getrennt</span></span>
+  <span class="spacer"></span>
+  <input id="token" type="password" placeholder="Bearer-Token" autocomplete="off" spellcheck="false">
+  <button id="connect" class="primary">Verbinden</button>
+</header>
+
+<nav class="tabs">
+  <button id="tab-dashboard" class="active" data-view="dashboard">Dashboard</button>
+  <button id="tab-live" data-view="live">Live-Events</button>
+  <button id="tab-explorer" data-view="explorer">Explorer</button>
+</nav>
+
+<main>
+  <!-- ============ Dashboard ============ -->
+  <div id="view-dashboard" class="view active">
+    <div id="notice" class="notice">
+      Token eingeben und <strong>Verbinden</strong> — die Seite ist statisch und
+      spricht dieselbe Instanz an (<code>/api/v1/info</code> + <code>/metrics</code>).
+      Das Token bleibt nur im Tab (sessionStorage).
+      <span style="float:right"><label class="inline">Auto-Refresh
+        <select id="interval">
+          <option value="2000">2&nbsp;s</option>
+          <option value="5000" selected>5&nbsp;s</option>
+          <option value="10000">10&nbsp;s</option>
+          <option value="0">manuell</option>
+        </select></label></span>
+    </div>
+
+    <div class="grid">
+      <div class="card"><div class="label">Events gesamt</div><div id="m-events" class="value">–</div><div id="m-events-sub" class="sub">gespeichert</div></div>
+      <div class="card"><div class="label">DB-Größe</div><div id="m-dbsize" class="value">–</div><div class="sub">Datenbankdatei</div></div>
+      <div class="card"><div class="label">Aktive Observer</div><div id="m-observers" class="value">–</div><div class="sub">offene Streams</div></div>
+      <div class="card"><div class="label">Uptime</div><div id="m-uptime" class="value">–</div><div id="m-started" class="sub">seit Start</div></div>
+      <div class="card"><div class="label">HTTP-Anfragen</div><div id="m-requests" class="value">–</div><div id="m-rate" class="sub">gesamt</div></div>
+      <div class="card"><div class="label">Latenz p50 / p99</div><div id="m-latency" class="value mono">–</div><div class="sub">geschätzt aus Histogramm</div></div>
+      <div class="card"><div class="label">Geschriebene Events</div><div id="m-written" class="value">–</div><div class="sub">seit Start</div></div>
+      <div class="card"><div class="label">Precondition-Fehler</div><div id="m-pc" class="value">–</div><div class="sub">HTTP 409</div></div>
+    </div>
+
+    <section>
+      <h2>Instanz</h2>
+      <dl class="kv">
+        <dt>Version</dt><dd id="i-version">–</dd>
+        <dt>Sync-Modus</dt><dd id="i-sync">–</dd>
+        <dt>Listen-Adresse</dt><dd id="i-addr">–</dd>
+        <dt>Datenbankpfad</dt><dd id="i-db">–</dd>
+        <dt>Serverzeit</dt><dd id="i-time">–</dd>
+      </dl>
+    </section>
+  </div>
+
+  <!-- ============ Live-Events ============ -->
+  <div id="view-live" class="view">
+    <div class="controls">
+      <input id="live-subject" placeholder="Subject (z. B. /books/42)" value="/" spellcheck="false">
+      <label class="inline"><input id="live-recursive" type="checkbox" checked> rekursiv</label>
+      <input id="live-types" class="short" placeholder="Typen (Komma)" spellcheck="false" style="min-width:160px">
+      <button id="live-start" class="primary">Beobachten</button>
+      <button id="live-pause" disabled>Pause</button>
+      <button id="live-clear">Leeren</button>
+      <span class="spacer"></span>
+      <span id="live-count" class="badge">0 Events</span>
+      <span id="live-pending" class="badge pending" style="display:none">0 neue</span>
+    </div>
+    <div id="live-notice" class="notice">
+      Beobachtet <code>GET /api/v1/events/&lt;subject&gt;?watch=true</code>: zuerst die
+      passende History, dann live nachgeliefert. Zeile anklicken zeigt die
+      <code>data</code>. Neueste oben, max. 500 angezeigt.
+    </div>
+    <div id="events"><div class="empty">Noch nichts beobachtet.</div></div>
+  </div>
+
+  <!-- ============ Explorer ============ -->
+  <div id="view-explorer" class="view">
+    <div class="controls">
+      <input id="exp-prefix" placeholder="Prefix (z. B. /books) — leer = alles" spellcheck="false">
+      <button id="exp-load" class="primary">Laden</button>
+      <span class="spacer"></span>
+      <span id="exp-status" class="badge">–</span>
+    </div>
+    <div class="notice" id="exp-notice">
+      Read-only Explorer: Subject-Baum (<code>read-subjects?tree=true</code>),
+      Event-Typen &amp; Schemas (<code>read-event-types</code> / <code>read-event-schema</code>)
+      und Integrität (<code>verify</code> / <code>public-key</code>). Subject anklicken lädt
+      dessen Events (nicht rekursiv).
+    </div>
+    <div class="explorer-grid">
+      <div class="card">
+        <div class="label">Subjects</div>
+        <div id="exp-tree" class="tree"><div class="empty">Noch nicht geladen.</div></div>
+      </div>
+      <div class="card">
+        <div class="label" id="exp-events-label">Events</div>
+        <div id="exp-events"><div class="empty">Subject links wählen.</div></div>
+      </div>
+    </div>
+    <section>
+      <h2>Event-Typen &amp; Schemas</h2>
+      <div id="exp-types"><div class="empty">Noch nicht geladen.</div></div>
+    </section>
+    <section>
+      <h2>Integrität</h2>
+      <dl class="kv">
+        <dt>Hash-Kette</dt><dd id="ig-chain">–</dd>
+        <dt>Geprüfte Events</dt><dd id="ig-count">–</dd>
+        <dt>Head</dt><dd id="ig-head">–</dd>
+        <dt>Signatur</dt><dd id="ig-sign">–</dd>
+      </dl>
+    </section>
+  </div>
+
+  <footer>
+    clio · <a href="/docs">API-Doku</a> · <a href="/metrics">/metrics</a> ·
+    <span id="lastUpdate">noch nicht aktualisiert</span>
+  </footer>
+</main>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const tokenInput = $("token"), intervalSel = $("interval");
+let timer = null, lastReqTotal = null, lastReqAt = null;
+
+tokenInput.value = sessionStorage.getItem("clioToken") || "";
+
+function setStatus(state, text) {
+  $("dot").className = "dot" + (state ? " " + state : "");
+  $("statusText").textContent = text;
+}
+function fmtInt(n) { return (n == null || isNaN(n)) ? "–" : Number(n).toLocaleString("de-CH"); }
+function fmtBytes(b) {
+  if (b == null || b < 0) return "–";
+  const u = ["B", "KiB", "MiB", "GiB", "TiB"]; let i = 0;
+  while (b >= 1024 && i < u.length - 1) { b /= 1024; i++; }
+  return (i === 0 ? b : b.toFixed(1)) + " " + u[i];
+}
+function fmtDuration(s) {
+  if (s == null || s < 0) return "–";
+  s = Math.floor(s);
+  const d = Math.floor(s / 86400); s %= 86400;
+  const h = Math.floor(s / 3600); s %= 3600;
+  const m = Math.floor(s / 60); const sec = s % 60;
+  if (d > 0) return `${d}d ${h}h ${m}m`;
+  if (h > 0) return `${h}h ${m}m ${sec}s`;
+  if (m > 0) return `${m}m ${sec}s`;
+  return `${sec}s`;
+}
+function fmtMs(sec) {
+  if (sec == null) return "–";
+  const ms = sec * 1000;
+  return ms < 10 ? ms.toFixed(2) + " ms" : ms < 1000 ? ms.toFixed(1) + " ms" : (ms / 1000).toFixed(2) + " s";
+}
+
+// ---------- Tabs ----------
+function switchView(name) {
+  for (const v of ["dashboard", "live", "explorer"]) {
+    $("view-" + v).classList.toggle("active", v === name);
+    $("tab-" + v).classList.toggle("active", v === name);
+  }
+  // Explorer beim ersten Öffnen automatisch laden, sofern ein Token vorliegt.
+  if (name === "explorer" && !explorerLoaded && tokenInput.value.trim()) loadExplorer();
+}
+document.querySelectorAll("nav.tabs button").forEach((b) =>
+  b.addEventListener("click", () => switchView(b.dataset.view)));
+
+// ---------- Dashboard ----------
+function parseProm(text) {
+  const out = {};
+  for (const raw of text.split("\n")) {
+    const line = raw.trim();
+    if (!line || line[0] === "#") continue;
+    const sp = line.lastIndexOf(" ");
+    if (sp < 0) continue;
+    const left = line.slice(0, sp), value = parseFloat(line.slice(sp + 1));
+    const brace = left.indexOf("{");
+    const name = brace < 0 ? left : left.slice(0, brace);
+    const labels = {};
+    if (brace >= 0) {
+      const inner = left.slice(brace + 1, left.lastIndexOf("}"));
+      for (const m of inner.matchAll(/(\w+)="([^"]*)"/g)) labels[m[1]] = m[2];
+    }
+    (out[name] ||= []).push({ labels, value });
+  }
+  return out;
+}
+function gauge(m, name) { return m[name] && m[name].length ? m[name][0].value : null; }
+function sum(m, name) { return (m[name] || []).reduce((a, s) => a + s.value, 0); }
+
+function quantile(buckets, count, q) {
+  if (!buckets || !buckets.length || !count) return null;
+  const sorted = buckets
+    .map((b) => ({ le: b.labels.le === "+Inf" ? Infinity : parseFloat(b.labels.le), c: b.value }))
+    .sort((a, b) => a.le - b.le);
+  const target = q * count;
+  let prevLe = 0, prevC = 0;
+  for (const b of sorted) {
+    if (b.c >= target) {
+      if (b.le === Infinity) return prevLe;
+      const span = b.c - prevC;
+      if (span <= 0) return b.le;
+      return prevLe + (b.le - prevLe) * ((target - prevC) / span);
+    }
+    prevLe = b.le; prevC = b.c;
+  }
+  return prevLe;
+}
+
+async function refresh() {
+  const token = tokenInput.value.trim();
+  if (!token) { setStatus("err", "Token fehlt"); return; }
+  try {
+    const headers = { Authorization: "Bearer " + token };
+    const [infoRes, metricsRes] = await Promise.all([
+      fetch("/api/v1/info", { headers, cache: "no-store" }),
+      fetch("/metrics", { cache: "no-store" }),
+    ]);
+    if (infoRes.status === 401) { setStatus("err", "Token ungültig (401)"); markNotice("Token ungültig — Zugriff verweigert (401).", true); return; }
+    if (!infoRes.ok) throw new Error("info HTTP " + infoRes.status);
+    if (!metricsRes.ok) throw new Error("metrics HTTP " + metricsRes.status);
+
+    const info = await infoRes.json();
+    const m = parseProm(await metricsRes.text());
+    render(info, m);
+    if (!live.active) setStatus("ok", "verbunden");
+    clearNotice();
+    $("lastUpdate").textContent = "aktualisiert " + new Date().toLocaleTimeString("de-CH");
+  } catch (e) {
+    if (!live.active) setStatus("err", "Fehler");
+    markNotice("Verbindung fehlgeschlagen: " + e.message, true);
+  }
+}
+
+function render(info, m) {
+  $("m-events").textContent = fmtInt(gauge(m, "clio_events_total") ?? info.eventsTotal);
+  $("m-dbsize").textContent = fmtBytes(gauge(m, "clio_db_size_bytes"));
+  $("m-observers").textContent = fmtInt(gauge(m, "clio_active_observers"));
+  $("m-uptime").textContent = fmtDuration(info.uptimeSeconds);
+  $("m-started").textContent = info.startedAt ? "seit " + new Date(info.startedAt).toLocaleString("de-CH") : "seit Start";
+  $("m-written").textContent = fmtInt(sum(m, "clio_events_written_total"));
+  $("m-pc").textContent = fmtInt(sum(m, "clio_precondition_failures_total"));
+
+  const reqTotal = sum(m, "clio_http_requests_total");
+  $("m-requests").textContent = fmtInt(reqTotal);
+  const now = Date.now();
+  if (lastReqTotal != null && lastReqAt != null && now > lastReqAt) {
+    const rate = (reqTotal - lastReqTotal) / ((now - lastReqAt) / 1000);
+    $("m-rate").textContent = rate >= 0 ? rate.toFixed(2) + " req/s" : "gesamt";
+  }
+  lastReqTotal = reqTotal; lastReqAt = now;
+
+  const count = gauge(m, "clio_http_request_duration_seconds_count");
+  const p50 = quantile(m["clio_http_request_duration_seconds_bucket"], count, 0.5);
+  const p99 = quantile(m["clio_http_request_duration_seconds_bucket"], count, 0.99);
+  $("m-latency").textContent = (p50 == null) ? "–" : fmtMs(p50) + " / " + fmtMs(p99);
+
+  $("i-version").textContent = info.version ?? "–";
+  $("i-sync").textContent = info.syncMode ?? "–";
+  $("i-addr").textContent = info.httpListenAddr ?? "–";
+  $("i-db").textContent = info.databaseFilePath ?? "–";
+  $("i-time").textContent = info.serverTime ? new Date(info.serverTime).toLocaleString("de-CH") : "–";
+}
+
+function markNotice(text, isErr) {
+  const n = $("notice"); n.style.display = "block";
+  n.className = "notice" + (isErr ? " err" : ""); n.innerHTML = text;
+}
+function clearNotice() { $("notice").style.display = "none"; }
+
+function schedule() {
+  if (timer) { clearInterval(timer); timer = null; }
+  const ms = parseInt(intervalSel.value, 10);
+  if (ms > 0) timer = setInterval(refresh, ms);
+}
+function connect() {
+  sessionStorage.setItem("clioToken", tokenInput.value.trim());
+  refresh(); schedule();
+}
+
+$("connect").addEventListener("click", connect);
+tokenInput.addEventListener("keydown", (e) => { if (e.key === "Enter") connect(); });
+intervalSel.addEventListener("change", schedule);
+
+// ---------- Live-Event-Viewer ----------
+const MAX_ROWS = 500;
+const live = { active: false, ctrl: null, paused: false, pending: [], count: 0 };
+const eventsEl = $("events");
+
+function liveStatus(state, text) {
+  // Live-Status hat Vorrang in der Kopfzeile, solange der Stream läuft.
+  setStatus(state, text);
+}
+// eventsPath baut den GET-Pfad der Komfort-Leseroute für ein Subject
+// (URL-kodierte Segmente). "/" -> /api/v1/events; "/a/b" -> /api/v1/events/a/b.
+function eventsPath(subj) {
+  let path = "/api/v1/events";
+  if (subj && subj !== "/") {
+    const parts = subj.replace(/^\/+/, "").split("/").filter(Boolean).map(encodeURIComponent);
+    if (parts.length) path += "/" + parts.join("/");
+  }
+  return path;
+}
+function buildPath() {
+  let path = eventsPath($("live-subject").value.trim());
+  const p = new URLSearchParams();
+  p.set("watch", "true");
+  p.set("recursive", $("live-recursive").checked ? "true" : "false");
+  for (const t of $("live-types").value.split(",").map((s) => s.trim()).filter(Boolean)) p.append("type", t);
+  return path + "?" + p.toString();
+}
+function renderEvent(ev) {
+  const row = document.createElement("div");
+  row.className = "ev";
+  const head = document.createElement("div");
+  head.className = "ev-head";
+  head.innerHTML =
+    `<span class="ev-id">#${ev.id ?? "?"}</span>` +
+    `<span class="ev-type"></span>` +
+    `<span class="ev-subject"></span>` +
+    `<span class="ev-time"></span>`;
+  head.children[1].textContent = ev.type ?? "?";
+  head.children[2].textContent = ev.subject ?? "";
+  head.children[3].textContent = ev.time ? new Date(ev.time).toLocaleTimeString("de-CH") : "";
+  row.appendChild(head);
+  if (ev.data !== undefined) {
+    const pre = document.createElement("pre");
+    pre.className = "ev-data";
+    pre.textContent = JSON.stringify(ev.data, null, 2);
+    row.appendChild(pre);
+    head.addEventListener("click", () => row.classList.toggle("open"));
+  }
+  return row;
+}
+function appendEvent(ev) {
+  if (live.count === 0) eventsEl.innerHTML = "";
+  eventsEl.insertBefore(renderEvent(ev), eventsEl.firstChild);
+  live.count++;
+  while (eventsEl.children.length > MAX_ROWS) eventsEl.removeChild(eventsEl.lastChild);
+  $("live-count").textContent = fmtInt(live.count) + " Events";
+}
+function handleEvent(ev) {
+  if (live.paused) {
+    live.pending.push(ev);
+    const pe = $("live-pending");
+    pe.style.display = ""; pe.textContent = fmtInt(live.pending.length) + " neue";
+  } else {
+    appendEvent(ev);
+  }
+}
+function flushPending() {
+  for (const ev of live.pending) appendEvent(ev);
+  live.pending = [];
+  $("live-pending").style.display = "none";
+}
+
+async function startLive() {
+  const token = tokenInput.value.trim();
+  if (!token) { liveStatus("err", "Token fehlt"); return; }
+  sessionStorage.setItem("clioToken", token);
+  live.active = true; live.ctrl = new AbortController();
+  $("live-start").textContent = "Stoppen";
+  $("live-pause").disabled = false;
+  $("live-subject").disabled = $("live-recursive").disabled = $("live-types").disabled = true;
+  liveStatus("live", "live: beobachte " + ($("live-subject").value.trim() || "/"));
+  try {
+    const res = await fetch(buildPath(), {
+      headers: { Authorization: "Bearer " + token }, signal: live.ctrl.signal, cache: "no-store",
+    });
+    if (res.status === 401) { liveStatus("err", "Token ungültig (401)"); stopLive(); return; }
+    if (!res.ok || !res.body) throw new Error("HTTP " + res.status);
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl); buf = buf.slice(nl + 1);
+        if (line.trim()) { try { handleEvent(JSON.parse(line)); } catch (_) { /* Teilzeile ignorieren */ } }
+      }
+    }
+    // Stream regulär beendet (Server geschlossen).
+    if (live.active) liveStatus("err", "Stream beendet");
+  } catch (e) {
+    if (e.name !== "AbortError" && live.active) liveStatus("err", "Stream-Fehler: " + e.message);
+  } finally {
+    finishLive();
+  }
+}
+function stopLive() { if (live.ctrl) live.ctrl.abort(); finishLive(); }
+function finishLive() {
+  live.active = false;
+  $("live-start").textContent = "Beobachten";
+  $("live-pause").disabled = true; $("live-pause").textContent = "Pause"; live.paused = false;
+  flushPending();
+  $("live-subject").disabled = $("live-recursive").disabled = $("live-types").disabled = false;
+  if ($("dot").classList.contains("live")) setStatus(tokenInput.value ? "ok" : "", tokenInput.value ? "verbunden" : "getrennt");
+}
+
+$("live-start").addEventListener("click", () => { live.active ? stopLive() : startLive(); });
+$("live-pause").addEventListener("click", () => {
+  live.paused = !live.paused;
+  $("live-pause").textContent = live.paused ? "Fortsetzen" : "Pause";
+  if (!live.paused) flushPending();
+});
+$("live-pending").addEventListener("click", () => {
+  live.paused = false; $("live-pause").textContent = "Pause"; flushPending();
+});
+$("live-clear").addEventListener("click", () => {
+  live.count = 0; live.pending = []; $("live-pending").style.display = "none";
+  $("live-count").textContent = "0 Events";
+  eventsEl.innerHTML = '<div class="empty">Noch nichts beobachtet.</div>';
+});
+
+// ---------- Explorer (read-only) ----------
+const EXP_MAX = 200;
+let explorerLoaded = false, expSelLabel = null;
+
+function setExpStatus(t) { $("exp-status").textContent = t; }
+async function authGet(path) {
+  const token = tokenInput.value.trim();
+  if (!token) throw new Error("Token fehlt");
+  const r = await fetch(path, { headers: { Authorization: "Bearer " + token }, cache: "no-store" });
+  if (r.status === 401) throw new Error("401");
+  return r;
+}
+async function getJSON(path) { const r = await authGet(path); if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); }
+async function getNDJSON(path) {
+  const r = await authGet(path); if (!r.ok) throw new Error("HTTP " + r.status);
+  return (await r.text()).split("\n").map((s) => s.trim()).filter(Boolean).map((l) => JSON.parse(l));
+}
+
+function loadExplorer() {
+  const prefix = $("exp-prefix").value.trim();
+  if (prefix && prefix[0] !== "/") { setExpStatus("Prefix muss mit / beginnen"); return; }
+  explorerLoaded = true;
+  setExpStatus("lädt …");
+  Promise.all([loadTree(prefix), loadTypes(), loadIntegrity()])
+    .then(() => setExpStatus("geladen " + new Date().toLocaleTimeString("de-CH")))
+    .catch((e) => setExpStatus(e.message === "401" ? "Token ungültig" : "Fehler"));
+}
+
+async function loadTree(prefix) {
+  const el = $("exp-tree");
+  el.innerHTML = '<div class="empty">lädt …</div>';
+  try {
+    const q = prefix ? "?tree=true&prefix=" + encodeURIComponent(prefix) : "?tree=true";
+    const root = await getJSON("/api/v1/read-subjects" + q);
+    el.innerHTML = "";
+    if ((!root.children || !root.children.length) && !root.total) {
+      el.innerHTML = '<div class="empty">Keine Subjects.</div>'; return;
+    }
+    renderTreeNode(root, el, 0, true);
+  } catch (e) {
+    el.innerHTML = '<div class="empty">' + (e.message === "401" ? "Token ungültig (401)" : "Fehler: " + e.message) + "</div>";
+    throw e;
+  }
+}
+function renderTreeNode(node, container, depth, isRoot) {
+  const row = document.createElement("div");
+  row.className = "tnode";
+  row.style.paddingLeft = depth * 14 + "px";
+  const hasKids = node.children && node.children.length;
+  const tog = document.createElement("span");
+  tog.className = "tog"; tog.textContent = hasKids ? "▾" : "";
+  const label = document.createElement("span");
+  label.className = "tlabel";
+  label.textContent = isRoot ? node.subject : node.subject.split("/").pop();
+  label.title = node.subject;
+  const cnt = document.createElement("span");
+  cnt.className = "tcount";
+  cnt.textContent = node.count === node.total ? String(node.total) : node.count + "·Σ" + node.total;
+  row.append(tog, label, cnt);
+  container.appendChild(row);
+  if (hasKids) {
+    const kids = document.createElement("div");
+    kids.className = "tchildren";
+    container.appendChild(kids);
+    for (const c of node.children) renderTreeNode(c, kids, depth + 1, false);
+    tog.addEventListener("click", () => {
+      const collapsed = kids.classList.toggle("collapsed");
+      tog.textContent = collapsed ? "▸" : "▾";
+    });
+  }
+  label.addEventListener("click", () => selectSubject(node.subject, label));
+}
+
+async function selectSubject(subj, labelEl) {
+  if (expSelLabel) expSelLabel.classList.remove("sel");
+  if (labelEl) { labelEl.classList.add("sel"); expSelLabel = labelEl; }
+  $("exp-events-label").textContent = "Events · " + subj + " (nicht rekursiv)";
+  const el = $("exp-events");
+  el.innerHTML = '<div class="empty">lädt …</div>';
+  try {
+    const evs = await getNDJSON(eventsPath(subj) + "?recursive=false");
+    if (!evs.length) { el.innerHTML = '<div class="empty">Keine Events direkt auf diesem Subject.</div>'; return; }
+    el.innerHTML = "";
+    const shown = evs.slice(-EXP_MAX).reverse(); // neueste oben
+    for (const ev of shown) el.appendChild(renderEvent(ev));
+    if (evs.length > EXP_MAX) {
+      const note = document.createElement("div");
+      note.className = "empty";
+      note.textContent = "… " + (evs.length - EXP_MAX) + " ältere ausgeblendet (von " + evs.length + ")";
+      el.appendChild(note);
+    }
+  } catch (e) {
+    el.innerHTML = '<div class="empty">' + (e.message === "401" ? "Token ungültig (401)" : "Fehler: " + e.message) + "</div>";
+  }
+}
+
+async function loadTypes() {
+  const el = $("exp-types");
+  el.innerHTML = '<div class="empty">lädt …</div>';
+  try {
+    const types = await getNDJSON("/api/v1/read-event-types");
+    if (!types.length) { el.innerHTML = '<div class="empty">Keine Event-Typen.</div>'; return; }
+    el.innerHTML = "";
+    for (const t of types) el.appendChild(renderTypeItem(t));
+  } catch (e) {
+    el.innerHTML = '<div class="empty">' + (e.message === "401" ? "Token ungültig (401)" : "Fehler: " + e.message) + "</div>";
+    throw e;
+  }
+}
+function renderTypeItem(t) {
+  const wrap = document.createElement("div");
+  wrap.className = "type-item";
+  const row = document.createElement("div");
+  row.className = "type-row";
+  const name = document.createElement("span");
+  name.className = "tname"; name.textContent = t.type;
+  const cnt = document.createElement("span");
+  cnt.className = "badge"; cnt.textContent = fmtInt(t.count) + " Events";
+  const sch = document.createElement("span");
+  sch.className = "badge";
+  row.append(name, cnt, sch);
+  wrap.appendChild(row);
+  if (t.hasSchema) {
+    sch.textContent = "Schema ▸"; sch.classList.add("pending");
+    const pre = document.createElement("pre");
+    pre.className = "ev-data";
+    wrap.appendChild(pre);
+    let loaded = false;
+    sch.addEventListener("click", async () => {
+      const open = wrap.classList.toggle("open");
+      sch.textContent = open ? "Schema ▾" : "Schema ▸";
+      if (open && !loaded) {
+        pre.textContent = "lädt …";
+        try {
+          const r = await getJSON("/api/v1/read-event-schema?type=" + encodeURIComponent(t.type));
+          pre.textContent = JSON.stringify(r.schema, null, 2); loaded = true;
+        } catch (e) { pre.textContent = "Fehler: " + e.message; }
+      }
+    });
+  } else {
+    sch.textContent = "kein Schema";
+  }
+  return wrap;
+}
+
+async function loadIntegrity() {
+  const chain = $("ig-chain");
+  try {
+    const v = await getJSON("/api/v1/verify");
+    chain.textContent = "";
+    const span = document.createElement("span");
+    if (v.ok) { span.style.color = "var(--ok)"; span.textContent = "✓ intakt"; }
+    else {
+      span.style.color = "var(--err)";
+      span.textContent = "✗ gebrochen" + (v.brokenAt ? " bei #" + v.brokenAt : "") + (v.reason ? " (" + v.reason + ")" : "");
+    }
+    chain.appendChild(span);
+    $("ig-count").textContent = fmtInt(v.count);
+    $("ig-head").textContent = v.head || "–";
+  } catch (e) {
+    chain.textContent = e.message === "401" ? "Token ungültig (401)" : "Fehler: " + e.message;
+    throw e;
+  }
+  try {
+    const r = await authGet("/api/v1/public-key");
+    if (r.status === 404) $("ig-sign").textContent = "nicht aktiviert (nur Integrität)";
+    else if (r.ok) { const k = await r.json(); $("ig-sign").textContent = (k.algorithm || "") + " · " + (k.publicKey || ""); }
+    else $("ig-sign").textContent = "HTTP " + r.status;
+  } catch (e) { $("ig-sign").textContent = "Fehler: " + e.message; }
+}
+
+$("exp-load").addEventListener("click", loadExplorer);
+$("exp-prefix").addEventListener("keydown", (e) => { if (e.key === "Enter") loadExplorer(); });
+
+// Auto-Start des Dashboards, falls bereits ein Token im Tab liegt.
+if (tokenInput.value) connect();
+</script>
+</body>
+</html>

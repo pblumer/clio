@@ -60,6 +60,27 @@ eingebettet, kein Internet nötig:
 - **`http://127.0.0.1:3000/openapi.yaml`** — die OpenAPI-3-Spezifikation zum
   Import in eigene Tools (Postman, Insomnia, Codegen).
 
+### Betriebs-Dashboard (`/ui`)
+
+Ein schlankes, ebenfalls eingebettetes Dashboard für Monitoring & Observing —
+kein Prometheus/Grafana nötig, um „mal eben draufzuschauen":
+
+- **`http://127.0.0.1:3000/ui`** — Bearer-Token eingeben, **Verbinden**. Statische
+  Seite (Vanilla JS, kein Build-Step) mit zwei Tabs:
+  - **Dashboard** — Events total, DB-Größe, aktive Observer, Uptime,
+    Request-Rate und Latenz (p50/p99) mit wählbarem Auto-Refresh; liest
+    `/api/v1/info` und `/metrics` derselben Instanz.
+  - **Live-Events** — streamt `GET /api/v1/events/<subject>?watch=true`
+    (erst History, dann live) mit Subject-/Typ-Filter, Pause/Fortsetzen und
+    aufklappbarer `data` je Event.
+  - **Explorer** — read-only: navigierbarer Subject-Baum
+    (`read-subjects?tree=true`, Klick lädt die Events des Subjects),
+    Event-Typen mit Anzahl und aufklappbaren Schemas (`read-event-types` /
+    `read-event-schema`) sowie ein Integritäts-Panel (`verify` / `public-key`).
+
+Scope & Roadmap stehen in
+[`docs/web-ui-scope.md`](./docs/web-ui-scope.md) (ADR-020).
+
 ### Postman & Smoke-Test (Newman)
 
 Quelle der Wahrheit ist die OpenAPI-Spec (`internal/apidocs/openapi.yaml`).
@@ -337,6 +358,44 @@ curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:3000/api/v1/read-event-t
 # -> {"type":"acquired","count":2}
 #    {"type":"borrowed","count":1}
 ```
+
+### Vorhandene Subjects (Streams)
+
+```bash
+# Alle bisher beschriebenen Subjects (mit Anzahl), als NDJSON, alphabetisch
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:3000/api/v1/read-subjects
+# -> {"subject":"/books/42","count":2}
+#    {"subject":"/books/99","count":1}
+#    {"subject":"/movies/7","count":1}
+
+# Nur Subjects unterhalb eines Pfads (rekursiver Scope)
+curl -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:3000/api/v1/read-subjects?prefix=/books"
+# -> {"subject":"/books/42","count":2}
+#    {"subject":"/books/99","count":1}
+```
+
+`prefix` schränkt auf den Stream-Pfad und alles darunter ein; Prefix-Geschwister
+(z. B. `/booksstore` zu `/books`) werden korrekt ausgeschlossen. Praktisch, um
+zu sehen, welche Streams existieren, oder um eine UI hierarchisch zu befüllen.
+
+Mit `tree=true` kommt stattdessen ein **hierarchischer Baum** als ein JSON-Objekt;
+`count` sind die Events direkt auf einem Subject, `total` die Summe im Teilbaum:
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:3000/api/v1/read-subjects?tree=true"
+```
+```json
+{ "subject": "/", "count": 0, "total": 3, "children": [
+    { "subject": "/books", "count": 0, "total": 2, "children": [
+        { "subject": "/books/42", "count": 2, "total": 2, "children": [] }
+    ]},
+    { "subject": "/movies", "count": 0, "total": 1, "children": [
+        { "subject": "/movies/7", "count": 1, "total": 1, "children": [] }
+    ]}
+]}
+```
+
+`prefix` setzt im Tree-Modus die Wurzel (`?tree=true&prefix=/books`).
 
 ### Event-Schemas
 
