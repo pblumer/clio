@@ -137,6 +137,23 @@
              border: 1px solid var(--err); border-radius: 7px; padding: 6px 10px; word-break: break-word; }
   #q-result, #help-examples { display: flex; flex-direction: column; gap: 6px; }
   #q-result { max-height: 520px; overflow: auto; }
+  /* Verlauf & Favoriten */
+  .link-btn { background: none; border: none; padding: 0; color: var(--accent); cursor: pointer; font-size: 12px; }
+  .link-btn:hover { text-decoration: underline; border-color: transparent; }
+  .q-panel { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 16px; }
+  @media (max-width: 680px) { .q-panel { grid-template-columns: 1fr; } }
+  .q-panel-col { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
+  .q-panel-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+  .q-panel-head .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .6px; }
+  .q-list { display: flex; flex-direction: column; gap: 4px; max-height: 220px; overflow: auto; }
+  .q-entry { display: flex; align-items: center; gap: 8px; padding: 5px 7px; border-radius: 6px; cursor: pointer; }
+  .q-entry:hover { background: var(--panel-2); }
+  .q-entry .q-where { flex: 1; font-family: var(--mono); font-size: 12px; color: #7dcfff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .q-entry .q-scope { color: var(--muted); font-size: 11px; white-space: nowrap; }
+  .q-entry .q-name { flex: 1; font-size: 12.5px; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .q-entry .q-del { color: var(--muted); cursor: pointer; font-size: 13px; padding: 0 2px; }
+  .q-entry .q-del:hover { color: var(--err); }
+  .q-result-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
   .q-json { background: var(--panel); border: 1px solid var(--border); border-radius: 9px; padding: 9px 12px;
             font-family: var(--mono); font-size: 12px; white-space: pre-wrap; word-break: break-word; margin: 0; }
   .ex { background: var(--panel); border: 1px solid var(--border); border-radius: 9px; padding: 10px 14px; }
@@ -286,12 +303,31 @@
       <div id="q-ac" class="ac" style="display:none"></div>
       <div class="editor-actions">
         <button id="q-run" class="primary">Ausführen</button>
+        <button id="q-fav" title="Aktuelle Abfrage als Favorit speichern">★ Favorit</button>
+        <button id="q-history-toggle" title="Verlauf &amp; Favoriten ein-/ausblenden">Verlauf &amp; Favoriten</button>
         <button id="q-format" title="Whitespace normalisieren">Aufräumen</button>
         <button id="q-clear">Leeren</button>
         <span id="q-error" class="q-error" style="display:none"></span>
       </div>
     </div>
 
+    <div id="q-panel" class="q-panel" style="display:none">
+      <div class="q-panel-col">
+        <div class="q-panel-head"><span class="label">Verlauf</span><button id="q-history-clear" class="link-btn">leeren</button></div>
+        <div id="q-history" class="q-list"><div class="empty">Noch keine ausgeführten Abfragen.</div></div>
+      </div>
+      <div class="q-panel-col">
+        <div class="q-panel-head"><span class="label">Favoriten</span></div>
+        <div id="q-favorites" class="q-list"><div class="empty">Noch keine Favoriten.</div></div>
+      </div>
+    </div>
+
+    <div id="q-result-bar" class="q-result-bar" style="display:none">
+      <span id="q-result-count" class="badge">–</span>
+      <span class="spacer"></span>
+      <button id="q-export-ndjson" title="Ergebnis als NDJSON herunterladen">⭳ NDJSON</button>
+      <button id="q-export-csv" title="Ergebnis als CSV herunterladen">⭳ CSV</button>
+    </div>
     <div id="q-result"><div class="empty">Noch keine Abfrage. Schreib ein Prädikat (oder lass es leer = alles im Scope) und drück <kbd>Ctrl</kbd>+<kbd>Enter</kbd>.</div></div>
   </div>
 
@@ -337,6 +373,15 @@
         <dt>lowerBound / upperBound</dt><dd>inklusive Event-ID-Grenzen, schränken den gelesenen Bereich ein.</dd>
         <dt>Limit</dt><dd>max. Treffer (0 = unbegrenzt).</dd>
         <dt>select</dt><dd>punktseparierte Feldpfade (z. B. <code>id, data.amount</code>) → nur diese Felder pro Zeile, Verschachtelung bleibt erhalten.</dd>
+      </dl>
+    </section>
+
+    <section>
+      <h2>Verlauf, Favoriten &amp; Export</h2>
+      <dl class="kv">
+        <dt>Verlauf</dt><dd>jede erfolgreiche Abfrage wird gemerkt (im Browser, <code>localStorage</code>) — über <strong>Verlauf &amp; Favoriten</strong> einsehbar; Klick lädt sie zurück.</dd>
+        <dt>Favoriten</dt><dd>mit <strong>★ Favorit</strong> die aktuelle Abfrage benannt speichern; bleibt über Sitzungen erhalten.</dd>
+        <dt>Export</dt><dd>das Ergebnis als <strong>NDJSON</strong> (ein Objekt je Zeile) oder <strong>CSV</strong> (verschachtelte Felder als punktierte Spalten) herunterladen.</dd>
       </dl>
     </section>
 
@@ -1046,14 +1091,19 @@ async function runQuery() {
     const ms = Math.round(performance.now() - t0);
     const el = $("q-result");
     el.innerHTML = "";
+    qLastRows = [];
     if (!lines.length) { el.innerHTML = '<div class="empty">Keine Treffer.</div>'; }
     else {
       for (const l of lines) {
         let o; try { o = JSON.parse(l); } catch (_) { continue; }
+        qLastRows.push(o);
         el.appendChild(looksLikeEvent(o) && !sel.length ? renderEvent(o) : renderJSON(o));
       }
     }
     $("q-status").textContent = lines.length + " Treffer · " + ms + " ms";
+    $("q-result-count").textContent = lines.length + (lines.length === 1 ? " Zeile" : " Zeilen");
+    $("q-result-bar").style.display = qLastRows.length ? "flex" : "none";
+    recordHistory(currentQueryState()); // erfolgreiche Abfrage in den Verlauf
     refreshQuerySchema(); // Vorschläge an den aktuellen Scope anpassen
   } catch (e) {
     setQErr("Verbindung fehlgeschlagen: " + e.message); $("q-status").textContent = "Fehler";
@@ -1065,9 +1115,142 @@ function persistQuery() {
   sessionStorage.setItem("clioQuerySubject", $("q-subject").value);
 }
 $("q-run").addEventListener("click", runQuery);
-$("q-clear").addEventListener("click", () => { qEditor.value = ""; setQErr(""); syncEditor(); persistQuery(); $("q-result").innerHTML = '<div class="empty">Geleert.</div>'; });
+$("q-clear").addEventListener("click", () => {
+  qEditor.value = ""; setQErr(""); syncEditor(); persistQuery();
+  qLastRows = []; $("q-result-bar").style.display = "none";
+  $("q-result").innerHTML = '<div class="empty">Geleert.</div>';
+});
 $("q-format").addEventListener("click", () => { qEditor.value = qEditor.value.replace(/\s+/g, " ").trim(); syncEditor(); persistQuery(); });
 $("q-subject").addEventListener("change", () => { qSampleLoaded = false; if (tokenInput.value.trim()) refreshQuerySchema(); persistQuery(); });
+
+// ---------- Query: Zustand, Verlauf, Favoriten, Export ----------
+let qLastRows = [];
+const HIST_MAX = 25;
+function currentQueryState() {
+  return {
+    subject: $("q-subject").value.trim() || "/", recursive: $("q-recursive").checked,
+    where: qEditor.value.trim(), select: $("q-select").value.trim(),
+    limit: $("q-limit").value.trim(), lower: $("q-lower").value.trim(), upper: $("q-upper").value.trim(),
+  };
+}
+function applyQueryState(s) {
+  $("q-subject").value = s.subject || "/";
+  $("q-recursive").checked = s.recursive !== false;
+  qEditor.value = s.where || "";
+  $("q-select").value = s.select || "";
+  $("q-limit").value = (s.limit === undefined || s.limit === "") ? "100" : s.limit;
+  $("q-lower").value = s.lower || "";
+  $("q-upper").value = s.upper || "";
+  setQErr(""); syncEditor(); persistQuery();
+  qSampleLoaded = false;
+  switchView("query");
+  if (tokenInput.value.trim()) { refreshQuerySchema(); runQuery(); }
+}
+function loadStore(key) { try { return JSON.parse(localStorage.getItem(key)) || []; } catch (_) { return []; } }
+function saveStore(key, v) { try { localStorage.setItem(key, JSON.stringify(v)); } catch (_) {} }
+function sameState(a, b) {
+  return a.subject === b.subject && a.recursive === b.recursive && a.where === b.where &&
+    a.select === b.select && a.limit === b.limit && a.lower === b.lower && a.upper === b.upper;
+}
+function scopeLabel(s) {
+  let t = s.subject + (s.recursive ? " ·rek" : "");
+  if (s.select) t += " · select " + s.select;
+  return t;
+}
+function recordHistory(state) {
+  let h = loadStore("clioHistory").filter((e) => !sameState(e, state));
+  h.unshift(state);
+  if (h.length > HIST_MAX) h = h.slice(0, HIST_MAX);
+  saveStore("clioHistory", h);
+  renderHistory();
+}
+function renderHistory() {
+  const el = $("q-history"), h = loadStore("clioHistory");
+  el.innerHTML = "";
+  if (!h.length) { el.innerHTML = '<div class="empty">Noch keine ausgeführten Abfragen.</div>'; return; }
+  for (const s of h) {
+    const row = document.createElement("div");
+    row.className = "q-entry";
+    row.innerHTML = '<span class="q-where"></span><span class="q-scope"></span>';
+    row.children[0].textContent = s.where || "(leeres Prädikat)";
+    row.children[1].textContent = scopeLabel(s);
+    row.title = (s.where || "(leeres Prädikat)") + "\n" + scopeLabel(s);
+    row.addEventListener("click", () => applyQueryState(s));
+    el.appendChild(row);
+  }
+}
+function renderFavorites() {
+  const el = $("q-favorites"), f = loadStore("clioFavorites");
+  el.innerHTML = "";
+  if (!f.length) { el.innerHTML = '<div class="empty">Noch keine Favoriten.</div>'; return; }
+  f.forEach((fav, i) => {
+    const row = document.createElement("div");
+    row.className = "q-entry";
+    row.innerHTML = '<span class="q-name"></span><span class="q-del" title="Löschen">✕</span>';
+    row.children[0].textContent = fav.name;
+    row.children[0].title = (fav.state.where || "(leeres Prädikat)") + "\n" + scopeLabel(fav.state);
+    row.children[0].addEventListener("click", () => applyQueryState(fav.state));
+    row.children[1].addEventListener("click", (e) => {
+      e.stopPropagation(); f.splice(i, 1); saveStore("clioFavorites", f); renderFavorites();
+    });
+    el.appendChild(row);
+  });
+}
+function saveFavorite() {
+  const state = currentQueryState();
+  const def = state.where ? state.where.slice(0, 40) : state.subject;
+  const name = (prompt("Name für den Favoriten:", def) || "").trim();
+  if (!name) return;
+  const f = loadStore("clioFavorites");
+  f.unshift({ name, state });
+  saveStore("clioFavorites", f);
+  renderFavorites();
+  toggleQPanel(true);
+}
+function toggleQPanel(force) {
+  const p = $("q-panel");
+  p.style.display = (force != null ? force : p.style.display === "none") ? "grid" : "none";
+}
+$("q-fav").addEventListener("click", saveFavorite);
+$("q-history-toggle").addEventListener("click", () => toggleQPanel());
+$("q-history-clear").addEventListener("click", () => { saveStore("clioHistory", []); renderHistory(); });
+
+// ---------- Export der Ergebnisse ----------
+function download(name, text, mime) {
+  const url = URL.createObjectURL(new Blob([text], { type: mime }));
+  const a = document.createElement("a");
+  a.href = url; a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+function tsName(ext) { return "clio-query-" + new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19) + "." + ext; }
+function flatten(obj, prefix, out) {
+  if (obj === null || typeof obj !== "object") { out[prefix] = obj; return; }
+  if (Array.isArray(obj)) { out[prefix] = JSON.stringify(obj); return; }
+  for (const k of Object.keys(obj)) flatten(obj[k], prefix ? prefix + "." + k : k, out);
+}
+function csvCell(v) {
+  if (v == null) return "";
+  const s = typeof v === "object" ? JSON.stringify(v) : String(v);
+  return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+function exportNDJSON() {
+  if (!qLastRows.length) return;
+  download(tsName("ndjson"), qLastRows.map((o) => JSON.stringify(o)).join("\n") + "\n", "application/x-ndjson");
+}
+function exportCSV() {
+  if (!qLastRows.length) return;
+  const flat = qLastRows.map((o) => { const f = {}; flatten(o, "", f); return f; });
+  const cols = [], seen = new Set();
+  for (const row of flat) for (const k of Object.keys(row)) if (!seen.has(k)) { seen.add(k); cols.push(k); }
+  const head = cols.map(csvCell).join(",");
+  const body = flat.map((row) => cols.map((c) => csvCell(row[c])).join(",")).join("\n");
+  download(tsName("csv"), head + "\n" + body + "\n", "text/csv");
+}
+$("q-export-ndjson").addEventListener("click", exportNDJSON);
+$("q-export-csv").addEventListener("click", exportCSV);
+
+renderHistory(); renderFavorites();
 
 // gespeicherte Query wiederherstellen
 qEditor.value = sessionStorage.getItem("clioQuery") || "";

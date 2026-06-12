@@ -89,8 +89,10 @@ stdlib-Funktionen/Makros und — aus einer Stichprobe echter Events gelernte —
 Scope-/Projektions-Optionen (`recursive`, `limit`, `lowerBound`/`upperBound`,
 `select`) sind direkt bedienbar. Ein fünfter Tab „Hilfe" dokumentiert die
 `event`-Felder, Operatoren/Funktionen und Projektion und bietet Beispiele, die
-sich in den Editor laden lassen. Kein neuer Server-Code — nur das bestehende
-`run-query`.
+sich in den Editor laden lassen. Dazu **Verlauf &amp; Favoriten** (persistent
+im Browser via `localStorage`) und **Export** der Ergebnisse als NDJSON oder CSV
+(verschachtelte Felder als punktierte Spalten). Kein neuer Server-Code — nur das
+bestehende `run-query`.
 
 ### Stufe 4 — Maintenance-Konsole  ⚠️ bewusst zurückgestellt
 Schreibende Aktionen (z. B. Kompaktierung anstoßen). **Out of scope** für jetzt:
