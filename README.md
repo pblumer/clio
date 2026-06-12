@@ -306,6 +306,25 @@ curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:3000/api/v1/read-event-t
 #    {"type":"borrowed","count":1}
 ```
 
+### Vorhandene Subjects (Streams)
+
+```bash
+# Alle bisher beschriebenen Subjects (mit Anzahl), als NDJSON, alphabetisch
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:3000/api/v1/read-subjects
+# -> {"subject":"/books/42","count":2}
+#    {"subject":"/books/99","count":1}
+#    {"subject":"/movies/7","count":1}
+
+# Nur Subjects unterhalb eines Pfads (rekursiver Scope)
+curl -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:3000/api/v1/read-subjects?prefix=/books"
+# -> {"subject":"/books/42","count":2}
+#    {"subject":"/books/99","count":1}
+```
+
+`prefix` schränkt auf den Stream-Pfad und alles darunter ein; Prefix-Geschwister
+(z. B. `/booksstore` zu `/books`) werden korrekt ausgeschlossen. Praktisch, um
+zu sehen, welche Streams existieren, oder um eine UI hierarchisch zu befüllen.
+
 ### Event-Schemas
 
 Pro Event-Typ lässt sich ein **JSON Schema** registrieren; danach wird `data`

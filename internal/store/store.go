@@ -235,6 +235,68 @@ type TypeInfo struct {
 	HasSchema bool   `json:"hasSchema"`
 }
 
+// SubjectInfo beschreibt ein bisher beschriebenes Subject (einen Stream) samt
+// der Anzahl seiner Events.
+type SubjectInfo struct {
+	Subject string `json:"subject"`
+	Count   uint64 `json:"count"`
+}
+
+// Subjects liefert alle bisher beschriebenen Subjects (Streams) in
+// alphabetischer Reihenfolge (bbolt-Schlüsselordnung) samt Event-Anzahl. Die
+// Zählung läuft als einzelner Scan über den Subject-Index: dessen Schlüssel
+// (`subject` + Trenner + seq) liegen pro Subject zusammenhängend, daher genügt
+// ein Durchlauf ohne die Events selbst zu laden (~O(Index)).
+//
+// Ist prefix nicht leer, werden nur Subjects im rekursiven Scope von prefix
+// zurückgegeben (prefix selbst und alles darunter). Prefix-Geschwister wie
+// `/booksstore` zu `/books` werden via MatchSubject ausgeschlossen.
+func (s *Store) Subjects(prefix string) ([]SubjectInfo, error) {
+	var out []SubjectInfo
+	err := s.db.View(func(tx *bolt.Tx) error {
+		c := tx.Bucket(bucketSubjectIdx).Cursor()
+		var seek []byte
+		if prefix != "" {
+			seek = []byte(prefix)
+		}
+		var (
+			started bool
+			curSubj string
+			cnt     uint64
+		)
+		flush := func() {
+			if started && (prefix == "" || MatchSubject(curSubj, prefix, true)) {
+				out = append(out, SubjectInfo{Subject: curSubj, Count: cnt})
+			}
+		}
+		// Seek(nil) verhält sich wie First(). Bei gesetztem prefix bricht der
+		// Scan ab, sobald der Byte-Prefix nicht mehr passt (sortierte Keys).
+		for k, _ := c.Seek(seek); k != nil; k, _ = c.Next() {
+			if seek != nil && !hasPrefix(k, seek) {
+				break
+			}
+			sep := bytes.IndexByte(k, subjectSep)
+			if sep < 0 {
+				continue
+			}
+			subj := string(k[:sep])
+			if !started || subj != curSubj {
+				flush()
+				curSubj = subj
+				cnt = 0
+				started = true
+			}
+			cnt++
+		}
+		flush()
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // EventTypes liefert alle bisher geschriebenen Event-Typen in alphabetischer
 // Reihenfolge (bbolt-Schlüsselordnung) samt Anzahl und ob ein Schema registriert
 // ist.
