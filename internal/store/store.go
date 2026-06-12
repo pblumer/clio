@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -532,13 +533,39 @@ func anyMatch(tx *bolt.Tx, subject string, recursive bool, pred *query.Predicate
 	}
 
 	if recursive {
-		cur := tx.Bucket(bucketEvents).Cursor()
-		for k, v := cur.First(); k != nil; k, v = cur.Next() {
+		// Wurzel: gesamtes events-Bucket. Sonst über den Subject-Index begrenzen
+		// (Early-Exit beim ersten Treffer).
+		if subject == "/" {
+			cur := tx.Bucket(bucketEvents).Cursor()
+			for k, v := cur.First(); k != nil; k, v = cur.Next() {
+				var ev event.Event
+				if err := json.Unmarshal(v, &ev); err != nil {
+					return false, fmt.Errorf("event dekodieren: %w", err)
+				}
+				if check(ev) {
+					return true, nil
+				}
+			}
+			return false, nil
+		}
+
+		evts := tx.Bucket(bucketEvents)
+		cur := tx.Bucket(bucketSubjectIdx).Cursor()
+		prefix := []byte(subject)
+		for k, evKey := cur.Seek(prefix); k != nil && hasPrefix(k, prefix); k, evKey = cur.Next() {
+			sep := bytes.IndexByte(k, subjectSep)
+			if sep < 0 || !MatchSubject(string(k[:sep]), subject, true) {
+				continue
+			}
+			raw := evts.Get(evKey)
+			if raw == nil {
+				return false, fmt.Errorf("inkonsistenter index: event %x fehlt", evKey)
+			}
 			var ev event.Event
-			if err := json.Unmarshal(v, &ev); err != nil {
+			if err := json.Unmarshal(raw, &ev); err != nil {
 				return false, fmt.Errorf("event dekodieren: %w", err)
 			}
-			if MatchSubject(ev.Subject, subject, true) && check(ev) {
+			if check(ev) {
 				return true, nil
 			}
 		}
@@ -654,6 +681,54 @@ func readSubjectIndex(tx *bolt.Tx, subject string, opts ReadOptions, out *[]even
 }
 
 func readRecursive(tx *bolt.Tx, query string, opts ReadOptions, out *[]event.Event) error {
+	// Wurzel: das Subtree ist „alles" — der nach Sequenz geordnete events-Bucket
+	// ist hier optimal (eine Index-Umleitung wäre nur teurer).
+	if query == "/" {
+		return scanEventsRecursive(tx, query, opts, out)
+	}
+
+	// Nicht-Wurzel: über den Subject-Index begrenzen, statt den gesamten
+	// events-Bucket zu scannen. Index-Schlüssel sind subject + sep + seq; wir
+	// betrachten nur Schlüssel mit dem literalen Prefix `query`, sammeln die
+	// passenden Sequenzen, sortieren sie (globale Ordnung) und laden gezielt.
+	idx := tx.Bucket(bucketSubjectIdx)
+	evts := tx.Bucket(bucketEvents)
+	types := opts.typeSet()
+	prefix := []byte(query)
+
+	var seqs []uint64
+	cur := idx.Cursor()
+	for k, evKey := cur.Seek(prefix); k != nil && hasPrefix(k, prefix); k, evKey = cur.Next() {
+		sep := bytes.IndexByte(k, subjectSep)
+		if sep < 0 || !MatchSubject(string(k[:sep]), query, true) {
+			continue
+		}
+		seq := binary.BigEndian.Uint64(evKey)
+		if inBounds(seq, opts) {
+			seqs = append(seqs, seq)
+		}
+	}
+	sort.Slice(seqs, func(i, j int) bool { return seqs[i] < seqs[j] })
+
+	for _, seq := range seqs {
+		raw := evts.Get(seqKey(seq))
+		if raw == nil {
+			return fmt.Errorf("inkonsistenter index: event %x fehlt", seqKey(seq))
+		}
+		var ev event.Event
+		if err := json.Unmarshal(raw, &ev); err != nil {
+			return fmt.Errorf("event dekodieren: %w", err)
+		}
+		if matchType(ev.Type, types) {
+			*out = append(*out, ev)
+		}
+	}
+	return nil
+}
+
+// scanEventsRecursive durchläuft den global nach Sequenz geordneten events-Bucket
+// und filtert per MatchSubject — verwendet für die Wurzel-Abfrage ("/").
+func scanEventsRecursive(tx *bolt.Tx, query string, opts ReadOptions, out *[]event.Event) error {
 	cur := tx.Bucket(bucketEvents).Cursor()
 	types := opts.typeSet()
 

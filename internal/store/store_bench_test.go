@@ -2,6 +2,7 @@ package store
 
 import (
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/pblumer/clio/internal/event"
@@ -85,6 +86,33 @@ func BenchmarkReadRecursive(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		if _, err := st.Read("/bench", true, ReadOptions{}); err != nil {
 			b.Fatal(err)
+		}
+	}
+}
+
+// BenchmarkReadRecursiveSubtree misst das rekursive Lesen eines KLEINEN Subtrees
+// in einem großen Store. Dank Index-Begrenzung ist die Laufzeit ~O(Subtree),
+// nicht O(alle Events).
+func BenchmarkReadRecursiveSubtree(b *testing.B) {
+	st := benchStore(b, SyncOff)
+	// 50.000 Events über 5.000 Subjects; das Ziel-Subject hat nur 10.
+	for i := 0; i < 50000; i++ {
+		_, err := st.Append([]event.Candidate{{
+			Source: "fleet", Subject: "/vehicles/V-" + strconv.Itoa(i/10),
+			Type: "acquired", Data: []byte(`{"n":1}`),
+		}}, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		out, err := st.Read("/vehicles/V-1", true, ReadOptions{})
+		if err != nil {
+			b.Fatal(err)
+		}
+		if len(out) == 0 {
+			b.Fatal("erwartete Treffer")
 		}
 	}
 }

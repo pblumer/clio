@@ -5,7 +5,7 @@
 >
 > **Status des Gesamtprojekts:** `IN ENTWICKLUNG` — **Stufe 0–3 abgeschlossen** plus **Ed25519-Signaturen** (Authentizität). Write/Read/Observe, Optimistic Concurrency, Hash-Kette + Signaturen (`/verify`, `/public-key`), Event-Typen + JSON-Schemas, Group Commit (`CLIO_SYNC`), Observability (`/metrics`), Distribution (Cross-Builds/Docker/Release), Kompaktierung (`cliostore compact`), OpenAPI/Swagger UI. Geplant (Stufe 4): CEL-basierte Abfrageschicht (`run-query`, ADR-017) statt eigener EventQL-Sprache.
 > **Letzte Aktualisierung:** 2026-06-11
-> **Dokumentversion:** 1.22
+> **Dokumentversion:** 1.23
 
 ---
 
@@ -240,6 +240,7 @@ Statt EventQL syntaxgetreu nachzubauen (kein offener Parser verfügbar, eigener 
 - **Kontext:** Immutability und schnelle Subject-Abfragen werden benötigt.
 - **Entscheidung:** Start mit append-only Log (Datei) plus In-Memory-Index `subject → []offset`; alternativ embedded `bbolt`. Index wird beim Start aus dem Log rekonstruiert.
 - **Konsequenzen:** Einfacher, korrekter Start. Index-Größe an RAM gebunden; Rebuild-Zeit skaliert mit Log-Größe — in Stufe 3 zu adressieren (Kompaktierung, persistenter Index).
+- **Nachtrag (Performance):** Umgesetzt mit `bbolt` und einem persistenten Subject-Index (`subject → seq`). **Reads sind index-begrenzt:** nicht-rekursiv über den Subject-Index, rekursiv für einen Teilbaum über einen Index-Prefix-Scan (Treffer-Sequenzen sammeln, sortieren, gezielt laden) — Laufzeit ~O(Treffer) statt O(alle Events). Nur die echte Wurzel-Abfrage (`/`) scannt den global geordneten `events`-Bucket (Subtree = alles).
 
 ### ADR-007: EventQL als spätes, optionales Ziel
 - **Status:** Akzeptiert

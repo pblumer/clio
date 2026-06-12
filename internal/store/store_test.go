@@ -224,6 +224,27 @@ func idsOf(events []event.Event) []string {
 	return ids
 }
 
+// TestReadRecursivePrefixSiblings sichert die index-begrenzte rekursive Lesart
+// ab: ein literaler Schlüssel-Prefix darf keine „Geschwister" einschließen, die
+// nur zufällig denselben Präfix-String teilen (z. B. /v/1 vs /v/10).
+func TestReadRecursivePrefixSiblings(t *testing.T) {
+	st := openTemp(t)
+	appendAll(t, st,
+		event.Candidate{Source: "s", Subject: "/v/1", Type: "a"},     // 1 — exakt
+		event.Candidate{Source: "s", Subject: "/v/10", Type: "b"},    // 2 — Prefix-Geschwister, NICHT enthalten
+		event.Candidate{Source: "s", Subject: "/v/1/sub", Type: "c"}, // 3 — Nachfahre
+	)
+
+	got, err := st.Read("/v/1", true, ReadOptions{})
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	want := []string{"1", "3"}
+	if ids := idsOf(got); len(ids) != 2 || ids[0] != want[0] || ids[1] != want[1] {
+		t.Fatalf("rekursiv /v/1 = %v, want %v (Geschwister /v/10 darf nicht dabei sein)", idsOf(got), want)
+	}
+}
+
 func TestPreconditionSubjectPristine(t *testing.T) {
 	st := openTemp(t)
 
