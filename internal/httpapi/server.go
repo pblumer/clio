@@ -211,14 +211,14 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"name":            "cliostore",
-		"version":         s.version,
-		"startedAt":       s.startedAt.Format(time.RFC3339Nano),
-		"uptimeSeconds":   int64(uptime.Seconds()),
-		"serverTime":      now.Format(time.RFC3339Nano),
-		"eventsTotal":     count,
-		"syncMode":        s.cfg.Sync,
-		"httpListenAddr":  s.cfg.Addr,
+		"name":             "cliostore",
+		"version":          s.version,
+		"startedAt":        s.startedAt.Format(time.RFC3339Nano),
+		"uptimeSeconds":    int64(uptime.Seconds()),
+		"serverTime":       now.Format(time.RFC3339Nano),
+		"eventsTotal":      count,
+		"syncMode":         s.cfg.Sync,
+		"httpListenAddr":   s.cfg.Addr,
 		"databaseFilePath": s.cfg.DBPath,
 	})
 }
