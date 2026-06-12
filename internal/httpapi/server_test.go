@@ -717,6 +717,56 @@ func TestReadEventTypes(t *testing.T) {
 	}
 }
 
+func TestReadSubjects(t *testing.T) {
+	srv := newTestServer(t)
+	do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token",
+		`{"events":[
+			{"source":"s","subject":"/books/42","type":"acquired"},
+			{"source":"s","subject":"/books/42","type":"borrowed"},
+			{"source":"s","subject":"/books/99","type":"acquired"},
+			{"source":"s","subject":"/movies/7","type":"x"}
+		]}`)
+
+	// Ohne Token -> 401.
+	if rec := do(t, srv, http.MethodGet, "/api/v1/read-subjects", "", ""); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("ohne token: status = %d, want 401", rec.Code)
+	}
+
+	// Ohne prefix: alle Subjects, alphabetisch, mit Count.
+	rec := do(t, srv, http.MethodGet, "/api/v1/read-subjects", "secret-token", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	rows := decodeNDJSONMaps(t, rec.Body.String())
+	want := []struct {
+		subject string
+		count   float64
+	}{{"/books/42", 2}, {"/books/99", 1}, {"/movies/7", 1}}
+	if len(rows) != len(want) {
+		t.Fatalf("got %d zeilen, want %d: %+v", len(rows), len(want), rows)
+	}
+	for i, w := range want {
+		if rows[i]["subject"] != w.subject || rows[i]["count"].(float64) != w.count {
+			t.Fatalf("zeile %d = %+v, want %s/%v", i, rows[i], w.subject, w.count)
+		}
+	}
+
+	// Mit prefix: nur Subjects unter /books.
+	rec = do(t, srv, http.MethodGet, "/api/v1/read-subjects?prefix=/books", "secret-token", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("prefix status = %d, want 200", rec.Code)
+	}
+	rows = decodeNDJSONMaps(t, rec.Body.String())
+	if len(rows) != 2 || rows[0]["subject"] != "/books/42" || rows[1]["subject"] != "/books/99" {
+		t.Fatalf("prefix /books = %+v, want /books/42 + /books/99", rows)
+	}
+
+	// Ungültiger prefix (ohne /) -> 400.
+	if rec := do(t, srv, http.MethodGet, "/api/v1/read-subjects?prefix=books", "secret-token", ""); rec.Code != http.StatusBadRequest {
+		t.Fatalf("prefix ohne slash: status = %d, want 400", rec.Code)
+	}
+}
+
 func TestMetricsEndpoint(t *testing.T) {
 	srv := newTestServer(t)
 	do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token",

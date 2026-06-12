@@ -245,6 +245,76 @@ func TestReadRecursivePrefixSiblings(t *testing.T) {
 	}
 }
 
+func TestSubjects(t *testing.T) {
+	st := openTemp(t)
+	appendAll(t, st,
+		event.Candidate{Source: "s", Subject: "/books/42", Type: "acquired"},
+		event.Candidate{Source: "s", Subject: "/books/99", Type: "acquired"},
+		event.Candidate{Source: "s", Subject: "/books/42", Type: "borrowed"},
+		event.Candidate{Source: "s", Subject: "/booksstore", Type: "x"}, // Prefix-Geschwister zu /books
+		event.Candidate{Source: "s", Subject: "/movies/7", Type: "y"},
+	)
+
+	// Ohne prefix: alle Subjects, alphabetisch, mit korrekten Counts.
+	all, err := st.Subjects("")
+	if err != nil {
+		t.Fatalf("Subjects: %v", err)
+	}
+	want := []SubjectInfo{
+		{Subject: "/books/42", Count: 2},
+		{Subject: "/books/99", Count: 1},
+		{Subject: "/booksstore", Count: 1},
+		{Subject: "/movies/7", Count: 1},
+	}
+	if len(all) != len(want) {
+		t.Fatalf("Subjects() = %+v, want %+v", all, want)
+	}
+	for i, w := range want {
+		if all[i] != w {
+			t.Fatalf("Subjects()[%d] = %+v, want %+v", i, all[i], w)
+		}
+	}
+
+	// prefix /books: nur Subjects unter /books — das Prefix-Geschwister
+	// /booksstore darf NICHT dabei sein.
+	books, err := st.Subjects("/books")
+	if err != nil {
+		t.Fatalf("Subjects(/books): %v", err)
+	}
+	bwant := []SubjectInfo{
+		{Subject: "/books/42", Count: 2},
+		{Subject: "/books/99", Count: 1},
+	}
+	if len(books) != len(bwant) {
+		t.Fatalf("Subjects(/books) = %+v, want %+v (kein /booksstore)", books, bwant)
+	}
+	for i, w := range bwant {
+		if books[i] != w {
+			t.Fatalf("Subjects(/books)[%d] = %+v, want %+v", i, books[i], w)
+		}
+	}
+
+	// prefix ohne Treffer: leer.
+	none, err := st.Subjects("/nope")
+	if err != nil {
+		t.Fatalf("Subjects(/nope): %v", err)
+	}
+	if len(none) != 0 {
+		t.Fatalf("Subjects(/nope) = %+v, want leer", none)
+	}
+}
+
+func TestSubjectsEmptyStore(t *testing.T) {
+	st := openTemp(t)
+	subs, err := st.Subjects("")
+	if err != nil {
+		t.Fatalf("Subjects: %v", err)
+	}
+	if len(subs) != 0 {
+		t.Fatalf("leerer Store: %+v, want leer", subs)
+	}
+}
+
 func TestPreconditionSubjectPristine(t *testing.T) {
 	st := openTemp(t)
 

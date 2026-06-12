@@ -168,6 +168,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/run-query", s.requireAuth(s.handleRunQuery))
 	s.mux.HandleFunc("GET /api/v1/verify", s.requireAuth(s.handleVerify))
 	s.mux.HandleFunc("GET /api/v1/public-key", s.requireAuth(s.handlePublicKey))
+	s.mux.HandleFunc("GET /api/v1/read-subjects", s.requireAuth(s.handleReadSubjects))
 	s.mux.HandleFunc("GET /api/v1/read-event-types", s.requireAuth(s.handleReadEventTypes))
 	s.mux.HandleFunc("POST /api/v1/register-event-schema", s.requireAuth(s.handleRegisterEventSchema))
 	s.mux.HandleFunc("GET /api/v1/read-event-schema", s.requireAuth(s.handleReadEventSchema))
@@ -226,6 +227,25 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 		"httpListenAddr":   s.cfg.Addr,
 		"databaseFilePath": s.cfg.DBPath,
 	})
+}
+
+// handleReadSubjects liefert alle bisher beschriebenen Subjects (Streams) als
+// NDJSON ({"subject":...,"count":...} pro Zeile), sortiert. Optionaler
+// Query-Parameter `prefix` schränkt auf den rekursiven Scope eines Pfads ein
+// (z. B. ?prefix=/books).
+func (s *Server) handleReadSubjects(w http.ResponseWriter, r *http.Request) {
+	prefix := r.URL.Query().Get("prefix")
+	if prefix != "" && prefix[0] != '/' {
+		writeError(w, http.StatusBadRequest, "prefix muss mit \"/\" beginnen")
+		return
+	}
+	subjects, err := s.store.Subjects(prefix)
+	if err != nil {
+		s.logger.Error("read-subjects fehlgeschlagen", "err", err)
+		writeError(w, http.StatusInternalServerError, "interner fehler beim lesen")
+		return
+	}
+	writeNDJSON(w, s.logger, subjects)
 }
 
 // handleReadEventTypes liefert alle bisher geschriebenen Event-Typen als NDJSON
