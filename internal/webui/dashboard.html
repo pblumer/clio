@@ -117,8 +117,18 @@
     background: radial-gradient(120% 130% at 0 0, rgba(34,211,238,.07), transparent 55%), rgba(6,11,24,.72);
     box-shadow: inset 0 0 34px rgba(34,211,238,.05), 0 6px 22px rgba(0,0,0,.45); }
   .vitals-head { display: flex; align-items: center; gap: 14px; padding: 9px 14px; font-family: var(--mono);
-    border-bottom: 1px solid var(--border); }
+    border-bottom: 1px solid var(--border); flex-wrap: wrap; }
   .vitals-title { color: var(--accent); letter-spacing: 1.6px; font-size: 12px; text-shadow: var(--glow); }
+  .vitals-rate { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--muted); letter-spacing: 1px; }
+  .vitals-rate-label { text-transform: uppercase; }
+  #ekg-rate-val { color: var(--accent); font-variant-numeric: tabular-nums; min-width: 56px; text-shadow: var(--glow); }
+  input[type=range] { -webkit-appearance: none; appearance: none; height: 4px; width: 130px; min-width: 130px; padding: 0;
+    background: linear-gradient(90deg, var(--accent), var(--accent-2)); border: none; border-radius: 3px;
+    box-shadow: 0 0 8px rgba(34,211,238,.4); cursor: pointer; }
+  input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%;
+    background: #eaf6ff; border: 1px solid var(--accent); box-shadow: 0 0 8px var(--accent); cursor: pointer; }
+  input[type=range]::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%; background: #eaf6ff;
+    border: 1px solid var(--accent); box-shadow: 0 0 8px var(--accent); cursor: pointer; }
   .vitals-bpm { display: flex; align-items: baseline; gap: 5px; color: var(--ok); }
   .vitals-bpm #ekg-bpm { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; text-shadow: 0 0 14px rgba(52,245,197,.6); }
   .vitals-bpm small { color: var(--muted); font-size: 10px; letter-spacing: 1px; }
@@ -265,6 +275,11 @@
     <div class="vitals">
       <div class="vitals-head">
         <span class="vitals-title">◈ Liveness · Ping-Monitor</span>
+        <label class="vitals-rate" title="Ping-Takt / Ziel-Herzfrequenz">
+          <span class="vitals-rate-label">Takt</span>
+          <input id="ekg-rate" type="range" min="30" max="150" step="5" value="50">
+          <span id="ekg-rate-val">50&nbsp;BPM</span>
+        </label>
         <span class="spacer"></span>
         <span class="vitals-bpm"><span id="ekg-bpm">--</span><small>BPM</small></span>
         <span class="vitals-lat" id="ekg-lat">– ms</span>
@@ -692,8 +707,20 @@ window.addEventListener("resize", redrawSparks);
 
 // ---------- Liveness-EKG (Ping-Monitor, Oszilloskop-Sweep) ----------
 const ekg = { cv: null, ctx: null, w: 0, h: 0, dpr: 1, col: 0, step: 2, gap: 16, trace: null,
-  beatPhase: 2, dPhase: 1 / 42, alive: true, bpm: null, lastPingAt: null, raf: null, pingTimer: null };
-const PING_MS = 1200;
+  beatPhase: 2, dPhase: 1 / 42, alive: true, bpm: null, lastPingAt: null, raf: null, pingTimer: null,
+  pingMs: 1200 };
+// setPingRate stellt den Ping-Takt aus einer Ziel-Herzfrequenz (BPM) ein.
+function setPingRate(bpm) {
+  bpm = Math.min(150, Math.max(30, Math.round(bpm / 5) * 5));
+  ekg.pingMs = Math.round(60000 / bpm);
+  const val = $("ekg-rate-val"); if (val) val.innerHTML = bpm + "&nbsp;BPM";
+  const sl = $("ekg-rate"); if (sl && +sl.value !== bpm) sl.value = bpm;
+  // dPhase so wählen, dass ein Schlag etwa eine halbe Taktlänge ausfüllt
+  // (schneller Takt → kompakterer PQRST-Komplex).
+  const beatCols = Math.max(18, Math.min(60, (ekg.pingMs / 1000) * 60));
+  ekg.dPhase = 1 / beatCols;
+  try { localStorage.setItem("clioPingBpm", String(bpm)); } catch (_) {}
+}
 // ekgWave bildet einen PQRST-Komplex (p = 0..1) als Summe von Gauß-Glocken.
 function ekgWave(p) {
   const g = (c, w, a) => a * Math.exp(-((p - c) * (p - c)) / (2 * w * w));
@@ -770,11 +797,15 @@ async function ekgPing() {
       $("ekg-lat").textContent = lat + " ms"; setEkgState(true, false);
     } else ekgDown();
   } catch (_) { ekgDown(); }
-  finally { ekg.pingTimer = setTimeout(ekgPing, PING_MS); }
+  finally { ekg.pingTimer = setTimeout(ekgPing, ekg.pingMs); }
 }
 function initEkg() {
   ekg.cv = $("ekg"); if (!ekg.cv) return;
   ekg.ctx = ekg.cv.getContext("2d");
+  const stored = parseInt(localStorage.getItem("clioPingBpm"), 10);
+  setPingRate(Number.isFinite(stored) ? stored : 50);
+  const slider = $("ekg-rate");
+  if (slider) slider.addEventListener("input", (e) => setPingRate(+e.target.value));
   ekgResize(); setEkgState(true, true);
   ekg.raf = requestAnimationFrame(ekgFrame);
   ekgPing();
