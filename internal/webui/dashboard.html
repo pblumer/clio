@@ -84,6 +84,22 @@
              font-family: var(--mono); font-size: 12px; white-space: pre-wrap; word-break: break-word; display: none; }
   .ev.open .ev-data { display: block; }
   .empty { color: var(--muted); text-align: center; padding: 40px; }
+  /* Explorer */
+  .explorer-grid { display: grid; gap: 14px; grid-template-columns: minmax(220px, 340px) 1fr; align-items: start; }
+  @media (max-width: 760px) { .explorer-grid { grid-template-columns: 1fr; } }
+  .tree { font-family: var(--mono); font-size: 13px; max-height: 420px; overflow: auto; }
+  .tnode { display: flex; align-items: center; gap: 4px; padding: 1px 0; }
+  .tnode .tog { width: 14px; text-align: center; cursor: pointer; color: var(--muted); user-select: none; }
+  .tnode .tlabel { cursor: pointer; flex: 1; padding: 1px 6px; border-radius: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tnode .tlabel:hover { background: var(--panel-2); }
+  .tnode .tlabel.sel { background: var(--accent); color: #0b1020; }
+  .tnode .tcount { color: var(--muted); font-size: 11px; white-space: nowrap; }
+  .tchildren.collapsed { display: none; }
+  #exp-events { max-height: 460px; overflow: auto; display: flex; flex-direction: column; gap: 6px; }
+  .type-item { border-bottom: 1px solid var(--border); }
+  .type-row { display: flex; align-items: center; gap: 10px; padding: 7px 2px; }
+  .type-row .tname { font-family: var(--mono); flex: 1; word-break: break-all; }
+  .type-item.open .ev-data { display: block; margin: 0 0 8px; }
 </style>
 </head>
 <body>
@@ -98,6 +114,7 @@
 <nav class="tabs">
   <button id="tab-dashboard" class="active" data-view="dashboard">Dashboard</button>
   <button id="tab-live" data-view="live">Live-Events</button>
+  <button id="tab-explorer" data-view="explorer">Explorer</button>
 </nav>
 
 <main>
@@ -160,6 +177,45 @@
     <div id="events"><div class="empty">Noch nichts beobachtet.</div></div>
   </div>
 
+  <!-- ============ Explorer ============ -->
+  <div id="view-explorer" class="view">
+    <div class="controls">
+      <input id="exp-prefix" placeholder="Prefix (z. B. /books) — leer = alles" spellcheck="false">
+      <button id="exp-load" class="primary">Laden</button>
+      <span class="spacer"></span>
+      <span id="exp-status" class="badge">–</span>
+    </div>
+    <div class="notice" id="exp-notice">
+      Read-only Explorer: Subject-Baum (<code>read-subjects?tree=true</code>),
+      Event-Typen &amp; Schemas (<code>read-event-types</code> / <code>read-event-schema</code>)
+      und Integrität (<code>verify</code> / <code>public-key</code>). Subject anklicken lädt
+      dessen Events (nicht rekursiv).
+    </div>
+    <div class="explorer-grid">
+      <div class="card">
+        <div class="label">Subjects</div>
+        <div id="exp-tree" class="tree"><div class="empty">Noch nicht geladen.</div></div>
+      </div>
+      <div class="card">
+        <div class="label" id="exp-events-label">Events</div>
+        <div id="exp-events"><div class="empty">Subject links wählen.</div></div>
+      </div>
+    </div>
+    <section>
+      <h2>Event-Typen &amp; Schemas</h2>
+      <div id="exp-types"><div class="empty">Noch nicht geladen.</div></div>
+    </section>
+    <section>
+      <h2>Integrität</h2>
+      <dl class="kv">
+        <dt>Hash-Kette</dt><dd id="ig-chain">–</dd>
+        <dt>Geprüfte Events</dt><dd id="ig-count">–</dd>
+        <dt>Head</dt><dd id="ig-head">–</dd>
+        <dt>Signatur</dt><dd id="ig-sign">–</dd>
+      </dl>
+    </section>
+  </div>
+
   <footer>
     clio · <a href="/docs">API-Doku</a> · <a href="/metrics">/metrics</a> ·
     <span id="lastUpdate">noch nicht aktualisiert</span>
@@ -204,10 +260,12 @@ function fmtMs(sec) {
 
 // ---------- Tabs ----------
 function switchView(name) {
-  for (const v of ["dashboard", "live"]) {
+  for (const v of ["dashboard", "live", "explorer"]) {
     $("view-" + v).classList.toggle("active", v === name);
     $("tab-" + v).classList.toggle("active", v === name);
   }
+  // Explorer beim ersten Öffnen automatisch laden, sofern ein Token vorliegt.
+  if (name === "explorer" && !explorerLoaded && tokenInput.value.trim()) loadExplorer();
 }
 document.querySelectorAll("nav.tabs button").forEach((b) =>
   b.addEventListener("click", () => switchView(b.dataset.view)));
@@ -338,13 +396,18 @@ function liveStatus(state, text) {
   // Live-Status hat Vorrang in der Kopfzeile, solange der Stream läuft.
   setStatus(state, text);
 }
-function buildPath() {
-  const subj = $("live-subject").value.trim();
+// eventsPath baut den GET-Pfad der Komfort-Leseroute für ein Subject
+// (URL-kodierte Segmente). "/" -> /api/v1/events; "/a/b" -> /api/v1/events/a/b.
+function eventsPath(subj) {
   let path = "/api/v1/events";
   if (subj && subj !== "/") {
     const parts = subj.replace(/^\/+/, "").split("/").filter(Boolean).map(encodeURIComponent);
     if (parts.length) path += "/" + parts.join("/");
   }
+  return path;
+}
+function buildPath() {
+  let path = eventsPath($("live-subject").value.trim());
   const p = new URLSearchParams();
   p.set("watch", "true");
   p.set("recursive", $("live-recursive").checked ? "true" : "false");
@@ -456,6 +519,180 @@ $("live-clear").addEventListener("click", () => {
   $("live-count").textContent = "0 Events";
   eventsEl.innerHTML = '<div class="empty">Noch nichts beobachtet.</div>';
 });
+
+// ---------- Explorer (read-only) ----------
+const EXP_MAX = 200;
+let explorerLoaded = false, expSelLabel = null;
+
+function setExpStatus(t) { $("exp-status").textContent = t; }
+async function authGet(path) {
+  const token = tokenInput.value.trim();
+  if (!token) throw new Error("Token fehlt");
+  const r = await fetch(path, { headers: { Authorization: "Bearer " + token }, cache: "no-store" });
+  if (r.status === 401) throw new Error("401");
+  return r;
+}
+async function getJSON(path) { const r = await authGet(path); if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); }
+async function getNDJSON(path) {
+  const r = await authGet(path); if (!r.ok) throw new Error("HTTP " + r.status);
+  return (await r.text()).split("\n").map((s) => s.trim()).filter(Boolean).map((l) => JSON.parse(l));
+}
+
+function loadExplorer() {
+  const prefix = $("exp-prefix").value.trim();
+  if (prefix && prefix[0] !== "/") { setExpStatus("Prefix muss mit / beginnen"); return; }
+  explorerLoaded = true;
+  setExpStatus("lädt …");
+  Promise.all([loadTree(prefix), loadTypes(), loadIntegrity()])
+    .then(() => setExpStatus("geladen " + new Date().toLocaleTimeString("de-CH")))
+    .catch((e) => setExpStatus(e.message === "401" ? "Token ungültig" : "Fehler"));
+}
+
+async function loadTree(prefix) {
+  const el = $("exp-tree");
+  el.innerHTML = '<div class="empty">lädt …</div>';
+  try {
+    const q = prefix ? "?tree=true&prefix=" + encodeURIComponent(prefix) : "?tree=true";
+    const root = await getJSON("/api/v1/read-subjects" + q);
+    el.innerHTML = "";
+    if ((!root.children || !root.children.length) && !root.total) {
+      el.innerHTML = '<div class="empty">Keine Subjects.</div>'; return;
+    }
+    renderTreeNode(root, el, 0, true);
+  } catch (e) {
+    el.innerHTML = '<div class="empty">' + (e.message === "401" ? "Token ungültig (401)" : "Fehler: " + e.message) + "</div>";
+    throw e;
+  }
+}
+function renderTreeNode(node, container, depth, isRoot) {
+  const row = document.createElement("div");
+  row.className = "tnode";
+  row.style.paddingLeft = depth * 14 + "px";
+  const hasKids = node.children && node.children.length;
+  const tog = document.createElement("span");
+  tog.className = "tog"; tog.textContent = hasKids ? "▾" : "";
+  const label = document.createElement("span");
+  label.className = "tlabel";
+  label.textContent = isRoot ? node.subject : node.subject.split("/").pop();
+  label.title = node.subject;
+  const cnt = document.createElement("span");
+  cnt.className = "tcount";
+  cnt.textContent = node.count === node.total ? String(node.total) : node.count + "·Σ" + node.total;
+  row.append(tog, label, cnt);
+  container.appendChild(row);
+  if (hasKids) {
+    const kids = document.createElement("div");
+    kids.className = "tchildren";
+    container.appendChild(kids);
+    for (const c of node.children) renderTreeNode(c, kids, depth + 1, false);
+    tog.addEventListener("click", () => {
+      const collapsed = kids.classList.toggle("collapsed");
+      tog.textContent = collapsed ? "▸" : "▾";
+    });
+  }
+  label.addEventListener("click", () => selectSubject(node.subject, label));
+}
+
+async function selectSubject(subj, labelEl) {
+  if (expSelLabel) expSelLabel.classList.remove("sel");
+  if (labelEl) { labelEl.classList.add("sel"); expSelLabel = labelEl; }
+  $("exp-events-label").textContent = "Events · " + subj + " (nicht rekursiv)";
+  const el = $("exp-events");
+  el.innerHTML = '<div class="empty">lädt …</div>';
+  try {
+    const evs = await getNDJSON(eventsPath(subj) + "?recursive=false");
+    if (!evs.length) { el.innerHTML = '<div class="empty">Keine Events direkt auf diesem Subject.</div>'; return; }
+    el.innerHTML = "";
+    const shown = evs.slice(-EXP_MAX).reverse(); // neueste oben
+    for (const ev of shown) el.appendChild(renderEvent(ev));
+    if (evs.length > EXP_MAX) {
+      const note = document.createElement("div");
+      note.className = "empty";
+      note.textContent = "… " + (evs.length - EXP_MAX) + " ältere ausgeblendet (von " + evs.length + ")";
+      el.appendChild(note);
+    }
+  } catch (e) {
+    el.innerHTML = '<div class="empty">' + (e.message === "401" ? "Token ungültig (401)" : "Fehler: " + e.message) + "</div>";
+  }
+}
+
+async function loadTypes() {
+  const el = $("exp-types");
+  el.innerHTML = '<div class="empty">lädt …</div>';
+  try {
+    const types = await getNDJSON("/api/v1/read-event-types");
+    if (!types.length) { el.innerHTML = '<div class="empty">Keine Event-Typen.</div>'; return; }
+    el.innerHTML = "";
+    for (const t of types) el.appendChild(renderTypeItem(t));
+  } catch (e) {
+    el.innerHTML = '<div class="empty">' + (e.message === "401" ? "Token ungültig (401)" : "Fehler: " + e.message) + "</div>";
+    throw e;
+  }
+}
+function renderTypeItem(t) {
+  const wrap = document.createElement("div");
+  wrap.className = "type-item";
+  const row = document.createElement("div");
+  row.className = "type-row";
+  const name = document.createElement("span");
+  name.className = "tname"; name.textContent = t.type;
+  const cnt = document.createElement("span");
+  cnt.className = "badge"; cnt.textContent = fmtInt(t.count) + " Events";
+  const sch = document.createElement("span");
+  sch.className = "badge";
+  row.append(name, cnt, sch);
+  wrap.appendChild(row);
+  if (t.hasSchema) {
+    sch.textContent = "Schema ▸"; sch.classList.add("pending");
+    const pre = document.createElement("pre");
+    pre.className = "ev-data";
+    wrap.appendChild(pre);
+    let loaded = false;
+    sch.addEventListener("click", async () => {
+      const open = wrap.classList.toggle("open");
+      sch.textContent = open ? "Schema ▾" : "Schema ▸";
+      if (open && !loaded) {
+        pre.textContent = "lädt …";
+        try {
+          const r = await getJSON("/api/v1/read-event-schema?type=" + encodeURIComponent(t.type));
+          pre.textContent = JSON.stringify(r.schema, null, 2); loaded = true;
+        } catch (e) { pre.textContent = "Fehler: " + e.message; }
+      }
+    });
+  } else {
+    sch.textContent = "kein Schema";
+  }
+  return wrap;
+}
+
+async function loadIntegrity() {
+  const chain = $("ig-chain");
+  try {
+    const v = await getJSON("/api/v1/verify");
+    chain.textContent = "";
+    const span = document.createElement("span");
+    if (v.ok) { span.style.color = "var(--ok)"; span.textContent = "✓ intakt"; }
+    else {
+      span.style.color = "var(--err)";
+      span.textContent = "✗ gebrochen" + (v.brokenAt ? " bei #" + v.brokenAt : "") + (v.reason ? " (" + v.reason + ")" : "");
+    }
+    chain.appendChild(span);
+    $("ig-count").textContent = fmtInt(v.count);
+    $("ig-head").textContent = v.head || "–";
+  } catch (e) {
+    chain.textContent = e.message === "401" ? "Token ungültig (401)" : "Fehler: " + e.message;
+    throw e;
+  }
+  try {
+    const r = await authGet("/api/v1/public-key");
+    if (r.status === 404) $("ig-sign").textContent = "nicht aktiviert (nur Integrität)";
+    else if (r.ok) { const k = await r.json(); $("ig-sign").textContent = (k.algorithm || "") + " · " + (k.publicKey || ""); }
+    else $("ig-sign").textContent = "HTTP " + r.status;
+  } catch (e) { $("ig-sign").textContent = "Fehler: " + e.message; }
+}
+
+$("exp-load").addEventListener("click", loadExplorer);
+$("exp-prefix").addEventListener("keydown", (e) => { if (e.key === "Enter") loadExplorer(); });
 
 // Auto-Start des Dashboards, falls bereits ein Token im Tab liegt.
 if (tokenInput.value) connect();

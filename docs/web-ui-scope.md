@@ -1,6 +1,6 @@
 # Web-UI — Machbarkeits- & Scope-Skizze
 
-> Status: **Stufen 1 (Dashboard) + 2 (Live-Event-Viewer) umgesetzt** · Stufen 3–4 skizziert.
+> Status: **Stufen 1 (Dashboard) + 2 (Live-Event-Viewer) + 3 (Subject-Browser) umgesetzt** · Stufe 4 skizziert.
 > Zugehörige Entscheidung: **ADR-020** in [`ARCHITECTURE.md`](../ARCHITECTURE.md).
 
 Ein schlankes Web-UI für **Maintenance, Observing, Monitoring** — ohne Clios
@@ -69,9 +69,13 @@ Typ-Filter, rekursiv-Schalter, Pause/Fortsetzen (gepuffert, „N neue"-Badge) un
 aufklappbarer `data` je Event. Kein neuer Server-Code — nutzt den bestehenden
 Streaming-Endpunkt.
 
-### Stufe 3 — Subject-Browser  ⏳ vorgesehen
-Read-only Explorer über den Subject-Baum (`recursive`), Event-Typen pro Subject
-und registrierte Schemas. Plus Integritäts-Panel (`verify`, `public-key`).
+### Stufe 3 — Subject-Browser  ✅ umgesetzt
+Dritter Tab „Explorer" im `/ui`. Read-only: navigierbarer, ein-/ausklappbarer
+Subject-Baum aus `read-subjects?tree=true` (Klick auf ein Subject lädt dessen
+Events via `…/events/<subject>?recursive=false`), Event-Typen mit Anzahl und
+aufklappbaren JSON-Schemas (`read-event-types` / `read-event-schema`) sowie ein
+Integritäts-Panel (`verify` / `public-key`). Erneut kein neuer Server-Code —
+alle Endpunkte existierten bereits.
 
 ### Stufe 4 — Maintenance-Konsole  ⚠️ bewusst zurückgestellt
 Schreibende Aktionen (z. B. Kompaktierung anstoßen). **Out of scope** für jetzt:
