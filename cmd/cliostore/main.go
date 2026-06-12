@@ -71,8 +71,13 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	logger.Info("store geöffnet", "path", cfg.DBPath, "sync", cfg.Sync)
 
 	srv := &http.Server{
-		Addr:              cfg.Addr,
-		Handler:           httpapi.New(cfg, st, logger).Handler(),
+		Addr: cfg.Addr,
+		Handler: httpapi.New(
+			cfg,
+			st,
+			logger,
+			httpapi.WithBuildInfo(version, time.Now().UTC()),
+		).Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
