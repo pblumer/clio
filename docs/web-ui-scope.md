@@ -1,6 +1,6 @@
 # Web-UI — Machbarkeits- & Scope-Skizze
 
-> Status: **Stufen 1 (Dashboard) + 2 (Live-Event-Viewer) + 3 (Subject-Browser) + 5 (Query-Konsole &amp; Hilfe) umgesetzt** · Stufe 4 skizziert.
+> Status: **Stufen 1 (Dashboard) + 2 (Live-Event-Viewer) + 3 (Subject-Browser) + 5 (Query-Konsole &amp; Hilfe) + 6 (Sci-Fi-Theme, Telemetrie &amp; EKG) umgesetzt** · Stufe 4 skizziert.
 > Zugehörige Entscheidung: **ADR-020** in [`ARCHITECTURE.md`](../ARCHITECTURE.md).
 
 Ein schlankes Web-UI für **Maintenance, Observing, Monitoring** — ohne Clios
@@ -94,6 +94,25 @@ im Browser via `localStorage`) und **Export** der Ergebnisse als NDJSON oder CSV
 (verschachtelte Felder als punktierte Spalten). Kein neuer Server-Code — nur das
 bestehende `run-query`.
 
+### Stufe 6 — Sci-Fi-Theme, Telemetrie &amp; Liveness-EKG  ✅ umgesetzt
+Optischer Umbau des `/ui` in einen **HUD-/Space-Stil** (Sternenfeld via
+CSS-Gradients, Neon-Glow, Monospace-HUD) — weiterhin Vanilla, kein CDN/Build.
+Neu auf dem Dashboard:
+
+- **Liveness-EKG**: ein Oszilloskop-Sweep (Canvas, `requestAnimationFrame`), der
+  auf jeden `ping` einen PQRST-Komplex zeichnet; BPM aus dem Ping-Intervall,
+  Latenz-Anzeige, Flatline + Alarm bei Ausfall. Der Ping läuft **ohne Token**
+  (Liveness), also auch vor dem Verbinden.
+- **Live-Telemetrie-Charts**: glühende Sparklines (Canvas) für CPU-Last,
+  Heap-Speicher, Event-Durchsatz und Request-Rate, je aus rollierenden
+  Messfenstern.
+
+Dafür **einzige Server-Erweiterung** der gesamten UI-Reihe: das `metrics`-Paket
+exponiert zusätzliche Laufzeit-Serien aus der Standardbibliothek
+(`runtime/metrics`: Heap/Sys-Speicher, Goroutinen; `runtime.NumCPU`) sowie —
+plattformabhängig via `getrusage` (Linux/macOS, inkl. Docker) —
+`clio_process_cpu_seconds_total`. Keine neuen Fremd-Abhängigkeiten (ADR-001).
+
 ### Stufe 4 — Maintenance-Konsole  ⚠️ bewusst zurückgestellt
 Schreibende Aktionen (z. B. Kompaktierung anstoßen). **Out of scope** für jetzt:
 würde aus dem „kleinen UI" eine Angriffsfläche machen und eine eigene
@@ -129,4 +148,5 @@ Absicherung erfordern. Erst, wenn ein klares Auth-/Audit-Konzept dafür steht.
 | 2     | ~1–2 Tage          | keine               |
 | 3     | ~1–2 Tage          | keine               |
 | 5     | ~1–2 Tage (erledigt) | keine             |
+| 6     | ~1–2 Tage (erledigt) | keine (nur stdlib runtime/metrics + getrusage) |
 | 4     | offen (Auth-Konzept zuerst) | ggf. Audit-Log |

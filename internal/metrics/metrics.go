@@ -5,6 +5,8 @@ package metrics
 import (
 	"fmt"
 	"io"
+	"runtime"
+	rtm "runtime/metrics"
 	"sort"
 	"strconv"
 	"sync"
@@ -119,6 +121,31 @@ func (m *Metrics) Write(w io.Writer, g Gauges) {
 	writeGauge(w, "clio_events_total", "Anzahl gespeicherter Events.", g.EventsTotal)
 	if g.DBSizeBytes >= 0 {
 		writeGauge(w, "clio_db_size_bytes", "Größe der Datenbankdatei in Bytes.", uint64(g.DBSizeBytes))
+	}
+
+	writeRuntime(w)
+}
+
+// writeRuntime ergänzt Laufzeit-Metriken (Speicher, Goroutinen, CPU) aus der
+// Standardbibliothek — ohne Stop-the-World (runtime/metrics) bzw. via getrusage.
+func writeRuntime(w io.Writer) {
+	samples := []rtm.Sample{
+		{Name: "/memory/classes/heap/objects:bytes"},
+		{Name: "/memory/classes/total:bytes"},
+		{Name: "/sched/goroutines:goroutines"},
+	}
+	rtm.Read(samples)
+	writeGauge(w, "clio_memory_heap_bytes", "Live-Heap-Objekte in Bytes.", samples[0].Value.Uint64())
+	writeGauge(w, "clio_memory_sys_bytes", "Vom Laufzeitsystem reservierter Speicher in Bytes.", samples[1].Value.Uint64())
+	writeGauge(w, "clio_goroutines", "Aktuelle Anzahl Goroutinen.", samples[2].Value.Uint64())
+	writeGauge(w, "clio_num_cpu", "Anzahl logischer CPUs.", uint64(runtime.NumCPU()))
+
+	// Prozess-CPU (user+sys) als Counter; der Client bildet daraus die
+	// Auslastung. Auf Plattformen ohne getrusage entfällt die Serie.
+	if cpu, ok := processCPUSeconds(); ok {
+		fmt.Fprintf(w, "# HELP clio_process_cpu_seconds_total Verbrauchte CPU-Zeit (user+sys) in Sekunden.\n")
+		fmt.Fprintf(w, "# TYPE clio_process_cpu_seconds_total counter\n")
+		fmt.Fprintf(w, "clio_process_cpu_seconds_total %s\n", formatFloat(cpu))
 	}
 }
 

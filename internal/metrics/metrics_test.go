@@ -42,6 +42,22 @@ func TestRenderContainsAllSeries(t *testing.T) {
 	}
 }
 
+func TestRenderContainsRuntimeSeries(t *testing.T) {
+	out := render(New(), Gauges{})
+	// Speicher, Goroutinen und CPU-Anzahl kommen plattformübergreifend aus
+	// runtime/metrics; sie müssen immer vorhanden und gauge-typisiert sein.
+	for _, w := range []string{
+		"# TYPE clio_memory_heap_bytes gauge",
+		"# TYPE clio_memory_sys_bytes gauge",
+		"# TYPE clio_goroutines gauge",
+		"clio_num_cpu ",
+	} {
+		if !strings.Contains(out, w) {
+			t.Errorf("runtime-metrik fehlt:\n  %s\n--- ausgabe ---\n%s", w, out)
+		}
+	}
+}
+
 func TestHistogramBucketsCumulative(t *testing.T) {
 	m := New()
 	// 1ms fällt in alle Buckets ab le=0.001; 2s nur ab le=2.5.

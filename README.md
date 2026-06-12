@@ -63,13 +63,18 @@ eingebettet, kein Internet nötig:
 ### Betriebs-Dashboard (`/ui`)
 
 Ein schlankes, ebenfalls eingebettetes Dashboard für Monitoring & Observing —
-kein Prometheus/Grafana nötig, um „mal eben draufzuschauen":
+kein Prometheus/Grafana nötig, um „mal eben draufzuschauen". Optik im
+**Sci-Fi-/HUD-Stil** (Sternenfeld, Neon-Glow), weiterhin Vanilla JS ohne
+Build-Step/CDN:
 
 - **`http://127.0.0.1:3000/ui`** — Bearer-Token eingeben, **Verbinden**. Statische
   Seite (Vanilla JS, kein Build-Step) mit fünf Tabs:
-  - **Dashboard** — Events total, DB-Größe, aktive Observer, Uptime,
-    Request-Rate und Latenz (p50/p99) mit wählbarem Auto-Refresh; liest
-    `/api/v1/info` und `/metrics` derselben Instanz.
+  - **Dashboard** — ein **Liveness-EKG** (Oszilloskop-Sweep, schlägt auf jeden
+    `ping` — BPM + Latenz, Flatline bei Ausfall) sowie **Live-Telemetrie-Charts**
+    (CPU-Last, Heap-Speicher, Event-Durchsatz, Request-Rate als glühende
+    Sparklines). Dazu Events total, DB-Größe, aktive Observer, Uptime und
+    Latenz (p50/p99) mit wählbarem Auto-Refresh; liest `/api/v1/info` und
+    `/metrics` derselben Instanz.
   - **Live-Events** — streamt `GET /api/v1/events/<subject>?watch=true`
     (erst History, dann live) mit Subject-/Typ-Filter, Pause/Fortsetzen und
     aufklappbarer `data` je Event.
@@ -438,7 +443,9 @@ curl http://127.0.0.1:3000/metrics
 Enthalten u. a.: `clio_http_requests_total{method,route,status}`,
 `clio_http_request_duration_seconds` (Histogramm), `clio_events_written_total`,
 `clio_precondition_failures_total`, `clio_active_observers`, `clio_events_total`,
-`clio_db_size_bytes`.
+`clio_db_size_bytes`. Laufzeit-Metriken: `clio_memory_heap_bytes`,
+`clio_memory_sys_bytes`, `clio_goroutines`, `clio_num_cpu` und —
+plattformabhängig (Linux/macOS via getrusage) — `clio_process_cpu_seconds_total`.
 
 ### Wartung: Kompaktierung
 
