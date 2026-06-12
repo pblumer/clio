@@ -1,6 +1,6 @@
 # Web-UI — Machbarkeits- & Scope-Skizze
 
-> Status: **Stufen 1 (Dashboard) + 2 (Live-Event-Viewer) + 3 (Subject-Browser) + 5 (Query-Konsole &amp; Hilfe) + 6 (Sci-Fi-Theme, Telemetrie &amp; EKG) umgesetzt** · Stufe 4 skizziert.
+> Status: **Stufen 1 (Dashboard) + 2 (Live-Event-Viewer) + 3 (Subject-Browser) + 5 (Query-Konsole &amp; Hilfe) + 6 (Sci-Fi-Theme, Telemetrie &amp; EKG) + 7 (Event-/Schema-Generator) umgesetzt** · Stufe 4 skizziert.
 > Zugehörige Entscheidung: **ADR-020** in [`ARCHITECTURE.md`](../ARCHITECTURE.md).
 
 Ein schlankes Web-UI für **Maintenance, Observing, Monitoring** — ohne Clios
@@ -113,10 +113,27 @@ exponiert zusätzliche Laufzeit-Serien aus der Standardbibliothek
 plattformabhängig via `getrusage` (Linux/macOS, inkl. Docker) —
 `clio_process_cpu_seconds_total`. Keine neuen Fremd-Abhängigkeiten (ADR-001).
 
+### Stufe 7 — Event-/Schema-Generator  ✅ umgesetzt
+Sechster Tab „Erzeugen" im `/ui` — als **Onboarding-Hilfe**: ein einfaches
+Formular schreibt Events (`POST /api/v1/write-events`) mit Subject/Typ/Source und
+optionalem JSON-`data`, inkl. Vorlagen (Bibliothek/Autoverleih/Bestellung),
+Mehrfach-Erzeugung und **Ein-Klick-Beispiel-Szenarien** unter einem Prefix
+(damit Neueinsteiger sofort etwas zum Beobachten/Erkunden haben). Optional lassen
+sich **JSON-Schemas registrieren** (`POST /api/v1/register-event-schema`), mit
+klarer Rückmeldung bei 409 (unveränderlich) und 400 (Validierung). Kein neuer
+Server-Code — beide Endpunkte existierten bereits.
+
+Dies ist die **erste bewusst schreibende** UI-Fläche. Die Abgrenzung zu Stufe 4:
+Es sind **normale Daten-Writes**, die jede:r mit dem Token ohnehin per API
+ausführen kann (keine neue Privilegien-Ebene, kein neuer Endpunkt) — im
+Unterschied zu **destruktiven Maintenance-Operationen** (Kompaktierung etc.),
+die weiterhin zurückgestellt bleiben.
+
 ### Stufe 4 — Maintenance-Konsole  ⚠️ bewusst zurückgestellt
-Schreibende Aktionen (z. B. Kompaktierung anstoßen). **Out of scope** für jetzt:
-würde aus dem „kleinen UI" eine Angriffsfläche machen und eine eigene
-Absicherung erfordern. Erst, wenn ein klares Auth-/Audit-Konzept dafür steht.
+Schreibende **Maintenance**-Aktionen (z. B. Kompaktierung anstoßen). **Out of
+scope** für jetzt: würde über die normalen Daten-Writes (Stufe 7) hinaus eine
+betriebskritische Angriffsfläche schaffen und eine eigene Absicherung erfordern.
+Erst, wenn ein klares Auth-/Audit-Konzept dafür steht.
 
 ## 5. Bewusst *nicht* im Scope
 
@@ -125,8 +142,8 @@ Absicherung erfordern. Erst, wenn ein klares Auth-/Audit-Konzept dafür steht.
 - **Frontend-Toolchain** (npm/Bundler/SPA) — Widerspruch zu ADR-001.
 - **Mehrbenutzer-/Rollenmodell, Sessions, Cookies** — es bleibt beim einen
   Bearer-Token (ADR-008).
-- **Schreibende Operationen** über das UI (außer später Stufe 4 unter
-  eigener Absicherung).
+- **Schreibende _Maintenance_-Operationen** über das UI (Stufe 4) — die normalen
+  Daten-Writes (Events/Schemas, Stufe 7) sind hingegen bewusst enthalten.
 
 ## 6. Sicherheitsbetrachtung
 
@@ -137,8 +154,11 @@ Absicherung erfordern. Erst, wenn ein klares Auth-/Audit-Konzept dafür steht.
   abzusichern.
 - Same-origin, kein CORS. Das Token liegt nur clientseitig im Tab
   (`sessionStorage`), nicht persistent und nicht serverseitig.
-- Keine neuen Endpunkte mit Schreibwirkung → keine Vergrößerung der
-  Angriffsfläche gegenüber dem bestehenden API.
+- Der „Erzeugen"-Tab (Stufe 7) schreibt **über bestehende Endpunkte**
+  (`write-events`, `register-event-schema`) mit demselben Bearer-Token → **keine
+  neuen Endpunkte, keine neue Privilegien-Ebene**. Ohne Token kein Write (wie bei
+  den Lese-Aufrufen). Die Angriffsfläche gegenüber dem bestehenden API wächst
+  damit nicht; betriebskritische **Maintenance**-Writes bleiben separat (Stufe 4).
 
 ## 7. Aufwandseinschätzung
 
@@ -149,4 +169,5 @@ Absicherung erfordern. Erst, wenn ein klares Auth-/Audit-Konzept dafür steht.
 | 3     | ~1–2 Tage          | keine               |
 | 5     | ~1–2 Tage (erledigt) | keine             |
 | 6     | ~1–2 Tage (erledigt) | keine (nur stdlib runtime/metrics + getrusage) |
+| 7     | ~1 Tag (erledigt)  | keine               |
 | 4     | offen (Auth-Konzept zuerst) | ggf. Audit-Log |
