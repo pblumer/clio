@@ -5,7 +5,7 @@
 >
 > **Status des Gesamtprojekts:** `IN ENTWICKLUNG` — **Stufe 0–3 abgeschlossen** plus **Ed25519-Signaturen** (Authentizität). Write/Read/Observe, Optimistic Concurrency, Hash-Kette + Signaturen (`/verify`, `/public-key`), Event-Typen + JSON-Schemas, Group Commit (`CLIO_SYNC`), Observability (`/metrics`), Distribution (Cross-Builds/Docker/Release), Kompaktierung (`cliostore compact`), OpenAPI/Swagger UI. Geplant (Stufe 4): CEL-basierte Abfrageschicht (`run-query`, ADR-017) statt eigener EventQL-Sprache.
 > **Letzte Aktualisierung:** 2026-06-11
-> **Dokumentversion:** 1.21
+> **Dokumentversion:** 1.22
 
 ---
 
@@ -306,6 +306,12 @@ Statt EventQL syntaxgetreu nachzubauen (kein offener Parser verfügbar, eigener 
 - **Kontext:** Das Vorbild EventSourcingDB nutzt eine selbst entworfene, SQL-inspirierte Sprache (EventQL) mit eigenem Parser/Executor. Es gibt **keine offene EventQL-Grammatik/Bibliothek** zum Aufsetzen; ein syntaxgetreuer Nachbau bedeutete Lexer+Parser+Planner+Executor (Monatsaufwand). PartiQL (offene SQL-für-JSON-Spec) hat keine reife Go-Implementierung.
 - **Entscheidung:** Die Abfrageschicht wird **CEL-basiert** (`google/cel-go`) statt als eigene Sprache gebaut. Eine Query = Subject-Scope (vorhandene Primitive) + **CEL-Prädikat** über das Event (`event.type`, `event.data.*` …) + optionale Projektion/Limit. Der `isEventQlQueryTrue`-Gedanke wird zu einer Precondition mit CEL-Bedingung. Endpoint: `POST /api/v1/run-query` (bewusst nicht `run-eventql-query`, da keine EventQL-Syntax).
 - **Konsequenzen:** Drastisch geringerer Aufwand und Risiko; die wertvollen Teile (Bedingungen auf `data`, Precondition) entstehen mit einer reifen, getesteten Engine. Eine zusätzliche Abhängigkeit (`cel-go` + protobuf). **Keine** Byte-Kompatibilität mit EventSourcingDB-EventQL — strikte Kompatibilität bliebe ein separates, großes Vorhaben. Ersetzt die EventQL-Annahme in ADR-007 für die Umsetzung (ADR-007 bleibt als Kontext gültig).
+
+### ADR-018: Bewusste Abweichungen von den Swiss API Guidelines
+- **Status:** Akzeptiert (Analyse dokumentiert; volle Konformität bewusst nicht verfolgt)
+- **Kontext:** Geprüft wurde, was die Einhaltung der [Swiss API Guidelines](https://github.com/swiss/api-guidelines) bedeuten würde (vollständige Gap-Analyse: `docs/swiss-api-guidelines-gap.md`). Deren zentrale MUST-Regeln fordern eine ressourcenorientierte REST-API (Maturity 2) mit Top-Level-JSON-Objekten und Pagination.
+- **Entscheidung:** `clio` behält die **EventSourcingDB-kompatible, RPC-/NDJSON-Streaming-orientierte** API. Die drei harten Konflikte werden als **bewusste, dokumentierte Abweichungen** geführt: (1) Verb-Endpunkte statt Ressourcen (ESDB-Kompatibilität), (2) NDJSON-Streaming/`observe` statt JSON-Listen+Cursor-Pagination, (3) CloudEvents-„flatcase"-Feldnamen statt durchgängigem camelCase. Konfliktfreie Quick Wins (problem+json, OpenAPI-Meta `x-audience`/`license`/`contact`, `Cache-Control: no-store`, camelCase-Konsistenz eigener Felder) sind als optionaler Folgeschritt vorgemerkt, aber nicht Teil dieser Entscheidung.
+- **Konsequenzen:** `clio` ist **nicht** Swiss-Guidelines-konform und zielt bewusst nicht darauf. Sollte Konformität später nötig werden, wäre der Weg eine **separate REST-Fassade** neben der bestehenden API. Die Abweichungen sind nachvollziehbar begründet (zwei Kernziele: ESDB-Kompatibilität, Streaming).
 
 ---
 
