@@ -37,6 +37,20 @@ laufende Instanz ist der eigentliche Lerneffekt.
    nicht negativ") — sie verlangen Bedingungen beim Schreiben, also genau das,
    was Preconditions absichern.
 
+## Grundlagen 4
+
+1. Die Bearer-Auth ist auf **Collection-Ebene** gesetzt, aber `ping`, `/metrics`
+   und die Negativ-Fälle **überschreiben** sie pro Request mit `noauth`. `ping`
+   ist serverseitig ohnehin ungeschützt; die Negativ-Fälle senden bewusst kein
+   Token, um die `401`/`400`-Antwort (`application/problem+json`) zu prüfen.
+2. Es ist **NDJSON** — ein JSON-Objekt pro Zeile, kein Array. Erkennbar am
+   Response-Header `Content-Type: application/x-ndjson`.
+3. `make smoke` startet eine **eigene Wegwerf-Instanz** auf `:3999` mit
+   temporärer DB und fährt sie hinterher herunter; der Collection Runner läuft
+   gegen die in `baseUrl` hinterlegte (meist `:3000`)-Instanz. Durch den
+   abweichenden Port und die eigene DB kollidiert `make smoke` nicht mit einem
+   laufenden Dev-Server.
+
 ---
 
 ## M01

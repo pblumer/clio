@@ -27,6 +27,11 @@ Du kannst eine event-gesourcte Anwendung gegen Clio entwerfen: vom ersten Event
 | 6 | [M06 — CEL-Abfragen](../module/M06-cel-queries.md) | `run-query` mit Prädikaten über `event.data` |
 | 7 | [M07 — Integrität & Signaturen](../module/M07-integritaet-und-signaturen.md) | `verify`, Hash-Kette, Ed25519 — als Client nutzen |
 
+> **Tooling-Tipp:** [Grundlagen 4 — Postman & Tests](../00-grundlagen/04-postman-und-tests.md)
+> gibt dir alle Endpunkte als klickbare Postman-Collection **plus**
+> automatisierten Smoke-Test (`make smoke` / Newman) — ideal zum Erkunden der
+> API und als Vorlage für eigene Integrationstests.
+
 ## Querschnittsthemen, die du mitnehmen solltest
 
 - **Idempotenz & Ordnung:** Event-IDs sind global monoton — nutze sie als

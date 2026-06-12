@@ -24,6 +24,9 @@ gut ist — und du hast selbst Events geschrieben, gelesen und live beobachtet.
 | 5 | [M02 — Lesen & Filtern](../module/M02-lesen-und-filtern.md) | Streams lesen, `recursive`, Filter |
 | 6 | [M03 — Live beobachten](../module/M03-live-observe.md) | Events in Echtzeit sehen (das „Aha"!) |
 
+> **Lieber klicken statt `curl`?** [Grundlagen 4 — Postman & Tests](../00-grundlagen/04-postman-und-tests.md)
+> zeigt denselben Weg in Postman — optional, jederzeit einschiebbar.
+
 ## Wenn du Lust auf mehr hast
 
 - Dich reizt das **Bauen von Apps**? → weiter mit dem
