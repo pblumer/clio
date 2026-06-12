@@ -81,7 +81,8 @@ kein Prometheus/Grafana nötig, um „mal eben draufzuschauen":
     kontextsensitive Autovervollständigung (inkl. aus echten Events gelernter
     `event.data.*`-Felder), <kbd>Ctrl/Cmd</kbd>+<kbd>Enter</kbd> zum Ausführen,
     Inline-Fehlermeldungen, Scope-/Projektions-Optionen (`recursive`, `limit`,
-    `lowerBound`/`upperBound`, `select`).
+    `lowerBound`/`upperBound`, `select`). Dazu **Verlauf &amp; Favoriten**
+    (persistent im Browser) und **Export** der Ergebnisse als NDJSON oder CSV.
   - **Hilfe** — CEL-Referenz (`event`-Felder, Operatoren/Funktionen,
     Projektion) plus Beispiele, die sich direkt in den Query-Editor laden lassen.
 
