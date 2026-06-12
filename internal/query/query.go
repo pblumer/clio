@@ -7,6 +7,7 @@ package query
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/google/cel-go/cel"
@@ -86,6 +87,88 @@ func (p *Predicate) Eval(ev event.Event) (bool, error) {
 		return false, fmt.Errorf("ergebnis ist kein bool")
 	}
 	return b, nil
+}
+
+// Project reduziert ein Event auf die angegebenen Feldpfade. Jeder Pfad ist
+// punktsepariert (z. B. "id", "data.title", "data.author.name") und bezieht
+// sich auf die JSON-Repräsentation des Events: CloudEvents-Feldnamen auf der
+// obersten Ebene ("id", "subject", "type", "data" …) und beliebige
+// Verschachtelung innerhalb von "data".
+//
+// Die Ausgabe bewahrt die Verschachtelung: "data.title" ergibt
+// {"data":{"title":...}}. Fehlende Felder werden ausgelassen (kein null).
+// Array-Indizierung wird nicht unterstützt; ein Pfad, der durch einen
+// Nicht-Map-Wert führt, gilt als fehlend.
+func Project(ev event.Event, fields []string) (map[string]any, error) {
+	raw, err := json.Marshal(ev)
+	if err != nil {
+		return nil, fmt.Errorf("event serialisieren: %w", err)
+	}
+	var src map[string]any
+	if err := json.Unmarshal(raw, &src); err != nil {
+		return nil, fmt.Errorf("event dekodieren: %w", err)
+	}
+	dst := make(map[string]any)
+	for _, f := range fields {
+		segs := strings.Split(f, ".")
+		if val, ok := lookupPath(src, segs); ok {
+			setPath(dst, segs, val)
+		}
+	}
+	return dst, nil
+}
+
+// ValidateFields prüft, dass jeder Projektionspfad nicht leer ist und keine
+// leeren Segmente enthält (z. B. "data." oder "a..b").
+func ValidateFields(fields []string) error {
+	for _, f := range fields {
+		if f == "" {
+			return fmt.Errorf("select-eintrag darf nicht leer sein")
+		}
+		for _, seg := range strings.Split(f, ".") {
+			if seg == "" {
+				return fmt.Errorf("select-pfad %q hat ein leeres segment", f)
+			}
+		}
+	}
+	return nil
+}
+
+// lookupPath folgt einem Segmentpfad in einer verschachtelten Map und liefert
+// den gefundenen Wert. Führt ein Segment durch einen Nicht-Map-Wert oder fehlt
+// ein Schlüssel, ist der zweite Rückgabewert false.
+func lookupPath(src map[string]any, segs []string) (any, bool) {
+	var cur any = src
+	for _, s := range segs {
+		m, ok := cur.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		v, ok := m[s]
+		if !ok {
+			return nil, false
+		}
+		cur = v
+	}
+	return cur, true
+}
+
+// setPath setzt einen Wert unter einem Segmentpfad und legt dabei fehlende
+// Zwischen-Maps an.
+func setPath(dst map[string]any, segs []string, val any) {
+	cur := dst
+	for i, s := range segs {
+		if i == len(segs)-1 {
+			cur[s] = val
+			return
+		}
+		next, ok := cur[s].(map[string]any)
+		if !ok {
+			next = make(map[string]any)
+			cur[s] = next
+		}
+		cur = next
+	}
 }
 
 // eventToActivation bildet ein Event auf die CEL-Variable `event` ab.

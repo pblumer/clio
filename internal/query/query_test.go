@@ -81,6 +81,90 @@ func TestEvalErrorOnMissingFieldWithoutHas(t *testing.T) {
 	}
 }
 
+func TestValidateFields(t *testing.T) {
+	tests := []struct {
+		name    string
+		fields  []string
+		wantErr bool
+	}{
+		{"leer", nil, false},
+		{"gültige pfade", []string{"id", "data.title", "data.a.b"}, false},
+		{"leerer eintrag", []string{"id", ""}, true},
+		{"führender punkt", []string{".x"}, true},
+		{"nachgestellter punkt", []string{"data."}, true},
+		{"doppelter punkt", []string{"a..b"}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateFields(tt.fields)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("ValidateFields(%v) err=%v, wantErr=%v", tt.fields, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestProject(t *testing.T) {
+	e := event.Event{
+		ID:      "7",
+		Source:  "s",
+		Subject: "/orders/7",
+		Type:    "placed",
+		Data:    json.RawMessage(`{"amount":250,"customer":{"name":"Ada","vip":true}}`),
+	}
+
+	t.Run("top-level und verschachtelt", func(t *testing.T) {
+		got, err := Project(e, []string{"id", "data.amount", "data.customer.name"})
+		if err != nil {
+			t.Fatalf("Project: %v", err)
+		}
+		if got["id"] != "7" {
+			t.Fatalf("id falsch: %+v", got)
+		}
+		data := got["data"].(map[string]any)
+		if data["amount"].(float64) != 250 {
+			t.Fatalf("data.amount falsch: %+v", data)
+		}
+		cust := data["customer"].(map[string]any)
+		if cust["name"] != "Ada" {
+			t.Fatalf("data.customer.name falsch: %+v", cust)
+		}
+		if _, ok := cust["vip"]; ok {
+			t.Fatalf("nicht selektiertes vip erscheint: %+v", cust)
+		}
+		if _, ok := got["type"]; ok {
+			t.Fatalf("nicht selektiertes type erscheint: %+v", got)
+		}
+	})
+
+	t.Run("fehlende felder werden ausgelassen", func(t *testing.T) {
+		got, err := Project(e, []string{"id", "data.fehlt", "nichtVorhanden"})
+		if err != nil {
+			t.Fatalf("Project: %v", err)
+		}
+		if got["id"] != "7" {
+			t.Fatalf("id falsch: %+v", got)
+		}
+		if _, ok := got["data"]; ok {
+			t.Fatalf("fehlendes data.fehlt sollte keine data-map anlegen: %+v", got)
+		}
+		if _, ok := got["nichtVorhanden"]; ok {
+			t.Fatalf("fehlendes top-level-feld sollte fehlen: %+v", got)
+		}
+	})
+
+	t.Run("pfad durch nicht-map gilt als fehlend", func(t *testing.T) {
+		// data.amount ist eine Zahl; data.amount.x kann nicht navigiert werden.
+		got, err := Project(e, []string{"data.amount.x"})
+		if err != nil {
+			t.Fatalf("Project: %v", err)
+		}
+		if len(got) != 0 {
+			t.Fatalf("erwartet leeres ergebnis, bekam %+v", got)
+		}
+	})
+}
+
 func TestCompileCaches(t *testing.T) {
 	c := mustCompiler(t)
 	p1, _ := c.Compile("event.type == 'x'")

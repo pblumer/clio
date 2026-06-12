@@ -260,6 +260,13 @@ paths:
         `upperBound`) und filtert sie mit dem CEL-Ausdruck `where` über die
         Variable `event` (z. B. `event.type == 'placed' && event.data.amount > 100`).
         Leeres `where` = alle im Scope. Ergebnis als NDJSON.
+
+        Optionale **Projektion** via `select`: eine Liste punktseparierter
+        Feldpfade (z. B. `["id", "data.title"]`). Ist `select` gesetzt, enthält
+        jede Zeile nur die gewählten Felder; die Verschachtelung bleibt erhalten
+        (`data.title` → `{"data":{"title":...}}`). Fehlende Felder werden
+        ausgelassen (kein `null`). Array-Indizierung wird nicht unterstützt. Ohne
+        `select` wird das volle Event zurückgegeben.
       requestBody:
         required: true
         content:
@@ -274,15 +281,27 @@ paths:
                 lowerBound: { type: string }
                 upperBound: { type: string }
                 limit: { type: integer, description: "max. Treffer; 0 = unbegrenzt" }
+                select:
+                  type: array
+                  items: { type: string }
+                  description: "Feldpfade für Projektion; leer = volles Event"
+                  example: ["id", "subject", "data.amount"]
             examples:
               filter:
                 value:
                   subject: "/orders"
                   recursive: true
                   where: "event.type == 'placed' && has(event.data.amount) && event.data.amount > 100"
+              projektion:
+                value:
+                  subject: "/orders"
+                  recursive: true
+                  select: ["id", "subject", "data.amount"]
       responses:
         "200":
-          description: Passende Events als NDJSON
+          description: |
+            Passende Events als NDJSON. Bei gesetztem `select` enthält jede Zeile
+            nur die projizierten Felder statt des vollen Events.
           content:
             application/x-ndjson:
               schema: { $ref: "#/components/schemas/EventStream" }

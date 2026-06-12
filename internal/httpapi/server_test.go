@@ -243,6 +243,57 @@ func TestRunQuery(t *testing.T) {
 	}
 }
 
+func TestRunQueryProjection(t *testing.T) {
+	srv := newTestServer(t)
+	do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token",
+		`{"events":[
+			{"source":"s","subject":"/orders/1","type":"placed","data":{"amount":250,"customer":{"name":"Ada"}}},
+			{"source":"s","subject":"/orders/2","type":"placed"}
+		]}`)
+
+	// Feldliste: id (top-level) + verschachtelte data-Pfade.
+	rec := do(t, srv, http.MethodPost, "/api/v1/run-query", "secret-token",
+		`{"subject":"/orders","recursive":true,"select":["id","subject","data.amount","data.customer.name"]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; %s", rec.Code, rec.Body.String())
+	}
+	rows := decodeNDJSONMaps(t, rec.Body.String())
+	if len(rows) != 2 {
+		t.Fatalf("zeilen = %d, want 2", len(rows))
+	}
+
+	// Erste Zeile (/orders/1): alle Felder vorhanden, verschachtelt projiziert.
+	r0 := rows[0]
+	if r0["id"] != "1" || r0["subject"] != "/orders/1" {
+		t.Fatalf("top-level falsch projiziert: %+v", r0)
+	}
+	data0, ok := r0["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("data nicht verschachtelt: %+v", r0["data"])
+	}
+	if data0["amount"].(float64) != 250 {
+		t.Fatalf("data.amount falsch: %+v", data0["amount"])
+	}
+	cust, ok := data0["customer"].(map[string]any)
+	if !ok || cust["name"] != "Ada" {
+		t.Fatalf("data.customer.name falsch projiziert: %+v", data0)
+	}
+	// Nicht selektierte Felder dürfen nicht erscheinen.
+	if _, exists := r0["type"]; exists {
+		t.Fatalf("nicht selektiertes feld type erscheint: %+v", r0)
+	}
+
+	// Zweite Zeile (/orders/2 ohne data): fehlende felder werden ausgelassen,
+	// kein null. Nur id und subject sind vorhanden.
+	r1 := rows[1]
+	if r1["id"] != "2" || r1["subject"] != "/orders/2" {
+		t.Fatalf("zweite zeile top-level falsch: %+v", r1)
+	}
+	if _, exists := r1["data"]; exists {
+		t.Fatalf("data sollte bei fehlenden feldern fehlen, nicht null: %+v", r1)
+	}
+}
+
 func TestRunQueryBadRequest(t *testing.T) {
 	srv := newTestServer(t)
 	tests := []string{
@@ -251,6 +302,8 @@ func TestRunQueryBadRequest(t *testing.T) {
 		`{"subject":"/o","where":"event.type"}`,     // nicht-bool
 		`{"subject":"/o","limit":-1}`,               // negatives limit
 		`{"subject":"/o","lowerBound":"x"}`,         // ungültige grenze
+		`{"subject":"/o","select":[""]}`,            // leerer select-eintrag
+		`{"subject":"/o","select":["data."]}`,       // select-pfad mit leerem segment
 	}
 	for _, body := range tests {
 		rec := do(t, srv, http.MethodPost, "/api/v1/run-query", "secret-token", body)
@@ -967,6 +1020,26 @@ func decodeNDJSON(t *testing.T, body string) []event.Event {
 			t.Fatalf("ndjson-zeile dekodieren: %v (%q)", err, line)
 		}
 		out = append(out, ev)
+	}
+	return out
+}
+
+// decodeNDJSONMaps dekodiert NDJSON-Zeilen als generische Objekte — für
+// projizierte run-query-Ausgaben, die keine vollen Events sind.
+func decodeNDJSONMaps(t *testing.T, body string) []map[string]any {
+	t.Helper()
+	var out []map[string]any
+	sc := bufio.NewScanner(strings.NewReader(body))
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" {
+			continue
+		}
+		var m map[string]any
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			t.Fatalf("ndjson-zeile dekodieren: %v (%q)", err, line)
+		}
+		out = append(out, m)
 	}
 	return out
 }
