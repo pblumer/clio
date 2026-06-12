@@ -1,0 +1,292 @@
+{
+  "info": {
+    "name": "cliostore API",
+    "_postman_id": "c1107000-0000-4000-8000-000000000001",
+    "description": "Aus internal/apidocs/openapi.yaml abgeleitete Collection fuer cliostore.\n\nQuelle der Wahrheit bleibt die OpenAPI-Spec. Regenerieren mit `make postman-gen`,\nheadless ausfuehren mit `make smoke`.\n\nVariablen:\n- baseUrl: z. B. http://localhost:3000\n- token:   Bearer-Token (CLIO_API_TOKEN)\n\nDie Requests sind so geordnet, dass sie als Smoke-Test in einem Rutsch laufen:\nschreiben -> lesen -> abfragen -> verifizieren.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [{ "key": "token", "value": "{{token}}", "type": "string" }]
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:3000" },
+    { "key": "smokeSubject", "value": "/smoke/books/42" },
+    { "key": "lastEventId", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "System",
+      "item": [
+        {
+          "name": "Ping (Liveness)",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/v1/ping", "host": ["{{baseUrl}}"], "path": ["api", "v1", "ping"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('status=ok', () => pm.expect(pm.response.json().status).to.eql('ok'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Metrics (Prometheus)",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/metrics", "host": ["{{baseUrl}}"], "path": ["metrics"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('Prometheus-Textformat', () => pm.expect(pm.response.text()).to.include('# HELP'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Events",
+      "item": [
+        {
+          "name": "Write events",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"events\": [\n    {\n      \"source\": \"https://library.example.io\",\n      \"subject\": \"{{smokeSubject}}\",\n      \"type\": \"io.example.library.book-acquired\",\n      \"data\": { \"title\": \"Dune\", \"author\": \"Herbert\" }\n    }\n  ]\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/v1/write-events", "host": ["{{baseUrl}}"], "path": ["api", "v1", "write-events"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('NDJSON Content-Type', () => pm.expect(pm.response.headers.get('Content-Type')).to.include('application/x-ndjson'));",
+                  "const lines = pm.response.text().trim().split('\\n').filter(Boolean);",
+                  "pm.test('mindestens ein Event zurueck', () => pm.expect(lines.length).to.be.above(0));",
+                  "const first = JSON.parse(lines[0]);",
+                  "pm.test('Event hat id und hash', () => { pm.expect(first).to.have.property('id'); pm.expect(first).to.have.property('hash'); });",
+                  "pm.collectionVariables.set('lastEventId', String(first.id));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Read events",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"subject\": \"{{smokeSubject}}\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/v1/read-events", "host": ["{{baseUrl}}"], "path": ["api", "v1", "read-events"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const lines = pm.response.text().trim().split('\\n').filter(Boolean);",
+                  "pm.test('zuvor geschriebenes Event ist lesbar', () => {",
+                  "  const ids = lines.map(l => String(JSON.parse(l).id));",
+                  "  pm.expect(ids).to.include(pm.collectionVariables.get('lastEventId'));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Run query (CEL)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"subject\": \"/smoke\",\n  \"recursive\": true,\n  \"where\": \"event.type == 'io.example.library.book-acquired'\",\n  \"select\": [\"id\", \"subject\", \"data.title\"]\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/v1/run-query", "host": ["{{baseUrl}}"], "path": ["api", "v1", "run-query"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const lines = pm.response.text().trim().split('\\n').filter(Boolean);",
+                  "pm.test('mindestens ein Treffer', () => pm.expect(lines.length).to.be.above(0));",
+                  "pm.test('Projektion liefert data.title', () => pm.expect(JSON.parse(lines[0]).data).to.have.property('title'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Read event types",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/v1/read-event-types", "host": ["{{baseUrl}}"], "path": ["api", "v1", "read-event-types"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const lines = pm.response.text().trim().split('\\n').filter(Boolean);",
+                  "pm.test('book-acquired ist gelistet', () => {",
+                  "  const types = lines.map(l => JSON.parse(l).type);",
+                  "  pm.expect(types).to.include('io.example.library.book-acquired');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Events by subject (GET-Pfad)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/events/smoke/books/42",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "events", "smoke", "books", "42"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('NDJSON Content-Type', () => pm.expect(pm.response.headers.get('Content-Type')).to.include('application/x-ndjson'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Verify (Hash-Kette)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/v1/verify", "host": ["{{baseUrl}}"], "path": ["api", "v1", "verify"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('Kette intakt (ok=true)', () => pm.expect(pm.response.json().ok).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Public key",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/v1/public-key", "host": ["{{baseUrl}}"], "path": ["api", "v1", "public-key"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 (Signieren aktiv) oder 404 (inaktiv)', () => pm.expect(pm.response.code).to.be.oneOf([200, 404]));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Negativ-Faelle",
+      "item": [
+        {
+          "name": "Read events ohne Token -> 401",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"subject\": \"{{smokeSubject}}\"\n}" },
+            "url": { "raw": "{{baseUrl}}/api/v1/read-events", "host": ["{{baseUrl}}"], "path": ["api", "v1", "read-events"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401 Unauthorized', () => pm.response.to.have.status(401));",
+                  "pm.test('problem+json', () => pm.expect(pm.response.headers.get('Content-Type')).to.include('application/problem+json'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Write events ungueltig -> 400",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"events\": []\n}" },
+            "url": { "raw": "{{baseUrl}}/api/v1/write-events", "host": ["{{baseUrl}}"], "path": ["api", "v1", "write-events"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 Bad Request', () => pm.response.to.have.status(400));",
+                  "pm.test('problem+json mit Cache-Control: no-store', () => {",
+                  "  pm.expect(pm.response.headers.get('Content-Type')).to.include('application/problem+json');",
+                  "  pm.expect(pm.response.headers.get('Cache-Control')).to.include('no-store');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

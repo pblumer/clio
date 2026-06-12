@@ -60,6 +60,38 @@ eingebettet, kein Internet nötig:
 - **`http://127.0.0.1:3000/openapi.yaml`** — die OpenAPI-3-Spezifikation zum
   Import in eigene Tools (Postman, Insomnia, Codegen).
 
+### Postman & Smoke-Test (Newman)
+
+Quelle der Wahrheit ist die OpenAPI-Spec (`internal/apidocs/openapi.yaml`).
+Daraus abgeleitet liegt unter `postman/` eine fertige Collection inkl.
+Test-Skripten:
+
+- `postman/clio.postman_collection.json` — alle Endpunkte, geordnet als
+  Durchlauf (schreiben → lesen → abfragen → verifizieren) mit `pm.test`-Checks
+  (Status-Codes, NDJSON/`problem+json`-Header, Hash-Ketten-Integrität).
+- `postman/local.postman_environment.json` — `baseUrl` + `token`.
+
+**In Postman:** beide Dateien importieren (oder direkt die laufende
+`…/openapi.yaml` importieren, um die Endpunkte zu generieren), Environment
+wählen, „Send".
+
+**Headless / CI per Knopfdruck:**
+
+```bash
+make smoke   # baut das Binary, startet den Server auf :3999 (temp-DB),
+             # führt die Collection per Newman aus, fährt sauber herunter
+```
+
+`make smoke` braucht nur `npx` (Node) — Newman wird bei Bedarf geholt. Port und
+Token sind über `SMOKE_PORT` / `SMOKE_TOKEN` überschreibbar.
+
+Nach Änderungen an der Spec lässt sich das Gerüst der Collection regenerieren
+(die gepflegten `pm.test`-Skripte ergänzt man danach von Hand):
+
+```bash
+make postman-gen
+```
+
 ### Single-Binaries für alle Plattformen
 
 ```bash

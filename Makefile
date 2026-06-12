@@ -11,7 +11,7 @@ DIST    := dist
 # Zielplattformen für die Cross-Builds (Single-Binary, statisch gelinkt).
 PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64
 
-.PHONY: all build run test race bench cover vet fmt fmt-check lint dist docker clean
+.PHONY: all build run test race bench cover vet fmt fmt-check lint dist docker clean smoke postman-gen
 
 all: lint test build
 
@@ -30,6 +30,18 @@ test:
 ## race: Tests mit Race-Detector
 race:
 	go test -race ./...
+
+## smoke: Server starten + Postman-Collection per Newman ausfuehren (braucht npx)
+smoke:
+	./scripts/smoke.sh
+
+## postman-gen: Postman-Collection aus der OpenAPI-Spec neu generieren (braucht npx)
+postman-gen:
+	npx --yes openapi-to-postmanv2 \
+		-s internal/apidocs/openapi.yaml \
+		-o postman/clio.postman_collection.json -p
+	@echo "Hinweis: Tests/Variablen werden beim Generieren NICHT erzeugt —"
+	@echo "die gepflegte Collection enthaelt zusaetzlich pm.test-Skripte."
 
 ## bench: Store-Benchmarks
 bench:
