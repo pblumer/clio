@@ -24,6 +24,7 @@ import (
 	"github.com/pblumer/clio/internal/pubsub"
 	"github.com/pblumer/clio/internal/query"
 	"github.com/pblumer/clio/internal/store"
+	"github.com/pblumer/clio/internal/webui"
 )
 
 // ndjsonContentType ist der Content-Type für Newline-Delimited JSON.
@@ -180,6 +181,14 @@ func (s *Server) routes() {
 	// `GET /api/v1/events` ohne Subject = Wurzel (alle Events).
 	s.mux.HandleFunc("GET /api/v1/events", s.requireAuth(s.handleEventsPath))
 	s.mux.HandleFunc("GET /api/v1/events/{subject...}", s.requireAuth(s.handleEventsPath))
+
+	// Betriebs-Dashboard (ADR-020): statische, eingebettete Seite unter /ui.
+	// Wie /docs bewusst ohne Auth (nicht sensibel); die Daten holt die Seite
+	// clientseitig von /api/v1/info (Bearer-Token) und /metrics.
+	s.mux.Handle("GET /ui", webui.Handler())
+	s.mux.HandleFunc("GET /ui/", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/ui", http.StatusMovedPermanently)
+	})
 
 	// API-Doku: OpenAPI-Spec + interaktive UI. Bewusst ohne Auth (nicht
 	// sensibel); „Try it out" nutzt das Bearer-Token, das der Nutzer eingibt.

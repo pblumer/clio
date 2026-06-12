@@ -60,6 +60,19 @@ eingebettet, kein Internet nötig:
 - **`http://127.0.0.1:3000/openapi.yaml`** — die OpenAPI-3-Spezifikation zum
   Import in eigene Tools (Postman, Insomnia, Codegen).
 
+### Betriebs-Dashboard (`/ui`)
+
+Ein schlankes, ebenfalls eingebettetes Dashboard für Monitoring & Observing —
+kein Prometheus/Grafana nötig, um „mal eben draufzuschauen":
+
+- **`http://127.0.0.1:3000/ui`** — Bearer-Token eingeben, **Verbinden** — zeigt
+  Events total, DB-Größe, aktive Observer, Uptime, Request-Rate und Latenz
+  (p50/p99) mit wählbarem Auto-Refresh. Statische Seite (Vanilla JS, kein
+  Build-Step), die `/api/v1/info` und `/metrics` derselben Instanz liest.
+
+Scope & Roadmap (Live-Event-Viewer, Subject-Browser) stehen in
+[`docs/web-ui-scope.md`](./docs/web-ui-scope.md) (ADR-020).
+
 ### Single-Binaries für alle Plattformen
 
 ```bash
