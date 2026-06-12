@@ -66,6 +66,10 @@ die lauffähigen Skripte liegen unter [`examples/`](../../examples/).
 > und als **`.ps1`** (native PowerShell, 5.1 / 7+ — kein curl nötig). Quickstart
 > und READMEs zeigen beide Wege nebeneinander.
 
+> **Lieber grafisch?** [`00-grundlagen/04-postman-und-tests.md`](00-grundlagen/04-postman-und-tests.md)
+> zeigt dieselbe API als klickbare **Postman**-Collection samt automatisiertem
+> Smoke-Test (`make smoke` / Newman).
+
 Viel Erfolg — und denk dran: In einem Event Store geht nichts verloren. 🕰️
 
 ---
