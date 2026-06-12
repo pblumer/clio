@@ -1,6 +1,6 @@
 # Web-UI — Machbarkeits- & Scope-Skizze
 
-> Status: **Stufe 1 (Dashboard) umgesetzt** · Stufen 2–4 skizziert.
+> Status: **Stufen 1 (Dashboard) + 2 (Live-Event-Viewer) umgesetzt** · Stufen 3–4 skizziert.
 > Zugehörige Entscheidung: **ADR-020** in [`ARCHITECTURE.md`](../ARCHITECTURE.md).
 
 Ein schlankes Web-UI für **Maintenance, Observing, Monitoring** — ohne Clios
@@ -61,10 +61,13 @@ Precondition-Fehler, HTTP-Anfragen + clientseitig berechnete Rate, Latenz
 p50/p99. Token-Eingabe (im Tab via `sessionStorage`), wählbares
 Auto-Refresh-Intervall, Status-/Fehleranzeige.
 
-### Stufe 2 — Live Event-Viewer  ⏳ vorgesehen
-Subject-Eingabe → `observe-events` per Stream → Events tröpfeln live rein, mit
-Typ-Filter, Pause/Resume und „History laden". Das „Wow", weil Clio ein
-*Event*-Store ist und man das heute nur per `curl` sieht.
+### Stufe 2 — Live Event-Viewer  ✅ umgesetzt
+Zweiter Tab im `/ui`. Subject-Eingabe → `GET …/events/<subject>?watch=true`
+per `fetch()`-Stream (ReadableStream-Reader, inkrementelles NDJSON-Parsing;
+EventSource scheidet wegen Bearer-Header aus) → erst History, dann live, mit
+Typ-Filter, rekursiv-Schalter, Pause/Fortsetzen (gepuffert, „N neue"-Badge) und
+aufklappbarer `data` je Event. Kein neuer Server-Code — nutzt den bestehenden
+Streaming-Endpunkt.
 
 ### Stufe 3 — Subject-Browser  ⏳ vorgesehen
 Read-only Explorer über den Subject-Baum (`recursive`), Event-Typen pro Subject

@@ -65,12 +65,16 @@ eingebettet, kein Internet nötig:
 Ein schlankes, ebenfalls eingebettetes Dashboard für Monitoring & Observing —
 kein Prometheus/Grafana nötig, um „mal eben draufzuschauen":
 
-- **`http://127.0.0.1:3000/ui`** — Bearer-Token eingeben, **Verbinden** — zeigt
-  Events total, DB-Größe, aktive Observer, Uptime, Request-Rate und Latenz
-  (p50/p99) mit wählbarem Auto-Refresh. Statische Seite (Vanilla JS, kein
-  Build-Step), die `/api/v1/info` und `/metrics` derselben Instanz liest.
+- **`http://127.0.0.1:3000/ui`** — Bearer-Token eingeben, **Verbinden**. Statische
+  Seite (Vanilla JS, kein Build-Step) mit zwei Tabs:
+  - **Dashboard** — Events total, DB-Größe, aktive Observer, Uptime,
+    Request-Rate und Latenz (p50/p99) mit wählbarem Auto-Refresh; liest
+    `/api/v1/info` und `/metrics` derselben Instanz.
+  - **Live-Events** — streamt `GET /api/v1/events/<subject>?watch=true`
+    (erst History, dann live) mit Subject-/Typ-Filter, Pause/Fortsetzen und
+    aufklappbarer `data` je Event.
 
-Scope & Roadmap (Live-Event-Viewer, Subject-Browser) stehen in
+Scope & Roadmap (Subject-Browser) stehen in
 [`docs/web-ui-scope.md`](./docs/web-ui-scope.md) (ADR-020).
 
 ### Single-Binaries für alle Plattformen

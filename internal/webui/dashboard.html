@@ -26,16 +26,30 @@
   .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
   .dot.ok { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
   .dot.err { background: var(--err); box-shadow: 0 0 8px var(--err); }
+  .dot.live { background: var(--accent); box-shadow: 0 0 8px var(--accent); animation: pulse 1.4s infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
   .spacer { flex: 1; }
   input, select, button {
     font: inherit; color: var(--fg); background: var(--panel-2);
     border: 1px solid var(--border); border-radius: 7px; padding: 7px 10px;
   }
-  input { min-width: 220px; }
+  input { min-width: 200px; }
+  input.short { min-width: 90px; }
   button { cursor: pointer; }
   button:hover { border-color: var(--accent); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
   button.primary { background: var(--accent); color: #0b1020; border-color: var(--accent); font-weight: 600; }
+  label.inline { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+  nav.tabs { display: flex; gap: 4px; padding: 0 20px; background: var(--panel); border-bottom: 1px solid var(--border); }
+  nav.tabs button {
+    background: none; border: none; border-bottom: 2px solid transparent; border-radius: 0;
+    padding: 11px 14px; color: var(--muted); font-weight: 600;
+  }
+  nav.tabs button.active { color: var(--fg); border-bottom-color: var(--accent); }
+  nav.tabs button:hover { color: var(--fg); }
   main { padding: 20px; max-width: 1100px; margin: 0 auto; }
+  .view { display: none; }
+  .view.active { display: block; }
   .grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
   .card {
     background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
@@ -55,51 +69,96 @@
   footer { color: var(--muted); font-size: 12px; text-align: center; padding: 24px; }
   a { color: var(--accent); text-decoration: none; }
   a:hover { text-decoration: underline; }
+  /* Live-Viewer */
+  .controls { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
+  .badge { background: var(--panel-2); border: 1px solid var(--border); border-radius: 20px; padding: 3px 10px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .badge.pending { border-color: var(--accent); color: var(--accent); cursor: pointer; }
+  #events { display: flex; flex-direction: column; gap: 6px; }
+  .ev { background: var(--panel); border: 1px solid var(--border); border-radius: 9px; padding: 9px 12px; }
+  .ev-head { display: flex; gap: 10px; align-items: baseline; cursor: pointer; font-family: var(--mono); font-size: 13px; }
+  .ev-id { color: var(--muted); min-width: 52px; }
+  .ev-type { color: #0b1020; background: var(--accent); border-radius: 5px; padding: 1px 7px; font-weight: 600; font-size: 12px; }
+  .ev-subject { color: var(--fg); flex: 1; word-break: break-all; }
+  .ev-time { color: var(--muted); font-size: 12px; white-space: nowrap; }
+  .ev-data { margin: 8px 0 0; padding: 9px 11px; background: var(--bg); border: 1px solid var(--border); border-radius: 7px;
+             font-family: var(--mono); font-size: 12px; white-space: pre-wrap; word-break: break-word; display: none; }
+  .ev.open .ev-data { display: block; }
+  .empty { color: var(--muted); text-align: center; padding: 40px; }
 </style>
 </head>
 <body>
 <header>
-  <h1>clio <span class="muse">· Betriebs-Dashboard</span></h1>
+  <h1>clio <span class="muse">· Betrieb</span></h1>
   <span class="status"><span id="dot" class="dot"></span><span id="statusText">getrennt</span></span>
   <span class="spacer"></span>
   <input id="token" type="password" placeholder="Bearer-Token" autocomplete="off" spellcheck="false">
-  <select id="interval" title="Aktualisierungsintervall">
-    <option value="2000">2&nbsp;s</option>
-    <option value="5000" selected>5&nbsp;s</option>
-    <option value="10000">10&nbsp;s</option>
-    <option value="0">manuell</option>
-  </select>
   <button id="connect" class="primary">Verbinden</button>
 </header>
 
+<nav class="tabs">
+  <button id="tab-dashboard" class="active" data-view="dashboard">Dashboard</button>
+  <button id="tab-live" data-view="live">Live-Events</button>
+</nav>
+
 <main>
-  <div id="notice" class="notice">
-    Token eingeben und <strong>Verbinden</strong> — die Seite ist statisch und
-    spricht dieselbe Instanz an (<code>/api/v1/info</code> + <code>/metrics</code>).
-    Das Token bleibt nur im Tab (sessionStorage).
+  <!-- ============ Dashboard ============ -->
+  <div id="view-dashboard" class="view active">
+    <div id="notice" class="notice">
+      Token eingeben und <strong>Verbinden</strong> — die Seite ist statisch und
+      spricht dieselbe Instanz an (<code>/api/v1/info</code> + <code>/metrics</code>).
+      Das Token bleibt nur im Tab (sessionStorage).
+      <span style="float:right"><label class="inline">Auto-Refresh
+        <select id="interval">
+          <option value="2000">2&nbsp;s</option>
+          <option value="5000" selected>5&nbsp;s</option>
+          <option value="10000">10&nbsp;s</option>
+          <option value="0">manuell</option>
+        </select></label></span>
+    </div>
+
+    <div class="grid">
+      <div class="card"><div class="label">Events gesamt</div><div id="m-events" class="value">–</div><div id="m-events-sub" class="sub">gespeichert</div></div>
+      <div class="card"><div class="label">DB-Größe</div><div id="m-dbsize" class="value">–</div><div class="sub">Datenbankdatei</div></div>
+      <div class="card"><div class="label">Aktive Observer</div><div id="m-observers" class="value">–</div><div class="sub">offene Streams</div></div>
+      <div class="card"><div class="label">Uptime</div><div id="m-uptime" class="value">–</div><div id="m-started" class="sub">seit Start</div></div>
+      <div class="card"><div class="label">HTTP-Anfragen</div><div id="m-requests" class="value">–</div><div id="m-rate" class="sub">gesamt</div></div>
+      <div class="card"><div class="label">Latenz p50 / p99</div><div id="m-latency" class="value mono">–</div><div class="sub">geschätzt aus Histogramm</div></div>
+      <div class="card"><div class="label">Geschriebene Events</div><div id="m-written" class="value">–</div><div class="sub">seit Start</div></div>
+      <div class="card"><div class="label">Precondition-Fehler</div><div id="m-pc" class="value">–</div><div class="sub">HTTP 409</div></div>
+    </div>
+
+    <section>
+      <h2>Instanz</h2>
+      <dl class="kv">
+        <dt>Version</dt><dd id="i-version">–</dd>
+        <dt>Sync-Modus</dt><dd id="i-sync">–</dd>
+        <dt>Listen-Adresse</dt><dd id="i-addr">–</dd>
+        <dt>Datenbankpfad</dt><dd id="i-db">–</dd>
+        <dt>Serverzeit</dt><dd id="i-time">–</dd>
+      </dl>
+    </section>
   </div>
 
-  <div class="grid">
-    <div class="card"><div class="label">Events gesamt</div><div id="m-events" class="value">–</div><div id="m-events-sub" class="sub">gespeichert</div></div>
-    <div class="card"><div class="label">DB-Größe</div><div id="m-dbsize" class="value">–</div><div class="sub">Datenbankdatei</div></div>
-    <div class="card"><div class="label">Aktive Observer</div><div id="m-observers" class="value">–</div><div class="sub">offene Streams</div></div>
-    <div class="card"><div class="label">Uptime</div><div id="m-uptime" class="value">–</div><div id="m-started" class="sub">seit Start</div></div>
-    <div class="card"><div class="label">HTTP-Anfragen</div><div id="m-requests" class="value">–</div><div id="m-rate" class="sub">gesamt</div></div>
-    <div class="card"><div class="label">Latenz p50 / p99</div><div id="m-latency" class="value mono">–</div><div class="sub">geschätzt aus Histogramm</div></div>
-    <div class="card"><div class="label">Geschriebene Events</div><div id="m-written" class="value">–</div><div class="sub">seit Start</div></div>
-    <div class="card"><div class="label">Precondition-Fehler</div><div id="m-pc" class="value">–</div><div class="sub">HTTP 409</div></div>
+  <!-- ============ Live-Events ============ -->
+  <div id="view-live" class="view">
+    <div class="controls">
+      <input id="live-subject" placeholder="Subject (z. B. /books/42)" value="/" spellcheck="false">
+      <label class="inline"><input id="live-recursive" type="checkbox" checked> rekursiv</label>
+      <input id="live-types" class="short" placeholder="Typen (Komma)" spellcheck="false" style="min-width:160px">
+      <button id="live-start" class="primary">Beobachten</button>
+      <button id="live-pause" disabled>Pause</button>
+      <button id="live-clear">Leeren</button>
+      <span class="spacer"></span>
+      <span id="live-count" class="badge">0 Events</span>
+      <span id="live-pending" class="badge pending" style="display:none">0 neue</span>
+    </div>
+    <div id="live-notice" class="notice">
+      Beobachtet <code>GET /api/v1/events/&lt;subject&gt;?watch=true</code>: zuerst die
+      passende History, dann live nachgeliefert. Zeile anklicken zeigt die
+      <code>data</code>. Neueste oben, max. 500 angezeigt.
+    </div>
+    <div id="events"><div class="empty">Noch nichts beobachtet.</div></div>
   </div>
-
-  <section>
-    <h2>Instanz</h2>
-    <dl class="kv">
-      <dt>Version</dt><dd id="i-version">–</dd>
-      <dt>Sync-Modus</dt><dd id="i-sync">–</dd>
-      <dt>Listen-Adresse</dt><dd id="i-addr">–</dd>
-      <dt>Datenbankpfad</dt><dd id="i-db">–</dd>
-      <dt>Serverzeit</dt><dd id="i-time">–</dd>
-    </dl>
-  </section>
 
   <footer>
     clio · <a href="/docs">API-Doku</a> · <a href="/metrics">/metrics</a> ·
@@ -113,7 +172,6 @@ const $ = (id) => document.getElementById(id);
 const tokenInput = $("token"), intervalSel = $("interval");
 let timer = null, lastReqTotal = null, lastReqAt = null;
 
-// Token im Tab merken (nicht persistent über Tabs hinweg).
 tokenInput.value = sessionStorage.getItem("clioToken") || "";
 
 function setStatus(state, text) {
@@ -144,8 +202,17 @@ function fmtMs(sec) {
   return ms < 10 ? ms.toFixed(2) + " ms" : ms < 1000 ? ms.toFixed(1) + " ms" : (ms / 1000).toFixed(2) + " s";
 }
 
-// Minimaler Parser für das Prometheus-Textformat: liefert je Metrikname eine
-// Liste {labels, value}.
+// ---------- Tabs ----------
+function switchView(name) {
+  for (const v of ["dashboard", "live"]) {
+    $("view-" + v).classList.toggle("active", v === name);
+    $("tab-" + v).classList.toggle("active", v === name);
+  }
+}
+document.querySelectorAll("nav.tabs button").forEach((b) =>
+  b.addEventListener("click", () => switchView(b.dataset.view)));
+
+// ---------- Dashboard ----------
 function parseProm(text) {
   const out = {};
   for (const raw of text.split("\n")) {
@@ -168,8 +235,6 @@ function parseProm(text) {
 function gauge(m, name) { return m[name] && m[name].length ? m[name][0].value : null; }
 function sum(m, name) { return (m[name] || []).reduce((a, s) => a + s.value, 0); }
 
-// Quantil-Schätzung aus dem kumulativen Histogramm (lineare Interpolation im
-// Treffer-Bucket) — dieselbe Idee wie histogram_quantile in PromQL.
 function quantile(buckets, count, q) {
   if (!buckets || !buckets.length || !count) return null;
   const sorted = buckets
@@ -205,11 +270,11 @@ async function refresh() {
     const info = await infoRes.json();
     const m = parseProm(await metricsRes.text());
     render(info, m);
-    setStatus("ok", "verbunden");
+    if (!live.active) setStatus("ok", "verbunden");
     clearNotice();
     $("lastUpdate").textContent = "aktualisiert " + new Date().toLocaleTimeString("de-CH");
   } catch (e) {
-    setStatus("err", "Fehler");
+    if (!live.active) setStatus("err", "Fehler");
     markNotice("Verbindung fehlgeschlagen: " + e.message, true);
   }
 }
@@ -264,7 +329,135 @@ $("connect").addEventListener("click", connect);
 tokenInput.addEventListener("keydown", (e) => { if (e.key === "Enter") connect(); });
 intervalSel.addEventListener("change", schedule);
 
-// Auto-Start, falls bereits ein Token im Tab liegt.
+// ---------- Live-Event-Viewer ----------
+const MAX_ROWS = 500;
+const live = { active: false, ctrl: null, paused: false, pending: [], count: 0 };
+const eventsEl = $("events");
+
+function liveStatus(state, text) {
+  // Live-Status hat Vorrang in der Kopfzeile, solange der Stream läuft.
+  setStatus(state, text);
+}
+function buildPath() {
+  const subj = $("live-subject").value.trim();
+  let path = "/api/v1/events";
+  if (subj && subj !== "/") {
+    const parts = subj.replace(/^\/+/, "").split("/").filter(Boolean).map(encodeURIComponent);
+    if (parts.length) path += "/" + parts.join("/");
+  }
+  const p = new URLSearchParams();
+  p.set("watch", "true");
+  p.set("recursive", $("live-recursive").checked ? "true" : "false");
+  for (const t of $("live-types").value.split(",").map((s) => s.trim()).filter(Boolean)) p.append("type", t);
+  return path + "?" + p.toString();
+}
+function renderEvent(ev) {
+  const row = document.createElement("div");
+  row.className = "ev";
+  const head = document.createElement("div");
+  head.className = "ev-head";
+  head.innerHTML =
+    `<span class="ev-id">#${ev.id ?? "?"}</span>` +
+    `<span class="ev-type"></span>` +
+    `<span class="ev-subject"></span>` +
+    `<span class="ev-time"></span>`;
+  head.children[1].textContent = ev.type ?? "?";
+  head.children[2].textContent = ev.subject ?? "";
+  head.children[3].textContent = ev.time ? new Date(ev.time).toLocaleTimeString("de-CH") : "";
+  row.appendChild(head);
+  if (ev.data !== undefined) {
+    const pre = document.createElement("pre");
+    pre.className = "ev-data";
+    pre.textContent = JSON.stringify(ev.data, null, 2);
+    row.appendChild(pre);
+    head.addEventListener("click", () => row.classList.toggle("open"));
+  }
+  return row;
+}
+function appendEvent(ev) {
+  if (live.count === 0) eventsEl.innerHTML = "";
+  eventsEl.insertBefore(renderEvent(ev), eventsEl.firstChild);
+  live.count++;
+  while (eventsEl.children.length > MAX_ROWS) eventsEl.removeChild(eventsEl.lastChild);
+  $("live-count").textContent = fmtInt(live.count) + " Events";
+}
+function handleEvent(ev) {
+  if (live.paused) {
+    live.pending.push(ev);
+    const pe = $("live-pending");
+    pe.style.display = ""; pe.textContent = fmtInt(live.pending.length) + " neue";
+  } else {
+    appendEvent(ev);
+  }
+}
+function flushPending() {
+  for (const ev of live.pending) appendEvent(ev);
+  live.pending = [];
+  $("live-pending").style.display = "none";
+}
+
+async function startLive() {
+  const token = tokenInput.value.trim();
+  if (!token) { liveStatus("err", "Token fehlt"); return; }
+  sessionStorage.setItem("clioToken", token);
+  live.active = true; live.ctrl = new AbortController();
+  $("live-start").textContent = "Stoppen";
+  $("live-pause").disabled = false;
+  $("live-subject").disabled = $("live-recursive").disabled = $("live-types").disabled = true;
+  liveStatus("live", "live: beobachte " + ($("live-subject").value.trim() || "/"));
+  try {
+    const res = await fetch(buildPath(), {
+      headers: { Authorization: "Bearer " + token }, signal: live.ctrl.signal, cache: "no-store",
+    });
+    if (res.status === 401) { liveStatus("err", "Token ungültig (401)"); stopLive(); return; }
+    if (!res.ok || !res.body) throw new Error("HTTP " + res.status);
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl); buf = buf.slice(nl + 1);
+        if (line.trim()) { try { handleEvent(JSON.parse(line)); } catch (_) { /* Teilzeile ignorieren */ } }
+      }
+    }
+    // Stream regulär beendet (Server geschlossen).
+    if (live.active) liveStatus("err", "Stream beendet");
+  } catch (e) {
+    if (e.name !== "AbortError" && live.active) liveStatus("err", "Stream-Fehler: " + e.message);
+  } finally {
+    finishLive();
+  }
+}
+function stopLive() { if (live.ctrl) live.ctrl.abort(); finishLive(); }
+function finishLive() {
+  live.active = false;
+  $("live-start").textContent = "Beobachten";
+  $("live-pause").disabled = true; $("live-pause").textContent = "Pause"; live.paused = false;
+  flushPending();
+  $("live-subject").disabled = $("live-recursive").disabled = $("live-types").disabled = false;
+  if ($("dot").classList.contains("live")) setStatus(tokenInput.value ? "ok" : "", tokenInput.value ? "verbunden" : "getrennt");
+}
+
+$("live-start").addEventListener("click", () => { live.active ? stopLive() : startLive(); });
+$("live-pause").addEventListener("click", () => {
+  live.paused = !live.paused;
+  $("live-pause").textContent = live.paused ? "Fortsetzen" : "Pause";
+  if (!live.paused) flushPending();
+});
+$("live-pending").addEventListener("click", () => {
+  live.paused = false; $("live-pause").textContent = "Pause"; flushPending();
+});
+$("live-clear").addEventListener("click", () => {
+  live.count = 0; live.pending = []; $("live-pending").style.display = "none";
+  $("live-count").textContent = "0 Events";
+  eventsEl.innerHTML = '<div class="empty">Noch nichts beobachtet.</div>';
+});
+
+// Auto-Start des Dashboards, falls bereits ein Token im Tab liegt.
 if (tokenInput.value) connect();
 </script>
 </body>

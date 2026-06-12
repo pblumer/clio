@@ -929,8 +929,12 @@ func TestDashboardUI(t *testing.T) {
 	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
 		t.Fatalf("/ui Content-Type = %q, want text/html…", ct)
 	}
-	if !strings.Contains(rec.Body.String(), "Betriebs-Dashboard") {
+	body := rec.Body.String()
+	if !strings.Contains(body, "<title>clio · Dashboard</title>") {
 		t.Fatal("/ui liefert nicht die Dashboard-Seite")
+	}
+	if !strings.Contains(body, "Live-Events") {
+		t.Fatal("/ui enthält nicht den Live-Event-Viewer")
 	}
 
 	// /ui/ -> Redirect auf /ui.
