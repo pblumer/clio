@@ -66,7 +66,7 @@ Ein schlankes, ebenfalls eingebettetes Dashboard für Monitoring & Observing —
 kein Prometheus/Grafana nötig, um „mal eben draufzuschauen":
 
 - **`http://127.0.0.1:3000/ui`** — Bearer-Token eingeben, **Verbinden**. Statische
-  Seite (Vanilla JS, kein Build-Step) mit zwei Tabs:
+  Seite (Vanilla JS, kein Build-Step) mit fünf Tabs:
   - **Dashboard** — Events total, DB-Größe, aktive Observer, Uptime,
     Request-Rate und Latenz (p50/p99) mit wählbarem Auto-Refresh; liest
     `/api/v1/info` und `/metrics` derselben Instanz.
@@ -77,6 +77,13 @@ kein Prometheus/Grafana nötig, um „mal eben draufzuschauen":
     (`read-subjects?tree=true`, Klick lädt die Events des Subjects),
     Event-Typen mit Anzahl und aufklappbaren Schemas (`read-event-types` /
     `read-event-schema`) sowie ein Integritäts-Panel (`verify` / `public-key`).
+  - **Query** — `run-query`-Konsole mit CEL-Editor: Syntax-Highlighting,
+    kontextsensitive Autovervollständigung (inkl. aus echten Events gelernter
+    `event.data.*`-Felder), <kbd>Ctrl/Cmd</kbd>+<kbd>Enter</kbd> zum Ausführen,
+    Inline-Fehlermeldungen, Scope-/Projektions-Optionen (`recursive`, `limit`,
+    `lowerBound`/`upperBound`, `select`).
+  - **Hilfe** — CEL-Referenz (`event`-Felder, Operatoren/Funktionen,
+    Projektion) plus Beispiele, die sich direkt in den Query-Editor laden lassen.
 
 Scope & Roadmap stehen in
 [`docs/web-ui-scope.md`](./docs/web-ui-scope.md) (ADR-020).

@@ -100,6 +100,49 @@
   .type-row { display: flex; align-items: center; gap: 10px; padding: 7px 2px; }
   .type-row .tname { font-family: var(--mono); flex: 1; word-break: break-all; }
   .type-item.open .ev-data { display: block; margin: 0 0 8px; }
+  /* Query-Editor */
+  .adv-row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin: -4px 0 12px; }
+  .hint { color: var(--muted); font-size: 12px; }
+  kbd { font-family: var(--mono); font-size: 11px; background: var(--panel-2); border: 1px solid var(--border);
+        border-bottom-width: 2px; border-radius: 5px; padding: 1px 5px; color: var(--fg); }
+  .editor-wrap { margin-bottom: 16px; position: relative; }
+  .editor { position: relative; border: 1px solid var(--border); border-radius: 9px; background: var(--panel-2);
+            overflow: hidden; min-height: 92px; }
+  .editor:focus-within { border-color: var(--accent); }
+  .editor-hl, .editor-input {
+    margin: 0; border: 0; padding: 12px 14px; font-family: var(--mono); font-size: 13.5px; line-height: 1.6;
+    white-space: pre-wrap; word-break: break-word; overflow-wrap: break-word; tab-size: 2;
+  }
+  .editor-hl { position: absolute; inset: 0; pointer-events: none; color: var(--fg); overflow: hidden; }
+  .editor-input {
+    position: relative; display: block; width: 100%; min-height: 92px; resize: vertical;
+    background: transparent; color: transparent; caret-color: var(--fg); outline: none;
+  }
+  .editor-input::placeholder { color: var(--muted); }
+  /* Token-Farben */
+  .tk-str { color: #9ece6a; } .tk-num { color: #ff9e64; } .tk-kw { color: #bb9af7; }
+  .tk-fn { color: var(--accent); } .tk-fld { color: #7dcfff; } .tk-op { color: var(--muted); } .tk-com { color: #5a6378; font-style: italic; }
+  /* Autocomplete */
+  .ac { position: absolute; z-index: 30; min-width: 240px; max-width: 360px; max-height: 240px; overflow: auto;
+        background: var(--panel); border: 1px solid var(--accent); border-radius: 8px; box-shadow: 0 8px 28px rgba(0,0,0,.5);
+        font-family: var(--mono); font-size: 13px; }
+  .ac-item { display: flex; align-items: baseline; gap: 8px; padding: 6px 10px; cursor: pointer; }
+  .ac-item.sel, .ac-item:hover { background: var(--panel-2); }
+  .ac-kind { font-size: 10px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); min-width: 34px; }
+  .ac-kind.fld { color: #7dcfff; } .ac-kind.fn { color: var(--accent); } .ac-kind.kw { color: #bb9af7; }
+  .ac-text { color: var(--fg); flex: 1; }
+  .ac-hint { color: var(--muted); font-size: 11px; }
+  .editor-actions { display: flex; gap: 10px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
+  .q-error { font-family: var(--mono); font-size: 12.5px; color: var(--err); background: rgba(248,113,113,.08);
+             border: 1px solid var(--err); border-radius: 7px; padding: 6px 10px; word-break: break-word; }
+  #q-result, #help-examples { display: flex; flex-direction: column; gap: 6px; }
+  #q-result { max-height: 520px; overflow: auto; }
+  .q-json { background: var(--panel); border: 1px solid var(--border); border-radius: 9px; padding: 9px 12px;
+            font-family: var(--mono); font-size: 12px; white-space: pre-wrap; word-break: break-word; margin: 0; }
+  .ex { background: var(--panel); border: 1px solid var(--border); border-radius: 9px; padding: 10px 14px; }
+  .ex-head { display: flex; align-items: center; gap: 10px; }
+  .ex-desc { flex: 1; color: var(--muted); font-size: 13px; }
+  .ex-code { margin: 8px 0 0; font-family: var(--mono); font-size: 12.5px; color: #7dcfff; white-space: pre-wrap; word-break: break-word; }
 </style>
 </head>
 <body>
@@ -115,6 +158,8 @@
   <button id="tab-dashboard" class="active" data-view="dashboard">Dashboard</button>
   <button id="tab-live" data-view="live">Live-Events</button>
   <button id="tab-explorer" data-view="explorer">Explorer</button>
+  <button id="tab-query" data-view="query">Query</button>
+  <button id="tab-help" data-view="help">Hilfe</button>
 </nav>
 
 <main>
@@ -216,6 +261,91 @@
     </section>
   </div>
 
+  <!-- ============ Query ============ -->
+  <div id="view-query" class="view">
+    <div class="controls">
+      <input id="q-subject" placeholder="Subject (z. B. /orders)" value="/" spellcheck="false" style="min-width:200px">
+      <label class="inline"><input id="q-recursive" type="checkbox" checked> rekursiv</label>
+      <label class="inline">Limit <input id="q-limit" class="short" type="number" min="0" value="100" title="0 = unbegrenzt"></label>
+      <input id="q-select" placeholder="select (Projektion, Komma) — z. B. id, data.amount" spellcheck="false" style="min-width:240px">
+      <span class="spacer"></span>
+      <span id="q-status" class="badge">bereit</span>
+    </div>
+    <div class="adv-row">
+      <label class="inline">lowerBound <input id="q-lower" class="short" placeholder="ID" spellcheck="false"></label>
+      <label class="inline">upperBound <input id="q-upper" class="short" placeholder="ID" spellcheck="false"></label>
+      <span class="hint">CEL-Prädikat über <code>event</code> · <kbd>Ctrl</kbd>+<kbd>Enter</kbd> ausführen · <kbd>Tab</kbd> übernimmt Vorschlag</span>
+    </div>
+
+    <div class="editor-wrap">
+      <div class="editor" id="q-editor-box">
+        <pre class="editor-hl" id="q-hl" aria-hidden="true"><code></code></pre>
+        <textarea id="q-editor" class="editor-input" spellcheck="false" autocomplete="off" autocapitalize="off"
+          placeholder="event.type == 'order-placed' && has(event.data.amount) && event.data.amount > 100"></textarea>
+      </div>
+      <div id="q-ac" class="ac" style="display:none"></div>
+      <div class="editor-actions">
+        <button id="q-run" class="primary">Ausführen</button>
+        <button id="q-format" title="Whitespace normalisieren">Aufräumen</button>
+        <button id="q-clear">Leeren</button>
+        <span id="q-error" class="q-error" style="display:none"></span>
+      </div>
+    </div>
+
+    <div id="q-result"><div class="empty">Noch keine Abfrage. Schreib ein Prädikat (oder lass es leer = alles im Scope) und drück <kbd>Ctrl</kbd>+<kbd>Enter</kbd>.</div></div>
+  </div>
+
+  <!-- ============ Hilfe ============ -->
+  <div id="view-help" class="view">
+    <div class="notice">
+      Die <strong>Query</strong>-Ansicht setzt <code>POST /api/v1/run-query</code> ab: Sie liest die Events
+      eines Scopes und filtert sie mit einem <strong>CEL</strong>-Prädikat über die Variable <code>event</code>.
+      Volle Referenz in der <a href="/docs">API-Doku</a>.
+    </div>
+
+    <section>
+      <h2>Die Variable <code>event</code></h2>
+      <dl class="kv">
+        <dt><code>event.id</code></dt><dd>global monotone ID (String, z. B. <code>"42"</code>)</dd>
+        <dt><code>event.type</code></dt><dd>Event-Typ, z. B. <code>"order-placed"</code></dd>
+        <dt><code>event.subject</code></dt><dd>Stream-Pfad, z. B. <code>"/orders/42"</code></dd>
+        <dt><code>event.source</code></dt><dd>Herkunft (URI-artig)</dd>
+        <dt><code>event.time</code></dt><dd>Zeitstempel als String (RFC 3339) — für Zeitvergleiche <code>timestamp(event.time)</code></dd>
+        <dt><code>event.data</code></dt><dd>die Nutzdaten (dynamisch). Felder defensiv mit <code>has(event.data.x)</code> prüfen, bevor du sie verwendest.</dd>
+      </dl>
+    </section>
+
+    <section>
+      <h2>Operatoren &amp; Funktionen (Standard-CEL)</h2>
+      <div class="grid">
+        <div class="card"><div class="label">Vergleich / Logik</div>
+          <div class="sub mono">== != &lt; &lt;= &gt; &gt;= &amp;&amp; || ! · a in [..] · cond ? x : y</div></div>
+        <div class="card"><div class="label">Strings</div>
+          <div class="sub mono">s.startsWith(p) · s.endsWith(p) · s.contains(p) · s.matches(re) · size(s)</div></div>
+        <div class="card"><div class="label">Existenz / Makros</div>
+          <div class="sub mono">has(event.data.x) · l.exists(x, p) · l.all(x, p) · l.filter(x, p) · l.map(x, e)</div></div>
+        <div class="card"><div class="label">Konvertierung</div>
+          <div class="sub mono">int(x) double(x) string(x) bool(x) · timestamp(s) duration(s) · type(x)</div></div>
+      </div>
+      <p class="hint" style="margin-top:12px">Das Prädikat muss zu <strong>bool</strong> evaluieren. Ein leeres Prädikat liefert <em>alle</em> Events im Scope.</p>
+    </section>
+
+    <section>
+      <h2>Scope &amp; Projektion</h2>
+      <dl class="kv">
+        <dt>Subject</dt><dd>Pflicht, beginnt mit <code>/</code>. Mit <strong>rekursiv</strong> alles darunter.</dd>
+        <dt>lowerBound / upperBound</dt><dd>inklusive Event-ID-Grenzen, schränken den gelesenen Bereich ein.</dd>
+        <dt>Limit</dt><dd>max. Treffer (0 = unbegrenzt).</dd>
+        <dt>select</dt><dd>punktseparierte Feldpfade (z. B. <code>id, data.amount</code>) → nur diese Felder pro Zeile, Verschachtelung bleibt erhalten.</dd>
+      </dl>
+    </section>
+
+    <section>
+      <h2>Beispiele</h2>
+      <div id="help-examples"></div>
+    </section>
+  </div>
+
   <footer>
     clio · <a href="/docs">API-Doku</a> · <a href="/metrics">/metrics</a> ·
     <span id="lastUpdate">noch nicht aktualisiert</span>
@@ -260,12 +390,14 @@ function fmtMs(sec) {
 
 // ---------- Tabs ----------
 function switchView(name) {
-  for (const v of ["dashboard", "live", "explorer"]) {
+  for (const v of ["dashboard", "live", "explorer", "query", "help"]) {
     $("view-" + v).classList.toggle("active", v === name);
     $("tab-" + v).classList.toggle("active", v === name);
   }
   // Explorer beim ersten Öffnen automatisch laden, sofern ein Token vorliegt.
   if (name === "explorer" && !explorerLoaded && tokenInput.value.trim()) loadExplorer();
+  // Query-Tab: Feld-Vorschläge beim ersten Öffnen aus echten Events lernen.
+  if (name === "query") { qEditor && qEditor.focus(); if (!qSampleLoaded && tokenInput.value.trim()) refreshQuerySchema(); }
 }
 document.querySelectorAll("nav.tabs button").forEach((b) =>
   b.addEventListener("click", () => switchView(b.dataset.view)));
@@ -693,6 +825,298 @@ async function loadIntegrity() {
 
 $("exp-load").addEventListener("click", loadExplorer);
 $("exp-prefix").addEventListener("keydown", (e) => { if (e.key === "Enter") loadExplorer(); });
+
+// ---------- Query (CEL-Editor mit IDE-Unterstützung) ----------
+const qEditor = $("q-editor"), qHl = $("q-hl").firstChild, qAc = $("q-ac");
+let qSampleLoaded = false;
+
+// Was die Standard-CEL-Umgebung von clio kennt (event-Variable + stdlib).
+const EVENT_FIELDS = [
+  { name: "id", hint: "ID (String)" }, { name: "type", hint: "Event-Typ" },
+  { name: "subject", hint: "Stream-Pfad" }, { name: "source", hint: "Herkunft" },
+  { name: "time", hint: "Zeitstempel (String)" }, { name: "data", hint: "Nutzdaten (dynamisch)" },
+];
+const STRING_FIELDS = ["id", "type", "subject", "source", "time"];
+const STRING_METHODS = [
+  { name: "startsWith", hint: "Präfix?" }, { name: "endsWith", hint: "Suffix?" },
+  { name: "contains", hint: "enthält?" }, { name: "matches", hint: "Regex?" },
+];
+const CEL_FUNCS = [
+  { name: "has", hint: "Feld vorhanden? has(event.data.x)" }, { name: "size", hint: "Länge" },
+  { name: "startsWith", hint: "s.startsWith(p)" }, { name: "endsWith", hint: "s.endsWith(p)" },
+  { name: "contains", hint: "s.contains(p)" }, { name: "matches", hint: "Regex" },
+  { name: "int", hint: "→ int" }, { name: "double", hint: "→ double" }, { name: "string", hint: "→ string" },
+  { name: "bool", hint: "→ bool" }, { name: "timestamp", hint: "String → Zeit" }, { name: "duration", hint: "Dauer" },
+  { name: "type", hint: "Typ von x" }, { name: "exists", hint: "l.exists(x, p)" }, { name: "all", hint: "l.all(x, p)" },
+  { name: "filter", hint: "l.filter(x, p)" }, { name: "map", hint: "l.map(x, e)" },
+];
+const CEL_KEYWORDS = ["true", "false", "null", "in"];
+const FUNC_NAMES = new Set(CEL_FUNCS.map((f) => f.name).concat(STRING_METHODS.map((m) => m.name)));
+let dataPaths = []; // aus echten Events gelernte event.data.*-Pfade
+
+// --- Syntax-Highlighting (Token-Overlay hinter dem Textarea) ---
+function escHtml(s) { return s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])); }
+const HL_RE = /(\/\/[^\n]*)|('(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")|(\b\d+(?:\.\d+)?\b)|([A-Za-z_]\w*)|([=!<>]=|&&|\|\||[+\-*/%<>!.?:]|\bin\b)/g;
+function highlight(src) {
+  let out = "", last = 0, m;
+  HL_RE.lastIndex = 0;
+  while ((m = HL_RE.exec(src))) {
+    out += escHtml(src.slice(last, m.index));
+    last = HL_RE.lastIndex;
+    if (m[1]) out += `<span class="tk-com">${escHtml(m[1])}</span>`;
+    else if (m[2]) out += `<span class="tk-str">${escHtml(m[2])}</span>`;
+    else if (m[3]) out += `<span class="tk-num">${escHtml(m[3])}</span>`;
+    else if (m[4]) {
+      const w = m[4];
+      const after = src.slice(HL_RE.lastIndex).match(/^\s*\(/);
+      let cls = "tk-fld";
+      if (CEL_KEYWORDS.includes(w)) cls = "tk-kw";
+      else if (after && FUNC_NAMES.has(w)) cls = "tk-fn";
+      else if (w === "event") cls = "tk-fld";
+      out += `<span class="${cls}">${escHtml(w)}</span>`;
+    } else if (m[5]) out += `<span class="tk-op">${escHtml(m[5])}</span>`;
+  }
+  out += escHtml(src.slice(last));
+  return out;
+}
+function syncEditor() {
+  qHl.innerHTML = highlight(qEditor.value);
+  qHl.parentNode.scrollTop = qEditor.scrollTop;
+  qHl.parentNode.scrollLeft = qEditor.scrollLeft;
+}
+
+// --- Autovervollständigung ---
+let acItems = [], acSel = 0, acTokenStart = 0;
+function currentToken() {
+  const caret = qEditor.selectionStart;
+  const left = qEditor.value.slice(0, caret);
+  const tok = (left.match(/[A-Za-z0-9_.]*$/) || [""])[0];
+  return { tok, start: caret - tok.length, caret };
+}
+function completionsFor(tok) {
+  const out = [];
+  const add = (text, kind, hint) => out.push({ text, kind, hint });
+  const lastDot = tok.lastIndexOf(".");
+  const base = lastDot >= 0 ? tok.slice(0, lastDot) : "";
+  if (lastDot < 0) {
+    if ("event".startsWith(tok) && tok) add("event", "fld", "Event-Variable");
+    for (const f of CEL_FUNCS) if (f.name.startsWith(tok)) add(f.name + "()", "fn", f.hint);
+    for (const k of CEL_KEYWORDS) if (k.startsWith(tok) && tok) add(k, "kw", "");
+  } else if (base === "event") {
+    for (const f of EVENT_FIELDS) if (("event." + f.name).startsWith(tok)) add("event." + f.name, "fld", f.hint);
+  } else if (base === "event.data" || base.startsWith("event.data.")) {
+    for (const p of dataPaths) if (p.startsWith(tok)) add(p, "fld", "data-Feld");
+  } else if (STRING_FIELDS.some((s) => base === "event." + s)) {
+    for (const mth of STRING_METHODS) add(base + "." + mth.name + "()", "fn", mth.hint);
+  } else {
+    for (const p of dataPaths) if (p.startsWith(tok)) add(p, "fld", "data-Feld");
+  }
+  return out.slice(0, 50);
+}
+function showAc() {
+  const { tok, start } = currentToken();
+  if (!tok) return hideAc();
+  const items = completionsFor(tok);
+  if (!items.length) return hideAc();
+  acItems = items; acSel = 0; acTokenStart = start;
+  qAc.innerHTML = "";
+  items.forEach((it, i) => {
+    const row = document.createElement("div");
+    row.className = "ac-item" + (i === 0 ? " sel" : "");
+    row.innerHTML = `<span class="ac-kind ${it.kind}">${it.kind}</span><span class="ac-text"></span><span class="ac-hint"></span>`;
+    row.children[1].textContent = it.text;
+    row.children[2].textContent = it.hint || "";
+    row.addEventListener("mousedown", (e) => { e.preventDefault(); acceptAc(i); });
+    qAc.appendChild(row);
+  });
+  const box = $("q-editor-box");
+  qAc.style.top = box.offsetTop + box.offsetHeight + 4 + "px";
+  qAc.style.left = "8px";
+  qAc.style.display = "block";
+}
+function hideAc() { qAc.style.display = "none"; acItems = []; }
+function moveAc(d) {
+  if (!acItems.length) return;
+  acSel = (acSel + d + acItems.length) % acItems.length;
+  [...qAc.children].forEach((c, i) => c.classList.toggle("sel", i === acSel));
+  qAc.children[acSel].scrollIntoView({ block: "nearest" });
+}
+function acceptAc(i) {
+  const it = acItems[i != null ? i : acSel];
+  if (!it) return;
+  const v = qEditor.value;
+  const before = v.slice(0, acTokenStart), after = v.slice(qEditor.selectionStart);
+  let insert = it.text, caretInParen = insert.endsWith("()");
+  qEditor.value = before + insert + after;
+  let pos = acTokenStart + insert.length - (caretInParen ? 1 : 0);
+  qEditor.setSelectionRange(pos, pos);
+  hideAc(); syncEditor(); qEditor.focus();
+}
+
+qEditor.addEventListener("input", () => { syncEditor(); showAc(); persistQuery(); });
+qEditor.addEventListener("scroll", syncEditor);
+qEditor.addEventListener("blur", () => setTimeout(hideAc, 120));
+qEditor.addEventListener("keydown", (e) => {
+  const open = qAc.style.display === "block";
+  if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); hideAc(); runQuery(); return; }
+  if (e.ctrlKey && e.key === " ") { e.preventDefault(); showAc(); return; }
+  if (!open) return;
+  if (e.key === "ArrowDown") { e.preventDefault(); moveAc(1); }
+  else if (e.key === "ArrowUp") { e.preventDefault(); moveAc(-1); }
+  else if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); acceptAc(); }
+  else if (e.key === "Escape") { e.preventDefault(); hideAc(); }
+});
+
+// --- Feld-Vorschläge aus echten Events lernen ---
+function collectPaths(obj, prefix, into) {
+  if (obj && typeof obj === "object" && !Array.isArray(obj)) {
+    for (const k of Object.keys(obj)) {
+      const p = prefix + "." + k;
+      into.add(p);
+      collectPaths(obj[k], p, into);
+    }
+  }
+}
+async function refreshQuerySchema() {
+  const token = tokenInput.value.trim();
+  if (!token) return;
+  qSampleLoaded = true;
+  try {
+    const body = JSON.stringify({ subject: $("q-subject").value.trim() || "/", recursive: $("q-recursive").checked, limit: 200 });
+    const r = await fetch("/api/v1/run-query", {
+      method: "POST", headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+      body, cache: "no-store",
+    });
+    if (!r.ok) return;
+    const lines = (await r.text()).split("\n").map((s) => s.trim()).filter(Boolean);
+    const paths = new Set();
+    for (const l of lines) {
+      try { const ev = JSON.parse(l); if (ev.data !== undefined) collectPaths(ev.data, "event.data", paths); } catch (_) {}
+    }
+    dataPaths = [...paths].sort();
+  } catch (_) { /* Vorschläge sind optional */ }
+}
+
+// --- Ausführen ---
+function setQErr(msg) {
+  const el = $("q-error");
+  if (!msg) { el.style.display = "none"; return; }
+  el.textContent = msg; el.style.display = "inline-block";
+}
+function looksLikeEvent(o) { return o && typeof o === "object" && "id" in o && "type" in o && "subject" in o; }
+function renderJSON(o) {
+  const pre = document.createElement("pre");
+  pre.className = "q-json";
+  pre.textContent = JSON.stringify(o, null, 2);
+  return pre;
+}
+async function runQuery() {
+  const token = tokenInput.value.trim();
+  if (!token) { setQErr("Token fehlt — oben Verbinden."); return; }
+  sessionStorage.setItem("clioToken", token);
+  const subject = $("q-subject").value.trim();
+  if (!subject || subject[0] !== "/") { setQErr('subject muss mit "/" beginnen'); return; }
+  setQErr("");
+  const req = { subject, recursive: $("q-recursive").checked };
+  const where = qEditor.value.trim();
+  if (where) req.where = where;
+  const limit = parseInt($("q-limit").value, 10);
+  if (!isNaN(limit) && limit >= 0) req.limit = limit;
+  const lower = $("q-lower").value.trim(), upper = $("q-upper").value.trim();
+  if (lower) req.lowerBound = lower;
+  if (upper) req.upperBound = upper;
+  const sel = $("q-select").value.split(",").map((s) => s.trim()).filter(Boolean);
+  if (sel.length) req.select = sel;
+
+  $("q-status").textContent = "läuft …";
+  const t0 = performance.now();
+  try {
+    const r = await fetch("/api/v1/run-query", {
+      method: "POST", headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+      body: JSON.stringify(req), cache: "no-store",
+    });
+    if (r.status === 401) { setQErr("Token ungültig (401)."); $("q-status").textContent = "401"; return; }
+    if (!r.ok) {
+      let detail = "HTTP " + r.status;
+      try { const p = await r.json(); if (p.detail) detail = p.detail; } catch (_) {}
+      setQErr(detail); $("q-status").textContent = "Fehler";
+      return;
+    }
+    const lines = (await r.text()).split("\n").map((s) => s.trim()).filter(Boolean);
+    const ms = Math.round(performance.now() - t0);
+    const el = $("q-result");
+    el.innerHTML = "";
+    if (!lines.length) { el.innerHTML = '<div class="empty">Keine Treffer.</div>'; }
+    else {
+      for (const l of lines) {
+        let o; try { o = JSON.parse(l); } catch (_) { continue; }
+        el.appendChild(looksLikeEvent(o) && !sel.length ? renderEvent(o) : renderJSON(o));
+      }
+    }
+    $("q-status").textContent = lines.length + " Treffer · " + ms + " ms";
+    refreshQuerySchema(); // Vorschläge an den aktuellen Scope anpassen
+  } catch (e) {
+    setQErr("Verbindung fehlgeschlagen: " + e.message); $("q-status").textContent = "Fehler";
+  }
+}
+
+function persistQuery() {
+  sessionStorage.setItem("clioQuery", qEditor.value);
+  sessionStorage.setItem("clioQuerySubject", $("q-subject").value);
+}
+$("q-run").addEventListener("click", runQuery);
+$("q-clear").addEventListener("click", () => { qEditor.value = ""; setQErr(""); syncEditor(); persistQuery(); $("q-result").innerHTML = '<div class="empty">Geleert.</div>'; });
+$("q-format").addEventListener("click", () => { qEditor.value = qEditor.value.replace(/\s+/g, " ").trim(); syncEditor(); persistQuery(); });
+$("q-subject").addEventListener("change", () => { qSampleLoaded = false; if (tokenInput.value.trim()) refreshQuerySchema(); persistQuery(); });
+
+// gespeicherte Query wiederherstellen
+qEditor.value = sessionStorage.getItem("clioQuery") || "";
+$("q-subject").value = sessionStorage.getItem("clioQuerySubject") || "/";
+syncEditor();
+
+// ---------- Hilfe: Beispiele (in den Editor ladbar) ----------
+const HELP_EXAMPLES = [
+  { desc: "Alle Bestellungen über 100", subject: "/orders", recursive: true,
+    where: "event.type == 'order-placed' && has(event.data.amount) && event.data.amount > 100" },
+  { desc: "Nur ein Feld projizieren (id + Betrag)", subject: "/orders", recursive: true,
+    select: "id, data.amount", where: "" },
+  { desc: "Textsuche im Titel (case-sensitiv)", subject: "/books", recursive: true,
+    where: "has(event.data.title) && event.data.title.contains('Dune')" },
+  { desc: "Mehrere Typen via in-Operator", subject: "/orders", recursive: true,
+    where: "event.type in ['order-placed', 'order-cancelled']" },
+  { desc: "Alle Events eines Streams (leeres Prädikat)", subject: "/books/42", recursive: false, where: "" },
+];
+function loadExample(ex) {
+  $("q-subject").value = ex.subject;
+  $("q-recursive").checked = !!ex.recursive;
+  $("q-select").value = ex.select || "";
+  qEditor.value = ex.where || "";
+  setQErr(""); syncEditor(); persistQuery();
+  qSampleLoaded = false;
+  switchView("query");
+  if (tokenInput.value.trim()) { refreshQuerySchema(); runQuery(); }
+}
+(function renderHelpExamples() {
+  const host = $("help-examples");
+  for (const ex of HELP_EXAMPLES) {
+    const card = document.createElement("div");
+    card.className = "ex";
+    const head = document.createElement("div");
+    head.className = "ex-head";
+    const desc = document.createElement("span");
+    desc.className = "ex-desc"; desc.textContent = ex.desc;
+    const btn = document.createElement("button");
+    btn.className = "primary"; btn.textContent = "In Editor laden";
+    btn.addEventListener("click", () => loadExample(ex));
+    head.append(desc, btn);
+    const code = document.createElement("pre");
+    code.className = "ex-code";
+    code.textContent = (ex.where || "(leeres Prädikat)") +
+      "\n→ subject " + ex.subject + (ex.recursive ? " (rekursiv)" : "") + (ex.select ? " · select " + ex.select : "");
+    card.append(head, code);
+    host.appendChild(card);
+  }
+})();
 
 // Auto-Start des Dashboards, falls bereits ein Token im Tab liegt.
 if (tokenInput.value) connect();
