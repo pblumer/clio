@@ -1,6 +1,6 @@
 # Web-UI — Machbarkeits- & Scope-Skizze
 
-> Status: **Stufen 1 (Dashboard) + 2 (Live-Event-Viewer) + 3 (Subject-Browser) umgesetzt** · Stufe 4 skizziert.
+> Status: **Stufen 1 (Dashboard) + 2 (Live-Event-Viewer) + 3 (Subject-Browser) + 5 (Query-Konsole &amp; Hilfe) umgesetzt** · Stufe 4 skizziert.
 > Zugehörige Entscheidung: **ADR-020** in [`ARCHITECTURE.md`](../ARCHITECTURE.md).
 
 Ein schlankes Web-UI für **Maintenance, Observing, Monitoring** — ohne Clios
@@ -77,6 +77,21 @@ aufklappbaren JSON-Schemas (`read-event-types` / `read-event-schema`) sowie ein
 Integritäts-Panel (`verify` / `public-key`). Erneut kein neuer Server-Code —
 alle Endpunkte existierten bereits.
 
+### Stufe 5 — Query-Konsole &amp; Hilfe  ✅ umgesetzt
+Vierter Tab „Query" im `/ui`: eine `run-query`-Konsole mit einem leichtgewichtigen
+**CEL-Editor** (Vanilla JS, kein CDN/Bundler — Token-Overlay fürs
+Syntax-Highlighting hinter einem transparenten `textarea`). IDE-artige
+Unterstützung: kontextsensitive Autovervollständigung für `event`-Felder,
+stdlib-Funktionen/Makros und — aus einer Stichprobe echter Events gelernte —
+`event.data.*`-Pfade; <kbd>Ctrl/Cmd</kbd>+<kbd>Enter</kbd> führt aus,
+<kbd>Tab</kbd> übernimmt einen Vorschlag. Fehler aus `run-query` (HTTP 400
+`problem+json`, inkl. CEL-Compilermeldung) werden inline wie ein Linter gezeigt.
+Scope-/Projektions-Optionen (`recursive`, `limit`, `lowerBound`/`upperBound`,
+`select`) sind direkt bedienbar. Ein fünfter Tab „Hilfe" dokumentiert die
+`event`-Felder, Operatoren/Funktionen und Projektion und bietet Beispiele, die
+sich in den Editor laden lassen. Kein neuer Server-Code — nur das bestehende
+`run-query`.
+
 ### Stufe 4 — Maintenance-Konsole  ⚠️ bewusst zurückgestellt
 Schreibende Aktionen (z. B. Kompaktierung anstoßen). **Out of scope** für jetzt:
 würde aus dem „kleinen UI" eine Angriffsfläche machen und eine eigene
@@ -111,4 +126,5 @@ Absicherung erfordern. Erst, wenn ein klares Auth-/Audit-Konzept dafür steht.
 | 1     | ~1 Tag (erledigt)  | keine               |
 | 2     | ~1–2 Tage          | keine               |
 | 3     | ~1–2 Tage          | keine               |
+| 5     | ~1–2 Tage (erledigt) | keine             |
 | 4     | offen (Auth-Konzept zuerst) | ggf. Audit-Log |
