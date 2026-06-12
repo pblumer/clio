@@ -34,7 +34,7 @@ zielwidrig**.
 | Feldnamen konsistent snake_case **oder** camelCase | MUST | eigene Felder camelCase; CloudEvents-Felder „flatcase" (`specversion`, `datacontenttype`) | ⚠️ Mix (CloudEvents-bedingt) | mittel, teils unvermeidbar |
 | Standard-Datumsformat RFC 3339 | MUST | `time` als RFC3339Nano | ✅ | — |
 | OpenAPI 3.0+, eine YAML, versioniert | MUST | OpenAPI 3.0.3, `internal/apidocs/openapi.yaml` | ✅ | — |
-| OpenAPI-Meta: `x-audience`, `license`, `contact` | MUST | fehlt | ⚠️ | **klein** |
+| OpenAPI-Meta: `x-audience`, `license`, `contact` | MUST | `x-audience: external-public`, `license` (MIT), `contact` im `info`-Block | ✅ (ADR-019) | — |
 | Versionierung vermeiden; falls, dann `/v2` (kein `/v1`) | SHOULD | `/api/v1/` | ⚠️ kosmetisch | klein |
 | `Cache-Control: no-store` als Default | MUST | Default-Header auf allen Antworten | ✅ (ADR-019) | — |
 | Standard-Header kebab-case lowercase | SHOULD | ✅ | ✅ | — |
@@ -64,9 +64,9 @@ zielwidrig**.
 **Umgesetzt (ADR-019):**
 - ✅ Fehler als `application/problem+json` (RFC 7807): `{type,title,status,detail}`.
 - ✅ `Cache-Control: no-store` als Default-Header (alle Antworten).
+- ✅ OpenAPI-Meta im `info`-Block: `x-audience: external-public`, `license` (MIT), `contact`.
 
 **Noch offen (optional):**
-- OpenAPI-Meta ergänzen: `x-audience` (private/partner/public), `license`, `contact`.
 - `201 Created` + `Location` bei `write-events` (sofern wir das Streaming-Antwortformat anpassen wollen — sonst dokumentierte Abweichung).
 - camelCase-Konsistenz unserer **eigenen** Felder bestätigen/erzwingen; CloudEvents-Felder als dokumentierte Ausnahme.
 - `null`/Leer-Array-Audit (formell bestätigen).
