@@ -337,9 +337,17 @@ Richtwerte aus den enthaltenen Benchmarks bei ~256 gleichzeitigen Schreibern
 `always` und nahe an `off` — also fast die Geschwindigkeit ohne fsync, aber
 crash-sicher.
 
+**Lesen:** Nicht-rekursive Reads laufen über den Subject-Index (nur die Events
+des Subjects). Rekursive Reads eines **Teilbaums** sind ebenfalls
+index-begrenzt — die Laufzeit hängt von der Treffermenge ab, nicht von der
+Gesamtzahl der Events (ein 10-Event-Teilbaum aus 50.000 Events: ~0,6 ms statt
+~250 ms). Nur die echte Wurzel-Abfrage (`/`, „alle Events") ist naturgemäß
+O(alle).
+
 ```bash
 # Benchmarks selbst ausführen
-go test -run='^$' -bench=BenchmarkAppend -benchmem ./internal/store/
+go test -run='^$' -bench=BenchmarkRead -benchmem ./internal/store/   # Lesen
+go test -run='^$' -bench=BenchmarkAppend -benchmem ./internal/store/ # Schreiben
 ```
 
 ## Tests
