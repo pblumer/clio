@@ -167,7 +167,12 @@ func OpenWithOptions(path string, opts Options) (*Store, error) {
 				return err
 			}
 		}
-		return nil
+		// Backfill für Stores, die schon Events enthielten, bevor der
+		// types-Bucket eingeführt wurde (ADR-014): ist der Zähler-Bucket leer,
+		// aber existieren Events, werden die Typ-Zähler einmalig aus den
+		// vorhandenen Events rekonstruiert. Idempotent — bei neuen oder bereits
+		// gepflegten Stores ist nichts zu tun.
+		return backfillTypeCounts(tx)
 	})
 	if err != nil {
 		_ = db.Close()
@@ -250,6 +255,30 @@ func (s *Store) EventTypes() ([]TypeInfo, error) {
 		return nil, err
 	}
 	return out, nil
+}
+
+// backfillTypeCounts rekonstruiert die Typ-Zähler aus den vorhandenen Events,
+// falls der types-Bucket leer ist, aber bereits Events existieren. Das tritt bei
+// Stores auf, die vor der Einführung des types-Buckets (ADR-014) befüllt wurden:
+// dort liefert read-event-types sonst nichts, obwohl Events vorhanden sind. Ist
+// der types-Bucket bereits befüllt oder gibt es keine Events, passiert nichts.
+func backfillTypeCounts(tx *bolt.Tx) error {
+	types := tx.Bucket(bucketTypes)
+	if k, _ := types.Cursor().First(); k != nil {
+		return nil // bereits gepflegt
+	}
+	evts := tx.Bucket(bucketEvents)
+	c := evts.Cursor()
+	for k, v := c.First(); k != nil; k, v = c.Next() {
+		var ev event.Event
+		if err := json.Unmarshal(v, &ev); err != nil {
+			return fmt.Errorf("event für types-backfill dekodieren: %w", err)
+		}
+		if err := incrTypeCount(types, ev.Type); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // incrTypeCount erhöht den Zähler eines Event-Typs im types-Bucket.
