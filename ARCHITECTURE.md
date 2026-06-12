@@ -5,7 +5,7 @@
 >
 > **Status des Gesamtprojekts:** `IN ENTWICKLUNG` — **Stufe 0–3 abgeschlossen** plus **Ed25519-Signaturen** (Authentizität). Write/Read/Observe, Optimistic Concurrency, Hash-Kette + Signaturen (`/verify`, `/public-key`), Event-Typen + JSON-Schemas, Group Commit (`CLIO_SYNC`), Observability (`/metrics`), Distribution (Cross-Builds/Docker/Release), Kompaktierung (`cliostore compact`), OpenAPI/Swagger UI. Geplant (Stufe 4): CEL-basierte Abfrageschicht (`run-query`, ADR-017) statt eigener EventQL-Sprache.
 > **Letzte Aktualisierung:** 2026-06-12
-> **Dokumentversion:** 1.24
+> **Dokumentversion:** 1.25
 
 ---
 
@@ -313,6 +313,13 @@ Statt EventQL syntaxgetreu nachzubauen (kein offener Parser verfügbar, eigener 
 - **Kontext:** Geprüft wurde, was die Einhaltung der [Swiss API Guidelines](https://github.com/swiss/api-guidelines) bedeuten würde (vollständige Gap-Analyse: `docs/swiss-api-guidelines-gap.md`). Deren zentrale MUST-Regeln fordern eine ressourcenorientierte REST-API (Maturity 2) mit Top-Level-JSON-Objekten und Pagination.
 - **Entscheidung:** `clio` behält die **EventSourcingDB-kompatible, RPC-/NDJSON-Streaming-orientierte** API. Die drei harten Konflikte werden als **bewusste, dokumentierte Abweichungen** geführt: (1) Verb-Endpunkte statt Ressourcen (ESDB-Kompatibilität), (2) NDJSON-Streaming/`observe` statt JSON-Listen+Cursor-Pagination, (3) CloudEvents-„flatcase"-Feldnamen statt durchgängigem camelCase. Konfliktfreie Quick Wins (problem+json, OpenAPI-Meta `x-audience`/`license`/`contact`, `Cache-Control: no-store`, camelCase-Konsistenz eigener Felder) sind als optionaler Folgeschritt vorgemerkt, aber nicht Teil dieser Entscheidung.
 - **Konsequenzen:** `clio` ist **nicht** Swiss-Guidelines-konform und zielt bewusst nicht darauf. Sollte Konformität später nötig werden, wäre der Weg eine **separate REST-Fassade** neben der bestehenden API. Die Abweichungen sind nachvollziehbar begründet (zwei Kernziele: ESDB-Kompatibilität, Streaming).
+- **Nachtrag:** Die hier vorgemerkten Quick Wins `problem+json` und `Cache-Control: no-store` sind inzwischen umgesetzt (siehe ADR-019). Die drei harten Konflikte bleiben unverändert dokumentierte Abweichungen.
+
+### ADR-019: Swiss-Guidelines Quick Wins — problem+json & Cache-Control
+- **Status:** Akzeptiert (in Umsetzung: problem+json und `Cache-Control: no-store` umgesetzt; OpenAPI-Meta `x-audience`/`license`/`contact` als möglicher Folgeschritt offen)
+- **Kontext:** ADR-018 führt die zentralen Swiss-Guidelines-Konflikte bewusst als Abweichungen, hält aber fest, dass ein Teil der Regeln **konfliktfrei** erfüllbar ist (Quick Wins). Davon bringen ein **einheitliches, maschinenlesbares Fehlerformat** und ein **Cache-Default** echten Client-Nutzen ohne Designkonflikt.
+- **Entscheidung:** Fehlerantworten werden als **`application/problem+json`** (RFC 7807) ausgeliefert: `{type:"about:blank", title:<HTTP-Statustext>, status:<code>, detail:<Meldung>}`. Die zentrale `writeError`-Funktion erzeugt sie, sodass alle Routen ohne Aufrufänderung profitieren. Zusätzlich setzt die Observability-Middleware **`Cache-Control: no-store`** als Default auf alle Antworten (dynamische Daten, kein Caching); Handler können dies bei Bedarf überschreiben (z. B. statische Doc-Assets). Die OpenAPI-Spec referenziert ein `ProblemDetails`-Schema.
+- **Konsequenzen:** Konsistente, RFC-konforme Fehler erleichtern die Client-Verarbeitung; `no-store` verhindert versehentliches Caching sensibler/aktueller Daten. Bewusst **kein** problemspezifischer `type`-URI-Katalog (generisches `about:blank` genügt) und **keine** Änderung des Erfolgs-Antwortformats (NDJSON/JSON bleiben — die harten Konflikte aus ADR-018 sind weiterhin Abweichungen). Byte-Kompatibilität mit EventSourcingDB ist davon unberührt.
 
 ---
 

@@ -382,28 +382,35 @@ components:
     BadRequest:
       description: Ungültige Anfrage
       content:
-        application/json:
-          schema: { $ref: "#/components/schemas/Error" }
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/ProblemDetails" }
     Unauthorized:
       description: Fehlendes oder falsches Bearer-Token
       content:
-        application/json:
-          schema: { $ref: "#/components/schemas/Error" }
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/ProblemDetails" }
     InternalError:
       description: Interner Fehler
       content:
-        application/json:
-          schema: { $ref: "#/components/schemas/Error" }
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/ProblemDetails" }
 
   schemas:
     Status:
       type: object
       properties:
         status: { type: string, example: "ok" }
-    Error:
+    ProblemDetails:
       type: object
+      description: |
+        Fehler-Body nach RFC 7807 (application/problem+json). `type` ist
+        generisch ("about:blank"), `title` der HTTP-Statustext, `detail` die
+        konkrete Meldung. Fehlerantworten tragen zudem `Cache-Control: no-store`.
       properties:
-        error: { type: string }
+        type: { type: string, example: "about:blank" }
+        title: { type: string, example: "Bad Request" }
+        status: { type: integer, example: 400 }
+        detail: { type: string, example: "subject muss mit \"/\" beginnen" }
     EventCandidate:
       type: object
       required: [source, subject, type]
