@@ -117,6 +117,11 @@
   <button id="tab-explorer" data-view="explorer">Explorer</button>
 </nav>
 
+<!-- Vorschlagslisten (Autocomplete) — clientseitig aus read-event-types /
+     read-subjects befüllt, sobald ein Token vorliegt. -->
+<datalist id="dl-types"></datalist>
+<datalist id="dl-subjects"></datalist>
+
 <main>
   <!-- ============ Dashboard ============ -->
   <div id="view-dashboard" class="view active">
@@ -159,9 +164,9 @@
   <!-- ============ Live-Events ============ -->
   <div id="view-live" class="view">
     <div class="controls">
-      <input id="live-subject" placeholder="Subject (z. B. /books/42)" value="/" spellcheck="false">
+      <input id="live-subject" list="dl-subjects" placeholder="Subject (z. B. /books/42)" value="/" spellcheck="false">
       <label class="inline"><input id="live-recursive" type="checkbox" checked> rekursiv</label>
-      <input id="live-types" class="short" placeholder="Typen (Komma)" spellcheck="false" style="min-width:160px">
+      <input id="live-types" list="dl-types" class="short" placeholder="Typ filtern (Komma)" spellcheck="false" style="min-width:160px">
       <button id="live-start" class="primary">Beobachten</button>
       <button id="live-pause" disabled>Pause</button>
       <button id="live-clear">Leeren</button>
@@ -180,7 +185,7 @@
   <!-- ============ Explorer ============ -->
   <div id="view-explorer" class="view">
     <div class="controls">
-      <input id="exp-prefix" placeholder="Prefix (z. B. /books) — leer = alles" spellcheck="false">
+      <input id="exp-prefix" list="dl-subjects" placeholder="Prefix (z. B. /books) — leer = alles" spellcheck="false">
       <button id="exp-load" class="primary">Laden</button>
       <span class="spacer"></span>
       <span id="exp-status" class="badge">–</span>
@@ -380,7 +385,7 @@ function schedule() {
 }
 function connect() {
   sessionStorage.setItem("clioToken", tokenInput.value.trim());
-  refresh(); schedule();
+  refresh(); schedule(); loadSuggestions();
 }
 
 $("connect").addEventListener("click", connect);
@@ -538,11 +543,25 @@ async function getNDJSON(path) {
   return (await r.text()).split("\n").map((s) => s.trim()).filter(Boolean).map((l) => JSON.parse(l));
 }
 
+// loadSuggestions füllt die Autocomplete-Listen aus read-event-types /
+// read-subjects. Best effort: Fehler bleiben stumm (reine Komfortfunktion).
+function fillDatalist(id, values) {
+  const dl = $(id);
+  dl.innerHTML = "";
+  for (const v of values) { const o = document.createElement("option"); o.value = v; dl.appendChild(o); }
+}
+async function loadSuggestions() {
+  if (!tokenInput.value.trim()) return;
+  try { fillDatalist("dl-types", (await getNDJSON("/api/v1/read-event-types")).map((t) => t.type)); } catch (_) {}
+  try { fillDatalist("dl-subjects", (await getNDJSON("/api/v1/read-subjects")).map((s) => s.subject).slice(0, 500)); } catch (_) {}
+}
+
 function loadExplorer() {
   const prefix = $("exp-prefix").value.trim();
   if (prefix && prefix[0] !== "/") { setExpStatus("Prefix muss mit / beginnen"); return; }
   explorerLoaded = true;
   setExpStatus("lädt …");
+  loadSuggestions();
   Promise.all([loadTree(prefix), loadTypes(), loadIntegrity()])
     .then(() => setExpStatus("geladen " + new Date().toLocaleTimeString("de-CH")))
     .catch((e) => setExpStatus(e.message === "401" ? "Token ungültig" : "Fehler"));
