@@ -264,6 +264,26 @@ curl -X POST http://127.0.0.1:3000/api/v1/run-query \
 `has(event.data.x)` schützt vor fehlenden Feldern; ein Auswertungsfehler eines
 Events gilt als „kein Treffer".
 
+#### Projektion (`select`)
+
+Optional reduziert `select` die Ausgabe auf ausgewählte Feldpfade (punkt-
+separiert) — praktisch, um Bandbreite zu sparen oder nur einzelne Felder zu
+lesen. Die Verschachtelung bleibt erhalten (`data.title` →
+`{"data":{"title":...}}`), fehlende Felder werden ausgelassen (kein `null`).
+
+```bash
+curl -X POST http://127.0.0.1:3000/api/v1/run-query \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"subject":"/orders","recursive":true,
+       "select":["id","subject","data.amount"]}'
+# -> {"id":"1","subject":"/orders/1","data":{"amount":250}}
+#    {"id":"2","subject":"/orders/2"}
+```
+
+Top-Level-Pfade sind CloudEvents-Feldnamen (`id`, `subject`, `type`, `data` …);
+innerhalb von `data` ist beliebige Verschachtelung möglich. Array-Indizierung
+wird nicht unterstützt. Ohne `select` wird das volle Event zurückgegeben.
+
 ### Verfügbare Event-Typen
 
 ```bash

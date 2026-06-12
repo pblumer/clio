@@ -717,12 +717,13 @@ func (s *Server) doObserve(w http.ResponseWriter, r *http.Request, subject strin
 
 // runQueryRequest ist der Body von /run-query (CEL-basierte Abfrage, ADR-017).
 type runQueryRequest struct {
-	Subject    string `json:"subject"`
-	Recursive  bool   `json:"recursive"`
-	Where      string `json:"where"` // CEL-Prädikat; leer = alle im Scope
-	LowerBound string `json:"lowerBound"`
-	UpperBound string `json:"upperBound"`
-	Limit      int    `json:"limit"` // 0 = unbegrenzt
+	Subject    string   `json:"subject"`
+	Recursive  bool     `json:"recursive"`
+	Where      string   `json:"where"` // CEL-Prädikat; leer = alle im Scope
+	LowerBound string   `json:"lowerBound"`
+	UpperBound string   `json:"upperBound"`
+	Limit      int      `json:"limit"`  // 0 = unbegrenzt
+	Select     []string `json:"select"` // Feldpfade für Projektion; leer = volles Event
 }
 
 // handleRunQuery liest die Events eines Scopes und filtert sie mit einem
@@ -745,6 +746,10 @@ func (s *Server) handleRunQuery(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Limit < 0 {
 		writeError(w, http.StatusBadRequest, "limit darf nicht negativ sein")
+		return
+	}
+	if err := query.ValidateFields(req.Select); err != nil {
+		writeError(w, http.StatusBadRequest, "select: "+err.Error())
 		return
 	}
 	lower, err := parseBound(req.LowerBound, "lowerBound")
@@ -793,7 +798,23 @@ func (s *Server) handleRunQuery(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	writeNDJSON(w, s.logger, result)
+	if len(req.Select) == 0 {
+		writeNDJSON(w, s.logger, result)
+		return
+	}
+
+	// Projektion: jedes Treffer-Event auf die gewählten Feldpfade reduzieren.
+	projected := make([]map[string]any, 0, len(result))
+	for _, ev := range result {
+		obj, err := query.Project(ev, req.Select)
+		if err != nil {
+			s.logger.Error("run-query projektion fehlgeschlagen", "err", err)
+			writeError(w, http.StatusInternalServerError, "interner fehler bei der projektion")
+			return
+		}
+		projected = append(projected, obj)
+	}
+	writeNDJSON(w, s.logger, projected)
 }
 
 // requireAuth umschließt einen Handler mit der Bearer-Token-Prüfung (ADR-008).
@@ -829,12 +850,14 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
 }
 
-// writeNDJSON schreibt eine Event-Liste als Newline-Delimited JSON.
-func writeNDJSON(w http.ResponseWriter, logger *slog.Logger, events []event.Event) {
+// writeNDJSON schreibt eine Werteliste als Newline-Delimited JSON (ein JSON-
+// Objekt pro Zeile). Generisch, damit sowohl Events als auch projizierte
+// Objekte ausgegeben werden können.
+func writeNDJSON[T any](w http.ResponseWriter, logger *slog.Logger, items []T) {
 	w.Header().Set("Content-Type", ndjsonContentType)
 	w.WriteHeader(http.StatusOK)
 	enc := json.NewEncoder(w)
-	for _, ev := range events {
+	for _, ev := range items {
 		if err := enc.Encode(ev); err != nil {
 			// Header sind bereits gesendet; nur noch loggen.
 			logger.Error("ndjson schreiben fehlgeschlagen", "err", err)

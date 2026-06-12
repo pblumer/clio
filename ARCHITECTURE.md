@@ -4,8 +4,8 @@
 > Dieses Dokument ist die *Single Source of Truth* für das Projekt. Es ist so geschrieben, dass eine KI oder eine Person ohne Vorwissen nach dem Lesen vollständig versteht: **Was** gebaut wird, **warum**, **welche Ziele** verfolgt werden, **welche Entscheidungen** getroffen wurden und **wo das Projekt aktuell steht**. Es kombiniert ein Kontextdokument mit eingebetteten Architecture Decision Records (ADRs).
 >
 > **Status des Gesamtprojekts:** `IN ENTWICKLUNG` — **Stufe 0–3 abgeschlossen** plus **Ed25519-Signaturen** (Authentizität). Write/Read/Observe, Optimistic Concurrency, Hash-Kette + Signaturen (`/verify`, `/public-key`), Event-Typen + JSON-Schemas, Group Commit (`CLIO_SYNC`), Observability (`/metrics`), Distribution (Cross-Builds/Docker/Release), Kompaktierung (`cliostore compact`), OpenAPI/Swagger UI. Geplant (Stufe 4): CEL-basierte Abfrageschicht (`run-query`, ADR-017) statt eigener EventQL-Sprache.
-> **Letzte Aktualisierung:** 2026-06-11
-> **Dokumentversion:** 1.23
+> **Letzte Aktualisierung:** 2026-06-12
+> **Dokumentversion:** 1.24
 
 ---
 
@@ -192,7 +192,7 @@ Statt EventQL syntaxgetreu nachzubauen (kein offener Parser verfügbar, eigener 
 1. [x] **CEL-Prädikat-Layer** (`internal/query`): Ausdruck mit `event`-Variable kompilieren (Metadaten typisiert, `event.data` als dynamische Map), gegen ein Event auswerten → bool; Compile-Cache + Tests. *(Etappe 1 — umgesetzt.)*
 2. [x] **`POST /api/v1/run-query`** (read-only): `{subject, recursive, where, lowerBound/upperBound, limit}` → `store.Read` + CEL-Filter → NDJSON. *(Etappe 2 — umgesetzt.)*
 3. [x] **Query-Precondition** `isQueryResultEmpty`/`isQueryResultNonEmpty`: Optimistic Concurrency auf einer CEL-Bedingung (unser `isEventQlQueryTrue`-Äquivalent), atomar im Write-Pfad ausgewertet. *(Etappe 3 — umgesetzt.)*
-4. [ ] **Projektion** (optional): Ausgabe via CEL/Feldliste formen.
+4. [x] **Projektion**: optionales `select` (punktseparierte Feldliste) in `run-query` — Ausgabe auf gewählte Felder reduzieren; Verschachtelung bleibt erhalten, fehlende Felder werden ausgelassen (kein `null`). *(Etappe 4 — umgesetzt, Feldliste; CEL-Projektion mit abgeleiteten Feldern bleibt eine spätere Option.)*
 5. [ ] **Aggregation/Grouping** (später) sowie **Snapshots** (App-geliefert; semantisch optional, da wir bewusst keine Aggregate berechnen).
 
 > **Bewusste Abweichung:** Der Endpoint heißt `run-query` (nicht `run-eventql-query`) — wir bauen *CEL*-basiert, nicht die EventQL-Syntax. Keine Byte-Kompatibilität zu EventSourcingDB; dafür ein Bruchteil des Aufwands. Strikte EventQL-Kompatibilität bliebe ein separater, großer Schritt.
@@ -303,7 +303,7 @@ Statt EventQL syntaxgetreu nachzubauen (kein offener Parser verfügbar, eigener 
 - **Konsequenzen:** Nachweisbare Urheberschaft zusätzlich zur Integrität. Die Signatur geht bewusst **nicht** in den Hash ein (Trennung von Integrität und Authentizität; Verfälschen der Signatur bricht nur die Signaturprüfung). Schlüsselverwaltung/-rotation liegt beim Betreiber; nur ein aktiver Schlüssel wird unterstützt (Rotation alter Signaturen ist nicht abgedeckt).
 
 ### ADR-017: Abfrageschicht auf CEL statt eigener EventQL-Sprache
-- **Status:** Akzeptiert, in Umsetzung (Etappen 1–3 umgesetzt: CEL-Prädikat-Layer, `run-query`-Endpoint, Query-Preconditions; `google/cel-go` als Abhängigkeit)
+- **Status:** Akzeptiert, in Umsetzung (Etappen 1–4 umgesetzt: CEL-Prädikat-Layer, `run-query`-Endpoint, Query-Preconditions, Projektion via `select`-Feldliste; `google/cel-go` als Abhängigkeit)
 - **Kontext:** Das Vorbild EventSourcingDB nutzt eine selbst entworfene, SQL-inspirierte Sprache (EventQL) mit eigenem Parser/Executor. Es gibt **keine offene EventQL-Grammatik/Bibliothek** zum Aufsetzen; ein syntaxgetreuer Nachbau bedeutete Lexer+Parser+Planner+Executor (Monatsaufwand). PartiQL (offene SQL-für-JSON-Spec) hat keine reife Go-Implementierung.
 - **Entscheidung:** Die Abfrageschicht wird **CEL-basiert** (`google/cel-go`) statt als eigene Sprache gebaut. Eine Query = Subject-Scope (vorhandene Primitive) + **CEL-Prädikat** über das Event (`event.type`, `event.data.*` …) + optionale Projektion/Limit. Der `isEventQlQueryTrue`-Gedanke wird zu einer Precondition mit CEL-Bedingung. Endpoint: `POST /api/v1/run-query` (bewusst nicht `run-eventql-query`, da keine EventQL-Syntax).
 - **Konsequenzen:** Drastisch geringerer Aufwand und Risiko; die wertvollen Teile (Bedingungen auf `data`, Precondition) entstehen mit einer reifen, getesteten Engine. Eine zusätzliche Abhängigkeit (`cel-go` + protobuf). **Keine** Byte-Kompatibilität mit EventSourcingDB-EventQL — strikte Kompatibilität bliebe ein separates, großes Vorhaben. Ersetzt die EventQL-Annahme in ADR-007 für die Umsetzung (ADR-007 bleibt als Kontext gültig).
