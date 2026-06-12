@@ -149,6 +149,97 @@
           ]
         },
         {
+          "name": "Run query (nur Projektion, ohne Prädikat)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"subject\": \"/smoke\",\n  \"recursive\": true,\n  \"select\": [\"id\", \"data.title\"]\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/v1/run-query", "host": ["{{baseUrl}}"], "path": ["api", "v1", "run-query"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const lines = pm.response.text().trim().split('\\n').filter(Boolean);",
+                  "pm.test('mindestens ein Treffer', () => pm.expect(lines.length).to.be.above(0));",
+                  "const first = JSON.parse(lines[0]);",
+                  "pm.test('nur projizierte Felder (id + data.title, kein type/subject)', () => {",
+                  "  pm.expect(first).to.have.property('id');",
+                  "  pm.expect(first.data).to.have.property('title');",
+                  "  pm.expect(first).to.not.have.property('type');",
+                  "  pm.expect(first).to.not.have.property('subject');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Run query (String-Filter: contains + in)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"subject\": \"/smoke\",\n  \"recursive\": true,\n  \"where\": \"event.type in ['io.example.library.book-acquired'] && has(event.data.title) && event.data.title.contains('Dune')\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/v1/run-query", "host": ["{{baseUrl}}"], "path": ["api", "v1", "run-query"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const lines = pm.response.text().trim().split('\\n').filter(Boolean);",
+                  "pm.test('mindestens ein Treffer', () => pm.expect(lines.length).to.be.above(0));",
+                  "pm.test('alle Treffer matchen Typ und Titel', () => {",
+                  "  for (const l of lines) {",
+                  "    const ev = JSON.parse(l);",
+                  "    pm.expect(ev.type).to.eql('io.example.library.book-acquired');",
+                  "    pm.expect(ev.data.title).to.include('Dune');",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Run query (ungültiges CEL → 400)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"subject\": \"/smoke\",\n  \"recursive\": true,\n  \"where\": \"event.data.amount >\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/v1/run-query", "host": ["{{baseUrl}}"], "path": ["api", "v1", "run-query"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 Bad Request', () => pm.response.to.have.status(400));",
+                  "pm.test('problem+json mit where-Detail', () => {",
+                  "  pm.expect(pm.response.headers.get('Content-Type')).to.include('application/problem+json');",
+                  "  pm.expect(pm.response.json().detail).to.include('where');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
           "name": "Read event types",
           "request": {
             "method": "GET",
