@@ -1,0 +1,465 @@
+{
+  "timestamp": "2026-06-12T11:48:48+02:00",
+  "hostname": "pi-server-03",
+  "go_version": "go1.24.5",
+  "batch_sizes": [
+    20,
+    50,
+    100
+  ],
+  "total_events": 5000,
+  "read_single_requests": 100,
+  "read_prefix_requests": 20,
+  "write_parallel": 8,
+  "read_parallel": 8,
+  "warmup_events": 500,
+  "runs": 1,
+  "results": [
+    {
+      "target": "local",
+      "run": 1,
+      "batch_size": 20,
+      "write": {
+        "count": 250,
+        "success": 250,
+        "errors": 0,
+        "error_rate_pct": 0,
+        "p50_ms": 19.0295,
+        "p95_ms": 21.90985,
+        "p99_ms": 22.775009999999998,
+        "throughput_per_sec": 8073.164258841121,
+        "total_secs": 0.619335844,
+        "avg_bytes": 8831.164
+      },
+      "read_single": {
+        "count": 100,
+        "success": 100,
+        "errors": 0,
+        "error_rate_pct": 0,
+        "p50_ms": 57.925,
+        "p95_ms": 103.6426,
+        "p99_ms": 132.96753,
+        "throughput_per_sec": 124.75911261018999,
+        "total_secs": 0.801544656,
+        "avg_bytes": 220779
+      },
+      "read_prefix_recursive": {
+        "count": 20,
+        "success": 20,
+        "errors": 0,
+        "error_rate_pct": 0,
+        "p50_ms": 535.076,
+        "p95_ms": 636.34415,
+        "p99_ms": 637.47123,
+        "throughput_per_sec": 14.260213631846872,
+        "total_secs": 1.402503533,
+        "avg_bytes": 2207791
+      }
+    },
+    {
+      "target": "local",
+      "run": 1,
+      "batch_size": 50,
+      "write": {
+        "count": 100,
+        "success": 100,
+        "errors": 0,
+        "error_rate_pct": 0,
+        "p50_ms": 30.0305,
+        "p95_ms": 41.2925,
+        "p99_ms": 47.34577999999999,
+        "throughput_per_sec": 11973.879585168486,
+        "total_secs": 0.417575604,
+        "avg_bytes": 22089.91
+      },
+      "read_single": {
+        "count": 100,
+        "success": 100,
+        "errors": 0,
+        "error_rate_pct": 0,
+        "p50_ms": 64.827,
+        "p95_ms": 104.63725,
+        "p99_ms": 115.06239999999998,
+        "throughput_per_sec": 118.04939853341543,
+        "total_secs": 0.847103003,
+        "avg_bytes": 220899
+      },
+      "read_prefix_recursive": {
+        "count": 20,
+        "success": 20,
+        "errors": 0,
+        "error_rate_pct": 0,
+        "p50_ms": 760.278,
+        "p95_ms": 914.5744499999998,
+        "p99_ms": 1046.92769,
+        "throughput_per_sec": 9.80372007815112,
+        "total_secs": 2.040041927,
+        "avg_bytes": 2208991
+      }
+    },
+    {
+      "target": "local",
+      "run": 1,
+      "batch_size": 100,
+      "write": {
+        "count": 50,
+        "success": 50,
+        "errors": 0,
+        "error_rate_pct": 0,
+        "p50_ms": 46.733000000000004,
+        "p95_ms": 52.94605,
+        "p99_ms": 55.402499999999996,
+        "throughput_per_sec": 15928.871751291872,
+        "total_secs": 0.313895427,
+        "avg_bytes": 44471.8
+      },
+      "read_single": {
+        "count": 100,
+        "success": 100,
+        "errors": 0,
+        "error_rate_pct": 0,
+        "p50_ms": 64.5335,
+        "p95_ms": 108.59314999999997,
+        "p99_ms": 127.56051000000001,
+        "throughput_per_sec": 118.48812194434464,
+        "total_secs": 0.843966453,
+        "avg_bytes": 222359
+      },
+      "read_prefix_recursive": {
+        "count": 20,
+        "success": 20,
+        "errors": 0,
+        "error_rate_pct": 0,
+        "p50_ms": 989.9515,
+        "p95_ms": 1155.2049499999998,
+        "p99_ms": 1209.87859,
+        "throughput_per_sec": 7.581333296047325,
+        "total_secs": 2.638058402,
+        "avg_bytes": 2223590
+      }
+    },
+    {
+      "target": "vps",
+      "run": 1,
+      "batch_size": 20,
+      "write": {
+        "count": 250,
+        "success": 250,
+        "errors": 0,
+        "error_rate_pct": 0,
+        "p50_ms": 38.696,
+        "p95_ms": 46.4316,
+        "p99_ms": 55.33548,
+        "throughput_per_sec": 3916.4474960637453,
+        "total_secs": 1.276667185,
+        "avg_bytes": 8813.24
+      },
+      "read_single": {
+        "count": 100,
+        "success": 100,
+        "errors": 0,
+        "error_rate_pct": 0,
+        "p50_ms": 142.8165,
+        "p95_ms": 332.76320000000004,
+        "p99_ms": 356.3992099999999,
+        "throughput_per_sec": 47.77205279142608,
+        "total_secs": 2.093274083,
+        "avg_bytes": 220331
+      },
+      "read_prefix_recursive": {
+        "count": 20,
+        "success": 20,
+        "errors": 0,
+        "error_rate_pct": 0,
+        "p50_ms": 2073.7185,
+        "p95_ms": 2766.5009,
+        "p99_ms": 2783.41698,
+        "throughput_per_sec": 3.6513090944201165,
+        "total_secs": 5.4774875210000005,
+        "avg_bytes": 2203310
+      }
+    },
+    {
+      "target": "vps",
+      "run": 1,
+      "batch_size": 50,
+      "write": {
+        "count": 100,
+        "success": 100,
+        "errors": 0,
+        "error_rate_pct": 0,
+        "p50_ms": 44.5285,
+        "p95_ms": 60.27794999999999,
+        "p99_ms": 64.65968000000001,
+        "throughput_per_sec": 8484.259298803763,
+        "total_secs": 0.589326637,
+        "avg_bytes": 22035.9
+      },
+      "read_single": {
+        "count": 100,
+        "success": 100,
+        "errors": 0,
+        "error_rate_pct": 0,
+        "p50_ms": 76.11699999999999,
+        "p95_ms": 82.23115,
+        "p99_ms": 96.74695,
+        "throughput_per_sec": 108.0697305022443,
+        "total_secs": 0.925328485,
+        "avg_bytes": 220359
+      },
+      "read_prefix_recursive": {
+        "count": 20,
+        "success": 20,
+        "errors": 0,
+        "error_rate_pct": 0,
+        "p50_ms": 1630.9335,
+        "p95_ms": 2227.3526,
+        "p99_ms": 2237.01372,
+        "throughput_per_sec": 4.473621871547351,
+        "total_secs": 4.470650532,
+        "avg_bytes": 2203590
+      }
+    },
+    {
+      "target": "vps",
+      "run": 1,
+      "batch_size": 100,
+      "write": {
+        "count": 50,
+        "success": 50,
+        "errors": 0,
+        "error_rate_pct": 0,
+        "p50_ms": 46.434,
+        "p95_ms": 55.66585,
+        "p99_ms": 58.44677,
+        "throughput_per_sec": 15129.321720251566,
+        "total_secs": 0.330484082,
+        "avg_bytes": 44267.8
+      },
+      "read_single": {
+        "count": 100,
+        "success": 100,
+        "errors": 0,
+        "error_rate_pct": 0,
+        "p50_ms": 76.601,
+        "p95_ms": 92.20564999999999,
+        "p99_ms": 94.51364,
+        "throughput_per_sec": 105.03382758838997,
+        "total_secs": 0.952074225,
+        "avg_bytes": 221339
+      },
+      "read_prefix_recursive": {
+        "count": 20,
+        "success": 20,
+        "errors": 0,
+        "error_rate_pct": 0,
+        "p50_ms": 2485.7129999999997,
+        "p95_ms": 2946.2164000000002,
+        "p99_ms": 2958.32168,
+        "throughput_per_sec": 3.16202409367056,
+        "total_secs": 6.325062494,
+        "avg_bytes": 2213390
+      }
+    }
+  ],
+  "summary": [
+    {
+      "target": "local",
+      "test": "read_prefix_recursive",
+      "batch_size": 20,
+      "runs": 1,
+      "p50_ms_mean": 535.076,
+      "p95_ms_mean": 636.34415,
+      "p99_ms_mean": 637.47123,
+      "throughput_mean": 14.260213631846872,
+      "error_rate_mean_pct": 0
+    },
+    {
+      "target": "local",
+      "test": "read_single",
+      "batch_size": 20,
+      "runs": 1,
+      "p50_ms_mean": 57.925,
+      "p95_ms_mean": 103.6426,
+      "p99_ms_mean": 132.96753,
+      "throughput_mean": 124.75911261018999,
+      "error_rate_mean_pct": 0
+    },
+    {
+      "target": "local",
+      "test": "write",
+      "batch_size": 20,
+      "runs": 1,
+      "p50_ms_mean": 19.0295,
+      "p95_ms_mean": 21.90985,
+      "p99_ms_mean": 22.775009999999998,
+      "throughput_mean": 8073.164258841121,
+      "error_rate_mean_pct": 0
+    },
+    {
+      "target": "local",
+      "test": "read_prefix_recursive",
+      "batch_size": 50,
+      "runs": 1,
+      "p50_ms_mean": 760.278,
+      "p95_ms_mean": 914.5744499999998,
+      "p99_ms_mean": 1046.92769,
+      "throughput_mean": 9.80372007815112,
+      "error_rate_mean_pct": 0
+    },
+    {
+      "target": "local",
+      "test": "read_single",
+      "batch_size": 50,
+      "runs": 1,
+      "p50_ms_mean": 64.827,
+      "p95_ms_mean": 104.63725,
+      "p99_ms_mean": 115.06239999999998,
+      "throughput_mean": 118.04939853341543,
+      "error_rate_mean_pct": 0
+    },
+    {
+      "target": "local",
+      "test": "write",
+      "batch_size": 50,
+      "runs": 1,
+      "p50_ms_mean": 30.0305,
+      "p95_ms_mean": 41.2925,
+      "p99_ms_mean": 47.34577999999999,
+      "throughput_mean": 11973.879585168486,
+      "error_rate_mean_pct": 0
+    },
+    {
+      "target": "local",
+      "test": "read_prefix_recursive",
+      "batch_size": 100,
+      "runs": 1,
+      "p50_ms_mean": 989.9515,
+      "p95_ms_mean": 1155.2049499999998,
+      "p99_ms_mean": 1209.87859,
+      "throughput_mean": 7.581333296047325,
+      "error_rate_mean_pct": 0
+    },
+    {
+      "target": "local",
+      "test": "read_single",
+      "batch_size": 100,
+      "runs": 1,
+      "p50_ms_mean": 64.5335,
+      "p95_ms_mean": 108.59314999999997,
+      "p99_ms_mean": 127.56051000000001,
+      "throughput_mean": 118.48812194434464,
+      "error_rate_mean_pct": 0
+    },
+    {
+      "target": "local",
+      "test": "write",
+      "batch_size": 100,
+      "runs": 1,
+      "p50_ms_mean": 46.733000000000004,
+      "p95_ms_mean": 52.94605,
+      "p99_ms_mean": 55.402499999999996,
+      "throughput_mean": 15928.871751291872,
+      "error_rate_mean_pct": 0
+    },
+    {
+      "target": "vps",
+      "test": "read_prefix_recursive",
+      "batch_size": 20,
+      "runs": 1,
+      "p50_ms_mean": 2073.7185,
+      "p95_ms_mean": 2766.5009,
+      "p99_ms_mean": 2783.41698,
+      "throughput_mean": 3.6513090944201165,
+      "error_rate_mean_pct": 0
+    },
+    {
+      "target": "vps",
+      "test": "read_single",
+      "batch_size": 20,
+      "runs": 1,
+      "p50_ms_mean": 142.8165,
+      "p95_ms_mean": 332.76320000000004,
+      "p99_ms_mean": 356.3992099999999,
+      "throughput_mean": 47.77205279142608,
+      "error_rate_mean_pct": 0
+    },
+    {
+      "target": "vps",
+      "test": "write",
+      "batch_size": 20,
+      "runs": 1,
+      "p50_ms_mean": 38.696,
+      "p95_ms_mean": 46.4316,
+      "p99_ms_mean": 55.33548,
+      "throughput_mean": 3916.4474960637453,
+      "error_rate_mean_pct": 0
+    },
+    {
+      "target": "vps",
+      "test": "read_prefix_recursive",
+      "batch_size": 50,
+      "runs": 1,
+      "p50_ms_mean": 1630.9335,
+      "p95_ms_mean": 2227.3526,
+      "p99_ms_mean": 2237.01372,
+      "throughput_mean": 4.473621871547351,
+      "error_rate_mean_pct": 0
+    },
+    {
+      "target": "vps",
+      "test": "read_single",
+      "batch_size": 50,
+      "runs": 1,
+      "p50_ms_mean": 76.11699999999999,
+      "p95_ms_mean": 82.23115,
+      "p99_ms_mean": 96.74695,
+      "throughput_mean": 108.0697305022443,
+      "error_rate_mean_pct": 0
+    },
+    {
+      "target": "vps",
+      "test": "write",
+      "batch_size": 50,
+      "runs": 1,
+      "p50_ms_mean": 44.5285,
+      "p95_ms_mean": 60.27794999999999,
+      "p99_ms_mean": 64.65968000000001,
+      "throughput_mean": 8484.259298803763,
+      "error_rate_mean_pct": 0
+    },
+    {
+      "target": "vps",
+      "test": "read_prefix_recursive",
+      "batch_size": 100,
+      "runs": 1,
+      "p50_ms_mean": 2485.7129999999997,
+      "p95_ms_mean": 2946.2164000000002,
+      "p99_ms_mean": 2958.32168,
+      "throughput_mean": 3.16202409367056,
+      "error_rate_mean_pct": 0
+    },
+    {
+      "target": "vps",
+      "test": "read_single",
+      "batch_size": 100,
+      "runs": 1,
+      "p50_ms_mean": 76.601,
+      "p95_ms_mean": 92.20564999999999,
+      "p99_ms_mean": 94.51364,
+      "throughput_mean": 105.03382758838997,
+      "error_rate_mean_pct": 0
+    },
+    {
+      "target": "vps",
+      "test": "write",
+      "batch_size": 100,
+      "runs": 1,
+      "p50_ms_mean": 46.434,
+      "p95_ms_mean": 55.66585,
+      "p99_ms_mean": 58.44677,
+      "throughput_mean": 15129.321720251566,
+      "error_rate_mean_pct": 0
+    }
+  ]
+}

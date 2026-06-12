@@ -1,0 +1,208 @@
+{
+  "method": "strict-3x-single-run with local DB reset between runs",
+  "files": [
+    "/home/pi/cliostore_perf_strict_run1.json",
+    "/home/pi/cliostore_perf_strict_run2.json",
+    "/home/pi/cliostore_perf_strict_run3.json"
+  ],
+  "summary": [
+    {
+      "target": "local",
+      "batch": 20,
+      "test": "read_prefix_recursive",
+      "runs": 3,
+      "p50_ms_mean": 510.93816666666663,
+      "p95_ms_mean": 618.7828499999999,
+      "p99_ms_mean": 627.3787033333333,
+      "throughput_mean": 14.314510399205048,
+      "error_rate_mean_pct": 0.0
+    },
+    {
+      "target": "local",
+      "batch": 20,
+      "test": "read_single",
+      "runs": 3,
+      "p50_ms_mean": 58.415166666666664,
+      "p95_ms_mean": 104.42233333333333,
+      "p99_ms_mean": 123.96974,
+      "throughput_mean": 125.39353285269972,
+      "error_rate_mean_pct": 0.0
+    },
+    {
+      "target": "local",
+      "batch": 20,
+      "test": "write",
+      "runs": 3,
+      "p50_ms_mean": 19.1035,
+      "p95_ms_mean": 22.386766666666663,
+      "p99_ms_mean": 23.75746666666667,
+      "throughput_mean": 7987.2981643741905,
+      "error_rate_mean_pct": 0.0
+    },
+    {
+      "target": "local",
+      "batch": 50,
+      "test": "read_prefix_recursive",
+      "runs": 3,
+      "p50_ms_mean": 737.0018333333334,
+      "p95_ms_mean": 879.1942333333333,
+      "p99_ms_mean": 943.70658,
+      "throughput_mean": 10.073221304117396,
+      "error_rate_mean_pct": 0.0
+    },
+    {
+      "target": "local",
+      "batch": 50,
+      "test": "read_single",
+      "runs": 3,
+      "p50_ms_mean": 60.94083333333333,
+      "p95_ms_mean": 106.65011666666668,
+      "p99_ms_mean": 118.73892333333332,
+      "throughput_mean": 119.50499227488172,
+      "error_rate_mean_pct": 0.0
+    },
+    {
+      "target": "local",
+      "batch": 50,
+      "test": "write",
+      "runs": 3,
+      "p50_ms_mean": 29.425666666666668,
+      "p95_ms_mean": 37.43951666666666,
+      "p99_ms_mean": 40.36770666666666,
+      "throughput_mean": 12515.965353023581,
+      "error_rate_mean_pct": 0.0
+    },
+    {
+      "target": "local",
+      "batch": 100,
+      "test": "read_prefix_recursive",
+      "runs": 3,
+      "p50_ms_mean": 972.9613333333333,
+      "p95_ms_mean": 1181.6237999999998,
+      "p99_ms_mean": 1232.23676,
+      "throughput_mean": 7.600380304749591,
+      "error_rate_mean_pct": 0.0
+    },
+    {
+      "target": "local",
+      "batch": 100,
+      "test": "read_single",
+      "runs": 3,
+      "p50_ms_mean": 62.58183333333333,
+      "p95_ms_mean": 105.2811333333333,
+      "p99_ms_mean": 126.03423666666664,
+      "throughput_mean": 118.28516311456389,
+      "error_rate_mean_pct": 0.0
+    },
+    {
+      "target": "local",
+      "batch": 100,
+      "test": "write",
+      "runs": 3,
+      "p50_ms_mean": 46.096833333333336,
+      "p95_ms_mean": 56.64891666666667,
+      "p99_ms_mean": 61.00465666666667,
+      "throughput_mean": 15752.062547845357,
+      "error_rate_mean_pct": 0.0
+    },
+    {
+      "target": "vps",
+      "batch": 20,
+      "test": "read_prefix_recursive",
+      "runs": 3,
+      "p50_ms_mean": 2968.3213333333333,
+      "p95_ms_mean": 3938.9582333333333,
+      "p99_ms_mean": 3975.102313333333,
+      "throughput_mean": 2.897594091177916,
+      "error_rate_mean_pct": 0.0
+    },
+    {
+      "target": "vps",
+      "batch": 20,
+      "test": "read_single",
+      "runs": 3,
+      "p50_ms_mean": 102.24216666666666,
+      "p95_ms_mean": 225.0474,
+      "p99_ms_mean": 257.04017999999996,
+      "throughput_mean": 75.00856963319534,
+      "error_rate_mean_pct": 0.0
+    },
+    {
+      "target": "vps",
+      "batch": 20,
+      "test": "write",
+      "runs": 3,
+      "p50_ms_mean": 39.9265,
+      "p95_ms_mean": 51.57235000000001,
+      "p99_ms_mean": 75.83986,
+      "throughput_mean": 3751.1668445900978,
+      "error_rate_mean_pct": 0.0
+    },
+    {
+      "target": "vps",
+      "batch": 50,
+      "test": "read_prefix_recursive",
+      "runs": 3,
+      "p50_ms_mean": 2938.308333333333,
+      "p95_ms_mean": 5280.06525,
+      "p99_ms_mean": 5571.934383333333,
+      "throughput_mean": 2.7440274221047303,
+      "error_rate_mean_pct": 0.0
+    },
+    {
+      "target": "vps",
+      "batch": 50,
+      "test": "read_single",
+      "runs": 3,
+      "p50_ms_mean": 71.66833333333334,
+      "p95_ms_mean": 101.58003333333333,
+      "p99_ms_mean": 117.64831,
+      "throughput_mean": 104.42793682993585,
+      "error_rate_mean_pct": 0.0
+    },
+    {
+      "target": "vps",
+      "batch": 50,
+      "test": "write",
+      "runs": 3,
+      "p50_ms_mean": 45.66216666666667,
+      "p95_ms_mean": 79.19766666666665,
+      "p99_ms_mean": 93.55385666666666,
+      "throughput_mean": 7639.578060600213,
+      "error_rate_mean_pct": 0.0
+    },
+    {
+      "target": "vps",
+      "batch": 100,
+      "test": "read_prefix_recursive",
+      "runs": 3,
+      "p50_ms_mean": 2963.6431666666663,
+      "p95_ms_mean": 3919.6201,
+      "p99_ms_mean": 3993.3213533333333,
+      "throughput_mean": 2.5005781626642514,
+      "error_rate_mean_pct": 0.0
+    },
+    {
+      "target": "vps",
+      "batch": 100,
+      "test": "read_single",
+      "runs": 3,
+      "p50_ms_mean": 75.74816666666668,
+      "p95_ms_mean": 114.92736666666667,
+      "p99_ms_mean": 129.46023666666665,
+      "throughput_mean": 101.04547766119128,
+      "error_rate_mean_pct": 0.0
+    },
+    {
+      "target": "vps",
+      "batch": 100,
+      "test": "write",
+      "runs": 3,
+      "p50_ms_mean": 55.9735,
+      "p95_ms_mean": 81.60134999999997,
+      "p99_ms_mean": 89.32470666666666,
+      "throughput_mean": 13005.134840333674,
+      "error_rate_mean_pct": 0.0
+    }
+  ]
+}
