@@ -164,20 +164,34 @@ paths:
         optionale Query-Parameter `prefix` schränkt auf den rekursiven Scope
         eines Pfads ein (z. B. `?prefix=/books` liefert `/books` und alles
         darunter; Prefix-Geschwister wie `/booksstore` werden ausgeschlossen).
+
+        Mit `tree=true` wird stattdessen ein **hierarchischer Baum** als
+        einzelnes JSON-Objekt zurückgegeben (`application/json`): jeder Knoten
+        trägt `count` (Events exakt auf diesem Subject) und `total` (aggregiert
+        im Teilbaum). `prefix` setzt dann die Baum-Wurzel.
       parameters:
         - name: prefix
           in: query
           required: false
           schema: { type: string, example: "/books" }
           description: Subject-Pfad (beginnt mit "/"); leer = alle Subjects
+        - name: tree
+          in: query
+          required: false
+          schema: { type: string, enum: ["true"] }
+          description: "`true` liefert einen verschachtelten Baum statt NDJSON"
       responses:
         "200":
-          description: Subjects als NDJSON
+          description: |
+            Subjects als NDJSON ({subject,count}) — oder, bei `tree=true`, ein
+            verschachtelter Baum als JSON-Objekt.
           content:
             application/x-ndjson:
               schema:
                 type: string
                 description: NDJSON von SubjectInfo-Objekten ({subject,count})
+            application/json:
+              schema: { $ref: "#/components/schemas/SubjectTreeNode" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "500": { $ref: "#/components/responses/InternalError" }
@@ -438,6 +452,19 @@ components:
         title: { type: string, example: "Bad Request" }
         status: { type: integer, example: 400 }
         detail: { type: string, example: "subject muss mit \"/\" beginnen" }
+    SubjectTreeNode:
+      type: object
+      description: |
+        Knoten im Subject-Baum (`GET /api/v1/read-subjects?tree=true`). `count`
+        sind die Events exakt auf diesem Subject (0 für reine Zwischenknoten),
+        `total` die aggregierte Anzahl im Teilbaum. `children` ist nie null.
+      properties:
+        subject: { type: string, example: "/books" }
+        count: { type: integer, example: 0 }
+        total: { type: integer, example: 3 }
+        children:
+          type: array
+          items: { $ref: "#/components/schemas/SubjectTreeNode" }
     EventCandidate:
       type: object
       required: [source, subject, type]

@@ -232,7 +232,8 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 // handleReadSubjects liefert alle bisher beschriebenen Subjects (Streams) als
 // NDJSON ({"subject":...,"count":...} pro Zeile), sortiert. Optionaler
 // Query-Parameter `prefix` schränkt auf den rekursiven Scope eines Pfads ein
-// (z. B. ?prefix=/books).
+// (z. B. ?prefix=/books). Mit `tree=true` wird stattdessen ein hierarchischer
+// Baum als einzelnes JSON-Objekt zurückgegeben.
 func (s *Server) handleReadSubjects(w http.ResponseWriter, r *http.Request) {
 	prefix := r.URL.Query().Get("prefix")
 	if prefix != "" && prefix[0] != '/' {
@@ -245,7 +246,85 @@ func (s *Server) handleReadSubjects(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "interner fehler beim lesen")
 		return
 	}
+	if r.URL.Query().Get("tree") == "true" {
+		root := prefix
+		if root == "" {
+			root = "/"
+		}
+		writeJSON(w, http.StatusOK, buildSubjectTree(subjects, root))
+		return
+	}
 	writeNDJSON(w, s.logger, subjects)
+}
+
+// subjectTreeNode ist ein Knoten im Subject-Baum. `count` sind die Events exakt
+// auf diesem Subject (0 für reine Zwischenknoten), `total` die aggregierte
+// Anzahl im gesamten Teilbaum. `children` ist nie null (leeres Array bei
+// Blättern).
+type subjectTreeNode struct {
+	Subject  string             `json:"subject"`
+	Count    uint64             `json:"count"`
+	Total    uint64             `json:"total"`
+	Children []*subjectTreeNode `json:"children"`
+}
+
+func newSubjectTreeNode(subject string) *subjectTreeNode {
+	return &subjectTreeNode{Subject: subject, Children: []*subjectTreeNode{}}
+}
+
+// buildSubjectTree formt die flache, alphabetisch sortierte Subject-Liste in
+// einen hierarchischen Baum mit Wurzel root ("/" oder ein prefix). Zwischen-
+// segmente, die selbst kein Subject sind (z. B. "/books" bei vorhandenem
+// "/books/42"), entstehen als Knoten mit count=0. Da die Eingabe sortiert ist,
+// erscheinen Kinder in sortierter Reihenfolge.
+func buildSubjectTree(subjects []store.SubjectInfo, root string) *subjectTreeNode {
+	rootNode := newSubjectTreeNode(root)
+	nodes := map[string]*subjectTreeNode{root: rootNode}
+
+	for _, si := range subjects {
+		var rel string
+		switch {
+		case si.Subject == root:
+			rel = ""
+		case root == "/":
+			rel = strings.TrimPrefix(si.Subject, "/")
+		default:
+			rel = strings.TrimPrefix(si.Subject, root+"/")
+		}
+
+		cur, curPath := rootNode, root
+		for _, seg := range strings.Split(rel, "/") {
+			if seg == "" {
+				continue
+			}
+			childPath := curPath + "/" + seg
+			if curPath == "/" {
+				childPath = "/" + seg
+			}
+			child := nodes[childPath]
+			if child == nil {
+				child = newSubjectTreeNode(childPath)
+				nodes[childPath] = child
+				cur.Children = append(cur.Children, child)
+			}
+			cur, curPath = child, childPath
+		}
+		cur.Count = si.Count
+	}
+
+	computeSubtreeTotals(rootNode)
+	return rootNode
+}
+
+// computeSubtreeTotals summiert die Events je Teilbaum (Post-Order) und liefert
+// die Summe des Teilbaums.
+func computeSubtreeTotals(n *subjectTreeNode) uint64 {
+	sum := n.Count
+	for _, c := range n.Children {
+		sum += computeSubtreeTotals(c)
+	}
+	n.Total = sum
+	return sum
 }
 
 // handleReadEventTypes liefert alle bisher geschriebenen Event-Typen als NDJSON

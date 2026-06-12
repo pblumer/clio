@@ -5,7 +5,7 @@
 >
 > **Status des Gesamtprojekts:** `IN ENTWICKLUNG` — **Stufe 0–3 abgeschlossen** plus **Ed25519-Signaturen** (Authentizität). Write/Read/Observe, Optimistic Concurrency, Hash-Kette + Signaturen (`/verify`, `/public-key`), Event-Typen + JSON-Schemas, Group Commit (`CLIO_SYNC`), Observability (`/metrics`), Distribution (Cross-Builds/Docker/Release), Kompaktierung (`cliostore compact`), OpenAPI/Swagger UI. Geplant (Stufe 4): CEL-basierte Abfrageschicht (`run-query`, ADR-017) statt eigener EventQL-Sprache.
 > **Letzte Aktualisierung:** 2026-06-12
-> **Dokumentversion:** 1.26
+> **Dokumentversion:** 1.27
 
 ---
 
@@ -112,7 +112,7 @@ Alle Routen nutzen **POST** (außer ggf. `ping`), weil Parameter im Request-Body
 | `GET /api/v1/verify` | Integrität der Hash-Kette (und ggf. Signaturen) prüfen | 3 |
 | `GET /api/v1/public-key` | Öffentlicher Ed25519-Schlüssel (falls Signieren aktiv) | 3 |
 | `GET /api/v1/read-event-types` | Alle bisher geschriebenen Event-Typen (Anzahl + `hasSchema`) | 3 |
-| `GET /api/v1/read-subjects` | Alle bisher beschriebenen Subjects/Streams (Anzahl); optionaler `prefix`-Query für rekursiven Scope | 3 |
+| `GET /api/v1/read-subjects` | Alle bisher beschriebenen Subjects/Streams (Anzahl); optionaler `prefix`-Query für rekursiven Scope, `tree=true` für einen hierarchischen Baum (`count`/`total`) | 3 |
 | `POST /api/v1/register-event-schema` · `GET /api/v1/read-event-schema` | JSON-Schema je Typ registrieren/lesen; Validierung beim Write (ADR-014) | 3 |
 | `GET /api/v1/events/<subject>` | Komfort-Leseroute: Subject = URL-Pfad; Optionen als Query (`recursive` (Default true), `lowerBound`, `upperBound`, `type` (wiederholbar), `watch=true` für Live). `GET /api/v1/events` = Wurzel | 3 |
 | `POST /api/v1/run-query` | CEL-basierte Abfrage (Scope + Prädikat), NDJSON (ADR-017) | 4 |
