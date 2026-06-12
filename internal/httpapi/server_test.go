@@ -297,13 +297,17 @@ func TestRunQueryProjection(t *testing.T) {
 func TestRunQueryBadRequest(t *testing.T) {
 	srv := newTestServer(t)
 	tests := []string{
-		`{"subject":"orders"}`,                      // subject ohne /
-		`{"subject":"/o","where":"event.type ==="}`, // CEL-syntaxfehler
-		`{"subject":"/o","where":"event.type"}`,     // nicht-bool
-		`{"subject":"/o","limit":-1}`,               // negatives limit
-		`{"subject":"/o","lowerBound":"x"}`,         // ungültige grenze
-		`{"subject":"/o","select":[""]}`,            // leerer select-eintrag
-		`{"subject":"/o","select":["data."]}`,       // select-pfad mit leerem segment
+		`{`,                        // kaputtes json
+		`{"subject":"/o","foo":1}`, // unbekanntes feld
+		`{"subject":"orders"}`,     // subject ohne /
+		`{"subject":"/o","where":"event.type ==="}`,          // CEL-syntaxfehler
+		`{"subject":"/o","where":"event.type"}`,              // nicht-bool
+		`{"subject":"/o","limit":-1}`,                        // negatives limit
+		`{"subject":"/o","lowerBound":"x"}`,                  // ungültige untergrenze
+		`{"subject":"/o","upperBound":"x"}`,                  // ungültige obergrenze
+		`{"subject":"/o","lowerBound":"5","upperBound":"2"}`, // lower > upper
+		`{"subject":"/o","select":[""]}`,                     // leerer select-eintrag
+		`{"subject":"/o","select":["data."]}`,                // select-pfad mit leerem segment
 	}
 	for _, body := range tests {
 		rec := do(t, srv, http.MethodPost, "/api/v1/run-query", "secret-token", body)
@@ -972,10 +976,27 @@ func TestDataRoutesStoreError(t *testing.T) {
 		t.Fatalf("read status = %d, want 500", rec.Code)
 	}
 
+	// run-query scheitert beim Lesen aus dem geschlossenen Store.
+	rec = do(t, srv, http.MethodPost, "/api/v1/run-query", "secret-token", `{"subject":"/a"}`)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("run-query status = %d, want 500", rec.Code)
+	}
+
 	// observe scheitert beim History-Lesen aus dem geschlossenen Store.
 	rec = do(t, srv, http.MethodPost, "/api/v1/observe-events", "secret-token", `{"subject":"/a"}`)
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("observe status = %d, want 500", rec.Code)
+	}
+}
+
+// TestRunQueryNoEngine deckt den Pfad ab, in dem der Query-Compiler fehlt
+// (z. B. weil die CEL-Umgebung nicht erstellt werden konnte) -> 500.
+func TestRunQueryNoEngine(t *testing.T) {
+	srv := newTestServer(t)
+	srv.queryC = nil
+	rec := do(t, srv, http.MethodPost, "/api/v1/run-query", "secret-token", `{"subject":"/a"}`)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
 	}
 }
 

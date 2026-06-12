@@ -81,6 +81,27 @@ func TestEvalErrorOnMissingFieldWithoutHas(t *testing.T) {
 	}
 }
 
+func TestEvalErrorOnInvalidData(t *testing.T) {
+	c := mustCompiler(t)
+	p, _ := c.Compile(`has(event.data.x)`)
+	// Ungültiges JSON in data -> eventToActivation scheitert -> Eval-Fehler.
+	if _, err := p.Eval(ev("t", `{kaputt`)); err == nil {
+		t.Fatal("ungültiges data-JSON sollte einen Eval-Fehler liefern")
+	}
+}
+
+func TestPredicateExpr(t *testing.T) {
+	c := mustCompiler(t)
+	const src = "event.type == 'x'"
+	p, err := c.Compile(src)
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	if p.Expr() != src {
+		t.Fatalf("Expr() = %q, want %q", p.Expr(), src)
+	}
+}
+
 func TestValidateFields(t *testing.T) {
 	tests := []struct {
 		name    string
