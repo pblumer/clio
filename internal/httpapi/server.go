@@ -527,6 +527,12 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	} else {
 		size, used, free = st.FileBytes, st.UsedBytes, st.FreeBytes
 	}
+	diskFree, diskTotal, err := s.store.DiskUsage()
+	if err != nil {
+		s.logger.Error("disk-usage ermitteln fehlgeschlagen", "err", err)
+		diskFree = -1
+		diskTotal = -1
+	}
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	s.metrics.Write(w, metrics.Gauges{
 		ActiveObservers: s.broker.SubscriberCount(),
@@ -534,6 +540,8 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		DBSizeBytes:     size,
 		DBUsedBytes:     used,
 		DBFreeBytes:     free,
+		DiskFreeBytes:   diskFree,
+		DiskTotalBytes:  diskTotal,
 	})
 }
 

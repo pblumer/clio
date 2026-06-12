@@ -31,6 +31,8 @@ type Gauges struct {
 	DBSizeBytes     int64
 	DBUsedBytes     int64 // belegter Anteil der DB-Datei (< 0 = unbekannt)
 	DBFreeBytes     int64 // wiederverwendbarer freier Anteil (< 0 = unbekannt)
+	DiskFreeBytes   int64 // freier Speicher auf dem Dateisystem der DB (< 0 = unbekannt)
+	DiskTotalBytes  int64 // Gesamtspeicher auf dem Dateisystem der DB (< 0 = unbekannt)
 }
 
 // Metrics sammelt HTTP- und Domänen-Metriken. Alle Methoden sind nebenläufig
@@ -129,6 +131,12 @@ func (m *Metrics) Write(w io.Writer, g Gauges) {
 	}
 	if g.DBFreeBytes >= 0 {
 		writeGauge(w, "clio_db_free_bytes", "Freier, wiederverwendbarer Anteil der Datenbankdatei in Bytes (per compact rückgewinnbar).", uint64(g.DBFreeBytes))
+	}
+	if g.DiskFreeBytes >= 0 {
+		writeGauge(w, "clio_disk_free_bytes", "Freier Speicher auf dem Dateisystem der Datenbankdatei.", uint64(g.DiskFreeBytes))
+	}
+	if g.DiskTotalBytes >= 0 {
+		writeGauge(w, "clio_disk_total_bytes", "Gesamtspeicher auf dem Dateisystem der Datenbankdatei.", uint64(g.DiskTotalBytes))
 	}
 
 	writeRuntime(w)

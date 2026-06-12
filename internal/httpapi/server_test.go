@@ -1030,6 +1030,8 @@ func TestMetricsEndpoint(t *testing.T) {
 	for _, want := range []string{
 		"clio_events_written_total 2",
 		"clio_events_total 2",
+		"clio_disk_free_bytes ",
+		"clio_disk_total_bytes ",
 		`clio_http_requests_total{method="POST",route="POST /api/v1/write-events",status="200"}`,
 	} {
 		if !strings.Contains(body, want) {
