@@ -939,6 +939,9 @@ func TestDashboardUI(t *testing.T) {
 	if !strings.Contains(body, "tab-explorer") {
 		t.Fatal("/ui enthält nicht den Explorer")
 	}
+	if !strings.Contains(body, "tab-generate") {
+		t.Fatal("/ui enthält nicht den Erzeugen-Tab")
+	}
 
 	// /ui/ -> Redirect auf /ui.
 	rec = do(t, srv, http.MethodGet, "/ui/", "", "")

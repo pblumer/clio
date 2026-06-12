@@ -237,6 +237,26 @@
   .ex-head { display: flex; align-items: center; gap: 10px; }
   .ex-desc { flex: 1; color: var(--muted); font-size: 13px; }
   .ex-code { margin: 8px 0 0; font-family: var(--mono); font-size: 12.5px; color: #7dcfff; white-space: pre-wrap; word-break: break-word; }
+  /* Erzeugen (Event-/Schema-Generator) */
+  .gen-grid { display: grid; gap: 14px; grid-template-columns: 1fr 1fr; align-items: start; }
+  @media (max-width: 820px) { .gen-grid { grid-template-columns: 1fr; } }
+  .gen-card { display: flex; flex-direction: column; gap: 12px; }
+  .gen-form { display: flex; flex-direction: column; gap: 10px; }
+  .gen-form label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+  .gen-form label.inline { flex-direction: row; align-items: center; gap: 6px; }
+  .gen-form input, .gen-textarea { width: 100%; min-width: 0; }
+  .gen-textarea { background: var(--panel-2); color: var(--fg); border: 1px solid var(--border);
+                  border-radius: 7px; padding: 8px 10px; font-family: var(--mono); font-size: 13px;
+                  min-height: 96px; resize: vertical; }
+  .gen-textarea:focus { outline: none; border-color: var(--accent); }
+  .gen-textarea-tall { min-height: 150px; }
+  .gen-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .gen-actions, .gen-templates { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .gen-templates .tpl { font-size: 12px; }
+  .gen-result { font-family: var(--mono); font-size: 12px; white-space: pre-wrap; word-break: break-word; min-height: 1.2em; color: var(--muted); }
+  .gen-result.ok { color: var(--ok); }
+  .gen-result.err { color: var(--err); }
+  .gen-scenario { margin-top: 14px; }
 </style>
 </head>
 <body>
@@ -252,9 +272,14 @@
   <button id="tab-dashboard" class="active" data-view="dashboard">Dashboard</button>
   <button id="tab-live" data-view="live">Live-Events</button>
   <button id="tab-explorer" data-view="explorer">Explorer</button>
+  <button id="tab-generate" data-view="generate">Erzeugen</button>
   <button id="tab-query" data-view="query">Query</button>
   <button id="tab-help" data-view="help">Hilfe</button>
 </nav>
+
+<!-- Vorschlagslisten (Autocomplete) für den Generator -->
+<datalist id="dl-gen-subjects"></datalist>
+<datalist id="dl-gen-types"></datalist>
 
 <main>
   <!-- ============ Dashboard ============ -->
@@ -395,6 +420,96 @@
         <dt>Signatur</dt><dd id="ig-sign">–</dd>
       </dl>
     </section>
+  </div>
+
+  <!-- ============ Erzeugen ============ -->
+  <div id="view-generate" class="view">
+    <div class="notice">
+      Hier kannst du zum Ausprobieren <strong>Events schreiben</strong> und optional
+      <strong>Schemas registrieren</strong> — über <code>POST /api/v1/write-events</code> bzw.
+      <code>/register-event-schema</code> (Bearer-Token nötig). Tipp: am schnellsten startest du
+      unten mit einem <em>Beispiel-Szenario</em> und schaust es dann unter
+      <em>Live-Events</em> oder <em>Explorer</em> an.
+    </div>
+
+    <div class="gen-grid">
+      <!-- Event schreiben -->
+      <div class="card gen-card">
+        <div class="label">Event schreiben</div>
+        <div class="gen-form">
+          <label>Subject
+            <input id="gen-subject" list="dl-gen-subjects" value="/playground/1" spellcheck="false" placeholder="/playground/1">
+          </label>
+          <label>Typ
+            <input id="gen-type" list="dl-gen-types" value="demo.created" spellcheck="false" placeholder="demo.created">
+          </label>
+          <label>Source
+            <input id="gen-source" value="clio-ui" spellcheck="false" placeholder="clio-ui">
+          </label>
+          <label>Daten (JSON, optional)
+            <textarea id="gen-data" class="gen-textarea" spellcheck="false" placeholder='{"hello": "world"}'>{
+  "hello": "world"
+}</textarea>
+          </label>
+          <div class="gen-row">
+            <label class="inline">Anzahl <input id="gen-count" class="short" type="number" min="1" max="500" value="1"></label>
+            <span class="hint">&gt;1 schreibt mehrere Events (mit Zähler in <code>data._n</code>)</span>
+          </div>
+          <div class="gen-actions">
+            <button id="gen-write" class="primary">Event schreiben</button>
+            <button id="gen-clear-form">Formular leeren</button>
+          </div>
+          <div class="gen-templates">
+            <span class="hint">Vorlagen:</span>
+            <button class="tpl" data-tpl="library">📚 Bibliothek</button>
+            <button class="tpl" data-tpl="carshare">🚗 Autoverleih</button>
+            <button class="tpl" data-tpl="order">🛒 Bestellung</button>
+          </div>
+        </div>
+        <div id="gen-result" class="gen-result"></div>
+      </div>
+
+      <!-- Schema registrieren -->
+      <div class="card gen-card">
+        <div class="label">Schema registrieren (optional)</div>
+        <div class="gen-form">
+          <label>Typ
+            <input id="gen-schema-type" list="dl-gen-types" value="demo.created" spellcheck="false" placeholder="demo.created">
+          </label>
+          <label>JSON Schema
+            <textarea id="gen-schema" class="gen-textarea gen-textarea-tall" spellcheck="false">{
+  "type": "object",
+  "properties": {
+    "hello": { "type": "string" }
+  },
+  "required": ["hello"]
+}</textarea>
+          </label>
+          <div class="gen-actions">
+            <button id="gen-schema-register" class="primary">Schema registrieren</button>
+          </div>
+          <div class="hint">
+            Schemas sind <strong>unveränderlich</strong> (erneute Registrierung → 409) und gelingen nur,
+            wenn <em>alle bereits gespeicherten</em> Events des Typs konform sind. Künftige Writes werden
+            dann gegen das Schema geprüft.
+          </div>
+        </div>
+        <div id="gen-schema-result" class="gen-result"></div>
+      </div>
+    </div>
+
+    <!-- Beispiel-Szenario -->
+    <div class="card gen-card gen-scenario">
+      <div class="label">Beispiel-Szenario in einem Rutsch</div>
+      <p class="hint" style="margin:2px 0 0">Schreibt mehrere zusammenhängende Events unter einem Prefix —
+        ideal, um danach Live-Events, Explorer und Query gleich auszuprobieren.</p>
+      <div class="gen-row">
+        <label class="inline">Prefix <input id="gen-scenario-prefix" value="/playground" spellcheck="false" style="min-width:160px"></label>
+        <button id="gen-scenario-library" class="primary">📚 Bibliothek erzeugen</button>
+        <button id="gen-scenario-carshare" class="primary">🚗 Autoverleih erzeugen</button>
+      </div>
+      <div id="gen-scenario-result" class="gen-result"></div>
+    </div>
   </div>
 
   <!-- ============ Query ============ -->
@@ -554,12 +669,14 @@ function fmtMs(sec) {
 
 // ---------- Tabs ----------
 function switchView(name) {
-  for (const v of ["dashboard", "live", "explorer", "query", "help"]) {
+  for (const v of ["dashboard", "live", "explorer", "generate", "query", "help"]) {
     $("view-" + v).classList.toggle("active", v === name);
     $("tab-" + v).classList.toggle("active", v === name);
   }
   // Explorer beim ersten Öffnen automatisch laden, sofern ein Token vorliegt.
   if (name === "explorer" && !explorerLoaded && tokenInput.value.trim()) loadExplorer();
+  // Erzeugen: Vorschlagslisten beim ersten Öffnen befüllen.
+  if (name === "generate" && !genLoaded && tokenInput.value.trim()) { genLoaded = true; loadGenSuggestions(); }
   // Query-Tab: Feld-Vorschläge beim ersten Öffnen aus echten Events lernen.
   if (name === "query") { qEditor && qEditor.focus(); if (!qSampleLoaded && tokenInput.value.trim()) refreshQuerySchema(); }
   // Dashboard: Canvas nach erneutem Einblenden frisch vermessen.
@@ -1600,6 +1717,164 @@ function loadExample(ex) {
     host.appendChild(card);
   }
 })();
+
+// ---------- Erzeugen (Event-/Schema-Generator) ----------
+let genLoaded = false;
+
+async function authPost(path, body) {
+  const token = tokenInput.value.trim();
+  if (!token) throw new Error("Token fehlt");
+  return fetch(path, {
+    method: "POST",
+    headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+    body: JSON.stringify(body), cache: "no-store",
+  });
+}
+async function problemDetail(r) {
+  try { const j = await r.json(); return j.detail || j.title || ("HTTP " + r.status); }
+  catch (_) { return "HTTP " + r.status; }
+}
+function genResult(id, ok, msg) {
+  const el = $(id);
+  el.className = "gen-result " + (ok ? "ok" : "err");
+  el.textContent = msg;
+}
+function fillGenList(id, values) {
+  const dl = $(id); dl.innerHTML = "";
+  for (const v of values) { const o = document.createElement("option"); o.value = v; dl.appendChild(o); }
+}
+async function loadGenSuggestions() {
+  if (!tokenInput.value.trim()) return;
+  try { fillGenList("dl-gen-types", (await getNDJSON("/api/v1/read-event-types")).map((t) => t.type)); } catch (_) {}
+  try { fillGenList("dl-gen-subjects", (await getNDJSON("/api/v1/read-subjects")).map((s) => s.subject).slice(0, 500)); } catch (_) {}
+}
+// Nach erfolgreichem Write: Vorschläge auffrischen; Dashboard-Zähler holt der
+// Auto-Refresh ohnehin nach.
+function afterGenWrite() { genLoaded = true; loadGenSuggestions(); }
+
+// writeEvents POSTet eine Event-Liste und meldet Fehler in resultId. Liefert die
+// geschriebenen Events oder null.
+async function writeEvents(events, resultId) {
+  const r = await authPost("/api/v1/write-events", { events });
+  if (r.status === 401) { genResult(resultId, false, "Token ungültig (401) — oben Token eingeben und Verbinden."); return null; }
+  if (!r.ok) { genResult(resultId, false, "Fehler: " + await problemDetail(r)); return null; }
+  return (await r.text()).split("\n").map((s) => s.trim()).filter(Boolean).map((l) => JSON.parse(l));
+}
+
+async function genWrite() {
+  const subject = $("gen-subject").value.trim();
+  const type = $("gen-type").value.trim();
+  const source = $("gen-source").value.trim() || "clio-ui";
+  if (!subject || subject[0] !== "/") { genResult("gen-result", false, "Subject muss mit / beginnen."); return; }
+  if (!type) { genResult("gen-result", false, "Typ ist Pflicht."); return; }
+  let data;
+  try { const t = $("gen-data").value.trim(); data = t ? JSON.parse(t) : undefined; }
+  catch (e) { genResult("gen-result", false, "Daten sind kein gültiges JSON: " + e.message); return; }
+  const count = Math.max(1, Math.min(500, parseInt($("gen-count").value, 10) || 1));
+  const events = [];
+  for (let i = 0; i < count; i++) {
+    let d = data;
+    if (count > 1) {
+      if (data && typeof data === "object" && !Array.isArray(data)) d = { ...data, _n: i + 1 };
+      else if (data === undefined) d = { _n: i + 1 };
+      else d = { _n: i + 1, value: data };
+    }
+    const ev = { source, subject, type };
+    if (d !== undefined) ev.data = d;
+    events.push(ev);
+  }
+  $("gen-write").disabled = true;
+  genResult("gen-result", true, "schreibt …");
+  try {
+    const written = await writeEvents(events, "gen-result");
+    if (written) {
+      const ids = written.map((e) => e.id);
+      const range = ids.length > 1 ? ids[0] + "–" + ids[ids.length - 1] : ids[0];
+      genResult("gen-result", true, "✓ " + written.length + " Event" + (written.length > 1 ? "s" : "") + " geschrieben (ID " + range + ").");
+      afterGenWrite();
+    }
+  } catch (e) { genResult("gen-result", false, "Fehler: " + e.message); }
+  finally { $("gen-write").disabled = false; }
+}
+
+async function genRegisterSchema() {
+  const type = $("gen-schema-type").value.trim();
+  if (!type) { genResult("gen-schema-result", false, "Typ ist Pflicht."); return; }
+  let schema;
+  try { schema = JSON.parse($("gen-schema").value); }
+  catch (e) { genResult("gen-schema-result", false, "Schema ist kein gültiges JSON: " + e.message); return; }
+  $("gen-schema-register").disabled = true;
+  genResult("gen-schema-result", true, "registriert …");
+  try {
+    const r = await authPost("/api/v1/register-event-schema", { type, schema });
+    if (r.status === 401) genResult("gen-schema-result", false, "Token ungültig (401).");
+    else if (r.ok) { genResult("gen-schema-result", true, "✓ Schema für '" + type + "' registriert."); loadGenSuggestions(); }
+    else if (r.status === 409) genResult("gen-schema-result", false, "Bereits registriert (unveränderlich): " + await problemDetail(r));
+    else genResult("gen-schema-result", false, "Fehler: " + await problemDetail(r));
+  } catch (e) { genResult("gen-schema-result", false, "Fehler: " + e.message); }
+  finally { $("gen-schema-register").disabled = false; }
+}
+
+const GEN_TEMPLATES = {
+  library: { subject: "/library/book-42", type: "book.borrowed", data: { member: "alice", title: "Dune" } },
+  carshare: { subject: "/carshare/car-7", type: "trip.started", data: { driver: "bob", lat: 47.37, lng: 8.54 } },
+  order: { subject: "/orders/1001", type: "order.placed", data: { customer: "carol", amount: 250, currency: "CHF" } },
+};
+function applyTemplate(name) {
+  const t = GEN_TEMPLATES[name]; if (!t) return;
+  $("gen-subject").value = t.subject;
+  $("gen-type").value = t.type;
+  $("gen-data").value = JSON.stringify(t.data, null, 2);
+  $("gen-count").value = "1";
+  genResult("gen-result", true, "Vorlage geladen — anpassen und schreiben.");
+}
+
+const GEN_SCENARIOS = {
+  library: (p) => [
+    { subject: p + "/books/42", type: "book.acquired", data: { title: "Dune", author: "Herbert" } },
+    { subject: p + "/books/42", type: "book.borrowed", data: { member: "alice" } },
+    { subject: p + "/books/42", type: "book.returned", data: { member: "alice" } },
+    { subject: p + "/books/99", type: "book.acquired", data: { title: "1984", author: "Orwell" } },
+    { subject: p + "/members/alice", type: "member.registered", data: { name: "Alice" } },
+  ],
+  carshare: (p) => [
+    { subject: p + "/cars/7", type: "car.registered", data: { plate: "ZH-1234", model: "Model 3" } },
+    { subject: p + "/cars/7", type: "trip.started", data: { driver: "bob", lat: 47.37, lng: 8.54 } },
+    { subject: p + "/cars/7", type: "gps.snapshot", data: { lat: 47.38, lng: 8.55 } },
+    { subject: p + "/cars/7", type: "gps.snapshot", data: { lat: 47.39, lng: 8.56 } },
+    { subject: p + "/cars/7", type: "trip.ended", data: { driver: "bob", km: 12 } },
+  ],
+};
+async function genScenario(name, btn) {
+  let prefix = $("gen-scenario-prefix").value.trim() || "/playground";
+  if (prefix[0] !== "/") { genResult("gen-scenario-result", false, "Prefix muss mit / beginnen."); return; }
+  prefix = prefix.replace(/\/+$/, "");
+  const events = GEN_SCENARIOS[name](prefix).map((e) => ({ source: "clio-ui", ...e }));
+  btn.disabled = true;
+  genResult("gen-scenario-result", true, "erzeugt …");
+  try {
+    const written = await writeEvents(events, "gen-scenario-result");
+    if (written) {
+      genResult("gen-scenario-result", true,
+        "✓ " + written.length + " Events unter " + prefix + " erzeugt. Jetzt unter ‚Live-Events' (Subject " +
+        prefix + ", rekursiv) oder ‚Explorer' ansehen.");
+      afterGenWrite();
+    }
+  } catch (e) { genResult("gen-scenario-result", false, "Fehler: " + e.message); }
+  finally { btn.disabled = false; }
+}
+
+$("gen-write").addEventListener("click", genWrite);
+$("gen-clear-form").addEventListener("click", () => {
+  $("gen-subject").value = "/playground/1"; $("gen-type").value = "demo.created";
+  $("gen-source").value = "clio-ui"; $("gen-data").value = ""; $("gen-count").value = "1";
+  genResult("gen-result", true, "");
+});
+$("gen-schema-register").addEventListener("click", genRegisterSchema);
+document.querySelectorAll(".gen-templates .tpl").forEach((b) =>
+  b.addEventListener("click", () => applyTemplate(b.dataset.tpl)));
+$("gen-scenario-library").addEventListener("click", (e) => genScenario("library", e.currentTarget));
+$("gen-scenario-carshare").addEventListener("click", (e) => genScenario("carshare", e.currentTarget));
 
 // Auto-Start des Dashboards, falls bereits ein Token im Tab liegt.
 if (tokenInput.value) connect();
