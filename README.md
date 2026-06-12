@@ -73,8 +73,12 @@ kein Prometheus/Grafana nötig, um „mal eben draufzuschauen":
   - **Live-Events** — streamt `GET /api/v1/events/<subject>?watch=true`
     (erst History, dann live) mit Subject-/Typ-Filter, Pause/Fortsetzen und
     aufklappbarer `data` je Event.
+  - **Explorer** — read-only: navigierbarer Subject-Baum
+    (`read-subjects?tree=true`, Klick lädt die Events des Subjects),
+    Event-Typen mit Anzahl und aufklappbaren Schemas (`read-event-types` /
+    `read-event-schema`) sowie ein Integritäts-Panel (`verify` / `public-key`).
 
-Scope & Roadmap (Subject-Browser) stehen in
+Scope & Roadmap stehen in
 [`docs/web-ui-scope.md`](./docs/web-ui-scope.md) (ADR-020).
 
 ### Single-Binaries für alle Plattformen

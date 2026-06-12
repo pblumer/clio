@@ -936,6 +936,9 @@ func TestDashboardUI(t *testing.T) {
 	if !strings.Contains(body, "Live-Events") {
 		t.Fatal("/ui enthält nicht den Live-Event-Viewer")
 	}
+	if !strings.Contains(body, "tab-explorer") {
+		t.Fatal("/ui enthält nicht den Explorer")
+	}
 
 	// /ui/ -> Redirect auf /ui.
 	rec = do(t, srv, http.MethodGet, "/ui/", "", "")
