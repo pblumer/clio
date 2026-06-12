@@ -180,7 +180,7 @@ Jede Stufe ist für sich lauffähig. Statusmarkierungen: `⬜ offen` · `🟡 in
 - [x] Crash-Recovery: durch bbolts ACID-Transaktionen gegeben — Index ist Teil derselben DB und damit immer konsistent; ein separater Rebuild entfällt (siehe ADR-006).
 - [x] fsync-Strategie (Durability vs. Performance) → **Group Commit** als Default (ADR-009), umschaltbar via `CLIO_SYNC` (`group`/`always`/`off`). Benchmarks belegen den Effekt.
 - [x] Kompaktierung — `cliostore compact` (offline, atomarer Swap) defragmentiert die bbolt-Datei ohne Events zu löschen; `clio_db_size_bytes`-Metrik (ADR-015). *Rotation/Archivierung bewusst nicht: widerspricht der Unveränderlichkeit (siehe ADR-015).*
-- [x] Observability: strukturiertes Request-Logging (slog) + Prometheus-`/metrics` (Requests, Latenz-Histogramm, geschriebene Events, 409-Failures, aktive Observer, Event-Count, DB-Größe) — ADR-013, ohne Prometheus-Client-Dependency
+- [x] Observability: strukturiertes Request-Logging (slog) + Prometheus-`/metrics` (Requests, Latenz-Histogramm, geschriebene Events, 409-Failures, aktive Observer, Event-Count, DB-Größe, Laufzeit: Speicher/Goroutinen/CPU) — ADR-013, ohne Prometheus-Client-Dependency
 - [x] Single-Binary-Builds für alle Plattformen (`GOOS`/`GOARCH`) — `make dist` (linux/darwin/windows × amd64/arm64), Version via `-ldflags` eingebettet; Release-Workflow bei Tags `v*`
 - [x] Docker-Image — mehrstufig, `distroless/static`, nonroot, `/data`-Volume
 - **Ergebnis:** Betriebsreif — Durability-Tuning, Observability, Distribution, Wartung. ✅

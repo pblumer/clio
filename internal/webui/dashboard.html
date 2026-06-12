@@ -6,27 +6,51 @@
 <title>clio · Dashboard</title>
 <style>
   :root {
-    --bg: #0f1115; --panel: #171a21; --panel-2: #1d212b; --border: #272c38;
-    --fg: #e6e9ef; --muted: #8b93a7; --accent: #6ea8fe; --ok: #4ade80;
-    --warn: #fbbf24; --err: #f87171; --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --bg: #05070f; --panel: rgba(14,20,38,.72); --panel-2: rgba(22,30,54,.85); --border: #1c2c52;
+    --fg: #dbe7ff; --muted: #7b88b5; --accent: #22d3ee; --accent-2: #f472b6;
+    --ok: #34f5c5; --warn: #fbbf24; --err: #ff5d73;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --glow: 0 0 12px rgba(34,211,238,.45);
   }
   * { box-sizing: border-box; }
   body {
-    margin: 0; background: var(--bg); color: var(--fg);
+    margin: 0; color: var(--fg);
     font: 14px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    background:
+      radial-gradient(1200px 700px at 78% -10%, rgba(244,114,182,.10), transparent 60%),
+      radial-gradient(1000px 800px at 12% 8%, rgba(34,211,238,.12), transparent 55%),
+      radial-gradient(900px 900px at 50% 120%, rgba(99,102,241,.12), transparent 60%),
+      #05070f;
+    background-attachment: fixed;
   }
+  /* Sternenfeld als feines, fixes Punkteraster (kein Bild, kein CDN) */
+  body::before {
+    content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none; opacity: .5;
+    background-image:
+      radial-gradient(1px 1px at 20% 30%, #fff, transparent), radial-gradient(1px 1px at 75% 18%, #cfe9ff, transparent),
+      radial-gradient(1px 1px at 40% 70%, #fff, transparent), radial-gradient(1px 1px at 88% 55%, #bfe7ff, transparent),
+      radial-gradient(1px 1px at 12% 85%, #fff, transparent), radial-gradient(1px 1px at 60% 92%, #e9d5ff, transparent),
+      radial-gradient(1px 1px at 33% 12%, #fff, transparent), radial-gradient(1px 1px at 92% 80%, #fff, transparent);
+    background-repeat: repeat; background-size: 480px 480px;
+    animation: drift 120s linear infinite;
+  }
+  @keyframes drift { from { background-position: 0 0; } to { background-position: 480px 480px; } }
+  * { box-sizing: border-box; }
   header {
     display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
-    padding: 14px 20px; background: var(--panel); border-bottom: 1px solid var(--border);
-    position: sticky; top: 0; z-index: 10;
+    padding: 14px 20px; background: linear-gradient(180deg, rgba(10,16,34,.92), rgba(8,12,28,.72));
+    border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 10;
+    backdrop-filter: blur(8px); box-shadow: 0 1px 0 rgba(34,211,238,.25), 0 8px 30px rgba(0,0,0,.5);
   }
-  header h1 { font-size: 16px; margin: 0; font-weight: 600; letter-spacing: .3px; }
-  header h1 .muse { color: var(--muted); font-weight: 400; }
-  .status { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
+  header h1 { font-size: 15px; margin: 0; font-weight: 700; letter-spacing: 2.5px; text-transform: uppercase;
+    font-family: var(--mono); color: var(--accent); text-shadow: var(--glow); }
+  header h1 .muse { color: var(--accent-2); font-weight: 400; text-shadow: 0 0 12px rgba(244,114,182,.5); }
+  .status { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted);
+    font-family: var(--mono); text-transform: uppercase; letter-spacing: 1px; }
   .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
-  .dot.ok { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
-  .dot.err { background: var(--err); box-shadow: 0 0 8px var(--err); }
-  .dot.live { background: var(--accent); box-shadow: 0 0 8px var(--accent); animation: pulse 1.4s infinite; }
+  .dot.ok { background: var(--ok); box-shadow: 0 0 10px var(--ok); }
+  .dot.err { background: var(--err); box-shadow: 0 0 10px var(--err); }
+  .dot.live { background: var(--accent); box-shadow: 0 0 10px var(--accent); animation: pulse 1.4s infinite; }
   @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
   .spacer { flex: 1; }
   input, select, button {
@@ -35,31 +59,74 @@
   }
   input { min-width: 200px; }
   input.short { min-width: 90px; }
-  button { cursor: pointer; }
-  button:hover { border-color: var(--accent); }
+  button { cursor: pointer; transition: border-color .15s, box-shadow .15s, color .15s; }
+  button:hover { border-color: var(--accent); box-shadow: var(--glow); color: #fff; }
   button:disabled { opacity: .5; cursor: not-allowed; }
-  button.primary { background: var(--accent); color: #0b1020; border-color: var(--accent); font-weight: 600; }
+  button.primary { background: linear-gradient(180deg, #22d3ee, #0ea5c4); color: #04141a; border-color: var(--accent);
+    font-weight: 700; box-shadow: var(--glow); }
   label.inline { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
-  nav.tabs { display: flex; gap: 4px; padding: 0 20px; background: var(--panel); border-bottom: 1px solid var(--border); }
+  nav.tabs { display: flex; gap: 4px; padding: 0 20px; background: rgba(8,12,28,.6); border-bottom: 1px solid var(--border);
+    backdrop-filter: blur(8px); position: sticky; top: 53px; z-index: 9; }
   nav.tabs button {
     background: none; border: none; border-bottom: 2px solid transparent; border-radius: 0;
-    padding: 11px 14px; color: var(--muted); font-weight: 600;
+    padding: 11px 14px; color: var(--muted); font-weight: 600; font-family: var(--mono);
+    text-transform: uppercase; letter-spacing: 1px; font-size: 12px;
   }
-  nav.tabs button.active { color: var(--fg); border-bottom-color: var(--accent); }
-  nav.tabs button:hover { color: var(--fg); }
+  nav.tabs button.active { color: var(--accent); border-bottom-color: var(--accent); text-shadow: var(--glow); box-shadow: none; }
+  nav.tabs button:hover { color: #fff; box-shadow: none; }
   main { padding: 20px; max-width: 1100px; margin: 0 auto; }
   .view { display: none; }
   .view.active { display: block; }
   .grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
   .card {
-    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
-    padding: 16px 18px;
+    position: relative; background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    padding: 16px 18px; backdrop-filter: blur(6px);
+    box-shadow: inset 0 1px 0 rgba(120,180,255,.06), 0 6px 22px rgba(0,0,0,.35);
   }
-  .card .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .6px; }
-  .card .value { font-size: 26px; font-weight: 600; margin-top: 6px; font-variant-numeric: tabular-nums; }
+  /* HUD-Eckmarken */
+  .card::before, .card::after {
+    content: ""; position: absolute; width: 10px; height: 10px; pointer-events: none; opacity: .6;
+  }
+  .card::before { top: 6px; left: 6px; border-top: 1px solid var(--accent); border-left: 1px solid var(--accent); }
+  .card::after { bottom: 6px; right: 6px; border-bottom: 1px solid var(--accent); border-right: 1px solid var(--accent); }
+  .card .label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 1.2px; font-family: var(--mono); }
+  .card .value { font-size: 26px; font-weight: 700; margin-top: 6px; font-variant-numeric: tabular-nums;
+    font-family: var(--mono); color: #eaf6ff; text-shadow: 0 0 10px rgba(120,200,255,.25); }
   .card .sub { color: var(--muted); font-size: 12px; margin-top: 4px; }
   .card .value.mono, .sub.mono { font-family: var(--mono); }
-  section h2 { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .6px; margin: 26px 0 12px; }
+  /* Telemetrie / Live-Charts */
+  .telemetry { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); margin-bottom: 4px; }
+  .hud { position: relative; border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px 8px;
+    background: linear-gradient(180deg, rgba(16,24,48,.7), rgba(8,12,28,.5)); overflow: hidden;
+    box-shadow: inset 0 0 24px rgba(34,211,238,.06), 0 6px 22px rgba(0,0,0,.4); }
+  .hud .hud-top { display: flex; align-items: baseline; justify-content: space-between; }
+  .hud .hud-label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 1.4px; font-family: var(--mono); }
+  .hud .hud-unit { color: var(--muted); font-size: 11px; font-family: var(--mono); }
+  .hud .hud-value { font-size: 30px; font-weight: 700; font-family: var(--mono); font-variant-numeric: tabular-nums;
+    line-height: 1.1; margin: 2px 0 6px; }
+  .hud canvas { display: block; width: 100%; height: 56px; }
+  .hud.cpu .hud-value { color: #22d3ee; text-shadow: 0 0 14px rgba(34,211,238,.55); }
+  .hud.mem .hud-value { color: #f472b6; text-shadow: 0 0 14px rgba(244,114,182,.55); }
+  .hud.thr .hud-value { color: #34f5c5; text-shadow: 0 0 14px rgba(52,245,197,.5); }
+  .hud.req .hud-value { color: #a78bfa; text-shadow: 0 0 14px rgba(167,139,250,.5); }
+  section h2 { font-size: 12px; color: var(--accent); text-transform: uppercase; letter-spacing: 1.6px; margin: 26px 0 12px;
+    font-family: var(--mono); display: flex; align-items: center; gap: 10px; }
+  section h2::after { content: ""; flex: 1; height: 1px; background: linear-gradient(90deg, rgba(34,211,238,.4), transparent); }
+  /* Vitals / EKG-Monitor */
+  .vitals { position: relative; border: 1px solid var(--border); border-radius: 12px; margin: 0 0 18px; overflow: hidden;
+    background: radial-gradient(120% 130% at 0 0, rgba(34,211,238,.07), transparent 55%), rgba(6,11,24,.72);
+    box-shadow: inset 0 0 34px rgba(34,211,238,.05), 0 6px 22px rgba(0,0,0,.45); }
+  .vitals-head { display: flex; align-items: center; gap: 14px; padding: 9px 14px; font-family: var(--mono);
+    border-bottom: 1px solid var(--border); }
+  .vitals-title { color: var(--accent); letter-spacing: 1.6px; font-size: 12px; text-shadow: var(--glow); }
+  .vitals-bpm { display: flex; align-items: baseline; gap: 5px; color: var(--ok); }
+  .vitals-bpm #ekg-bpm { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; text-shadow: 0 0 14px rgba(52,245,197,.6); }
+  .vitals-bpm small { color: var(--muted); font-size: 10px; letter-spacing: 1px; }
+  .vitals-lat { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .vitals-state { font-size: 10px; letter-spacing: 1.6px; padding: 3px 10px; border-radius: 20px;
+    border: 1px solid var(--ok); color: var(--ok); text-shadow: 0 0 8px rgba(52,245,197,.5); }
+  .vitals-state.down { color: var(--err); border-color: var(--err); text-shadow: 0 0 8px rgba(255,93,115,.6); animation: pulse 1s infinite; }
+  .vitals canvas { display: block; width: 100%; height: 140px; }
   .kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 18px; }
   .kv dt { color: var(--muted); }
   .kv dd { margin: 0; font-family: var(--mono); word-break: break-all; }
@@ -194,6 +261,43 @@
           <option value="0">manuell</option>
         </select></label></span>
     </div>
+
+    <div class="vitals">
+      <div class="vitals-head">
+        <span class="vitals-title">◈ Liveness · Ping-Monitor</span>
+        <span class="spacer"></span>
+        <span class="vitals-bpm"><span id="ekg-bpm">--</span><small>BPM</small></span>
+        <span class="vitals-lat" id="ekg-lat">– ms</span>
+        <span class="vitals-state" id="ekg-state">VERBINDE…</span>
+      </div>
+      <canvas id="ekg"></canvas>
+    </div>
+
+    <section style="margin-top:0">
+      <h2>Telemetrie · Live</h2>
+      <div class="telemetry">
+        <div class="hud cpu">
+          <div class="hud-top"><span class="hud-label">CPU-Last</span><span class="hud-unit" id="t-cpu-unit">% · –&nbsp;Kerne</span></div>
+          <div class="hud-value" id="t-cpu">–</div>
+          <canvas id="spark-cpu"></canvas>
+        </div>
+        <div class="hud mem">
+          <div class="hud-top"><span class="hud-label">Heap-Speicher</span><span class="hud-unit" id="t-mem-unit">MiB</span></div>
+          <div class="hud-value" id="t-mem">–</div>
+          <canvas id="spark-mem"></canvas>
+        </div>
+        <div class="hud thr">
+          <div class="hud-top"><span class="hud-label">Event-Durchsatz</span><span class="hud-unit">ev/s</span></div>
+          <div class="hud-value" id="t-thr">–</div>
+          <canvas id="spark-thr"></canvas>
+        </div>
+        <div class="hud req">
+          <div class="hud-top"><span class="hud-label">Request-Rate</span><span class="hud-unit">req/s</span></div>
+          <div class="hud-value" id="t-req">–</div>
+          <canvas id="spark-req"></canvas>
+        </div>
+      </div>
+    </section>
 
     <div class="grid">
       <div class="card"><div class="label">Events gesamt</div><div id="m-events" class="value">–</div><div id="m-events-sub" class="sub">gespeichert</div></div>
@@ -443,6 +547,8 @@ function switchView(name) {
   if (name === "explorer" && !explorerLoaded && tokenInput.value.trim()) loadExplorer();
   // Query-Tab: Feld-Vorschläge beim ersten Öffnen aus echten Events lernen.
   if (name === "query") { qEditor && qEditor.focus(); if (!qSampleLoaded && tokenInput.value.trim()) refreshQuerySchema(); }
+  // Dashboard: Canvas nach erneutem Einblenden frisch vermessen.
+  if (name === "dashboard") { ekgResize(); redrawSparks(); }
 }
 document.querySelectorAll("nav.tabs button").forEach((b) =>
   b.addEventListener("click", () => switchView(b.dataset.view)));
@@ -514,6 +620,167 @@ async function refresh() {
   }
 }
 
+// ---------- Telemetrie-Charts (Canvas, ohne Abhängigkeiten) ----------
+const SPARK_LEN = 60;
+const tel = { cpu: [], mem: [], thr: [], req: [], prevCpu: null, prevEvents: null, prevReq: null, prevAt: null };
+function pushBuf(a, v) { a.push(v); if (a.length > SPARK_LEN) a.shift(); }
+function drawSpark(canvas, data, color) {
+  if (!canvas) return;
+  const dpr = window.devicePixelRatio || 1;
+  const cssW = canvas.clientWidth || 230, cssH = canvas.clientHeight || 56;
+  if (canvas.width !== Math.round(cssW * dpr) || canvas.height !== Math.round(cssH * dpr)) {
+    canvas.width = Math.round(cssW * dpr); canvas.height = Math.round(cssH * dpr);
+  }
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cssW, cssH);
+  ctx.strokeStyle = "rgba(120,150,220,.10)"; ctx.lineWidth = 1;
+  for (let g = 0; g <= 2; g++) { const y = (cssH - 2) * g / 2 + 1; ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(cssW, y); ctx.stroke(); }
+  if (data.length < 2) return;
+  const max = Math.max(...data), min = Math.min(...data, 0), span = (max - min) || 1, pad = 4;
+  const X = (i) => i / (data.length - 1) * cssW;
+  const Y = (v) => cssH - pad - (v - min) / span * (cssH - 2 * pad);
+  const grad = ctx.createLinearGradient(0, 0, 0, cssH);
+  grad.addColorStop(0, color + "55"); grad.addColorStop(1, color + "00");
+  ctx.beginPath(); ctx.moveTo(0, cssH);
+  data.forEach((v, i) => ctx.lineTo(X(i), Y(v)));
+  ctx.lineTo(cssW, cssH); ctx.closePath(); ctx.fillStyle = grad; ctx.fill();
+  ctx.beginPath(); data.forEach((v, i) => i ? ctx.lineTo(X(i), Y(v)) : ctx.moveTo(X(i), Y(v)));
+  ctx.strokeStyle = color; ctx.lineWidth = 1.8; ctx.shadowColor = color; ctx.shadowBlur = 8; ctx.stroke();
+  const lx = X(data.length - 1), ly = Y(data[data.length - 1]);
+  ctx.beginPath(); ctx.arc(lx, ly, 2.6, 0, Math.PI * 2); ctx.fillStyle = color; ctx.fill(); ctx.shadowBlur = 0;
+}
+function redrawSparks() {
+  drawSpark($("spark-cpu"), tel.cpu, "#22d3ee"); drawSpark($("spark-mem"), tel.mem, "#f472b6");
+  drawSpark($("spark-thr"), tel.thr, "#34f5c5"); drawSpark($("spark-req"), tel.req, "#a78bfa");
+}
+function updateTelemetry(info, m, now) {
+  const cpuSecs = gauge(m, "clio_process_cpu_seconds_total");
+  const numCpu = gauge(m, "clio_num_cpu") || 1;
+  const heap = gauge(m, "clio_memory_heap_bytes");
+  const written = sum(m, "clio_events_written_total");
+  const reqTotal = sum(m, "clio_http_requests_total");
+  const dt = tel.prevAt != null ? (now - tel.prevAt) / 1000 : 0;
+
+  if (cpuSecs != null) {
+    $("t-cpu-unit").textContent = "% · " + numCpu + " Kerne";
+    if (tel.prevCpu != null && dt > 0) {
+      const pct = Math.max(0, (cpuSecs - tel.prevCpu) / dt / numCpu * 100);
+      pushBuf(tel.cpu, pct); $("t-cpu").textContent = pct.toFixed(1);
+    }
+    tel.prevCpu = cpuSecs;
+  } else { $("t-cpu").textContent = "n/a"; $("t-cpu-unit").textContent = "nicht verfügbar"; }
+
+  if (heap != null) { const mib = heap / 1048576; pushBuf(tel.mem, mib); $("t-mem").textContent = mib.toFixed(1); }
+
+  if (tel.prevEvents != null && dt > 0) {
+    const thr = Math.max(0, (written - tel.prevEvents) / dt);
+    pushBuf(tel.thr, thr); $("t-thr").textContent = thr.toFixed(thr < 10 ? 2 : 0);
+  }
+  tel.prevEvents = written;
+
+  if (tel.prevReq != null && dt > 0) {
+    const rr = Math.max(0, (reqTotal - tel.prevReq) / dt);
+    pushBuf(tel.req, rr); $("t-req").textContent = rr.toFixed(rr < 10 ? 2 : 0);
+  }
+  tel.prevReq = reqTotal;
+
+  tel.prevAt = now;
+  redrawSparks();
+}
+window.addEventListener("resize", redrawSparks);
+
+// ---------- Liveness-EKG (Ping-Monitor, Oszilloskop-Sweep) ----------
+const ekg = { cv: null, ctx: null, w: 0, h: 0, dpr: 1, col: 0, step: 2, gap: 16, trace: null,
+  beatPhase: 2, dPhase: 1 / 42, alive: true, bpm: null, lastPingAt: null, raf: null, pingTimer: null };
+const PING_MS = 1200;
+// ekgWave bildet einen PQRST-Komplex (p = 0..1) als Summe von Gauß-Glocken.
+function ekgWave(p) {
+  const g = (c, w, a) => a * Math.exp(-((p - c) * (p - c)) / (2 * w * w));
+  return g(0.12, 0.018, 0.12) + g(0.34, 0.009, -0.18) + g(0.385, 0.006, 1.0) + g(0.43, 0.009, -0.30) + g(0.63, 0.04, 0.28);
+}
+function ekgResize() {
+  const cv = ekg.cv; if (!cv) return;
+  ekg.dpr = window.devicePixelRatio || 1;
+  ekg.w = cv.clientWidth || 600; ekg.h = cv.clientHeight || 140;
+  cv.width = Math.round(ekg.w * ekg.dpr); cv.height = Math.round(ekg.h * ekg.dpr);
+  const cols = Math.max(16, Math.floor(ekg.w / ekg.step));
+  ekg.trace = new Float32Array(cols).fill(NaN);
+  if (ekg.col >= cols) ekg.col = 0;
+}
+function ekgGrid(ctx, w, h) {
+  ctx.lineWidth = 1; ctx.strokeStyle = "rgba(34,211,238,.05)";
+  for (let x = 0; x < w; x += 11) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke(); }
+  for (let y = 0; y < h; y += 11) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke(); }
+  ctx.strokeStyle = "rgba(34,211,238,.11)";
+  for (let x = 0; x < w; x += 55) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke(); }
+  for (let y = 0; y < h; y += 55) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke(); }
+}
+function ekgFrame() {
+  const ctx = ekg.ctx; if (!ctx) return;
+  const w = ekg.w, h = ekg.h, dpr = ekg.dpr, cols = ekg.trace.length, mid = h * 0.56, amp = h * 0.34;
+  // neue Probe an der Schreibposition
+  let y;
+  if (ekg.beatPhase < 1) { y = ekgWave(ekg.beatPhase); ekg.beatPhase += ekg.dPhase; }
+  else { y = (Math.random() - 0.5) * 0.015; }
+  const drawCol = ekg.col;
+  ekg.trace[drawCol] = ekg.alive ? y : NaN;
+  ekg.col = (ekg.col + 1) % cols;
+  for (let k = 0; k < ekg.gap; k++) ekg.trace[(ekg.col + k) % cols] = NaN; // Lösch-Lücke vor dem Kopf
+
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  ekgGrid(ctx, w, h);
+  const color = ekg.alive ? "#34f5c5" : "#ff5d73";
+  if (!ekg.alive) { ctx.globalAlpha = .5; ctx.strokeStyle = color; ctx.lineWidth = 1.6; ctx.beginPath(); ctx.moveTo(0, mid); ctx.lineTo(w, mid); ctx.stroke(); ctx.globalAlpha = 1; }
+  ctx.lineWidth = 1.8; ctx.strokeStyle = color; ctx.shadowColor = color; ctx.shadowBlur = 9;
+  ctx.beginPath();
+  let pen = false;
+  for (let c = 0; c < cols; c++) {
+    const v = ekg.trace[c];
+    if (Number.isNaN(v)) { pen = false; continue; }
+    const px = c * ekg.step, py = mid - v * amp;
+    if (!pen) { ctx.moveTo(px, py); pen = true; } else ctx.lineTo(px, py);
+  }
+  ctx.stroke();
+  const hv = ekg.trace[drawCol];
+  if (!Number.isNaN(hv)) { ctx.beginPath(); ctx.arc(drawCol * ekg.step, mid - hv * amp, 2.8, 0, Math.PI * 2); ctx.fillStyle = color; ctx.fill(); }
+  ctx.shadowBlur = 0;
+  ekg.raf = requestAnimationFrame(ekgFrame);
+}
+function setEkgState(up, connecting) {
+  const el = $("ekg-state"); if (!el) return;
+  el.textContent = connecting ? "VERBINDE…" : up ? "● LIVE" : "⚠ KEIN SIGNAL";
+  el.classList.toggle("down", !up && !connecting);
+}
+function ekgDown() {
+  ekg.alive = false; ekg.bpm = null;
+  $("ekg-bpm").textContent = "--"; $("ekg-lat").textContent = "– ms"; setEkgState(false, false);
+}
+async function ekgPing() {
+  const t0 = performance.now();
+  try {
+    const r = await fetch("/api/v1/ping", { cache: "no-store" });
+    const lat = Math.round(performance.now() - t0);
+    if (r.ok) {
+      const now = Date.now();
+      if (ekg.lastPingAt) { const bpm = Math.round(60000 / (now - ekg.lastPingAt)); ekg.bpm = bpm; $("ekg-bpm").textContent = bpm; }
+      ekg.lastPingAt = now;
+      ekg.alive = true; ekg.beatPhase = 0; // Herzschlag auslösen
+      $("ekg-lat").textContent = lat + " ms"; setEkgState(true, false);
+    } else ekgDown();
+  } catch (_) { ekgDown(); }
+  finally { ekg.pingTimer = setTimeout(ekgPing, PING_MS); }
+}
+function initEkg() {
+  ekg.cv = $("ekg"); if (!ekg.cv) return;
+  ekg.ctx = ekg.cv.getContext("2d");
+  ekgResize(); setEkgState(true, true);
+  ekg.raf = requestAnimationFrame(ekgFrame);
+  ekgPing();
+}
+window.addEventListener("resize", ekgResize);
+
 function render(info, m) {
   $("m-events").textContent = fmtInt(gauge(m, "clio_events_total") ?? info.eventsTotal);
   $("m-dbsize").textContent = fmtBytes(gauge(m, "clio_db_size_bytes"));
@@ -542,6 +809,8 @@ function render(info, m) {
   $("i-addr").textContent = info.httpListenAddr ?? "–";
   $("i-db").textContent = info.databaseFilePath ?? "–";
   $("i-time").textContent = info.serverTime ? new Date(info.serverTime).toLocaleString("de-CH") : "–";
+
+  updateTelemetry(info, m, now);
 }
 
 function markNotice(text, isErr) {
@@ -1303,6 +1572,9 @@ function loadExample(ex) {
 
 // Auto-Start des Dashboards, falls bereits ein Token im Tab liegt.
 if (tokenInput.value) connect();
+
+// Liveness-EKG läuft unabhängig vom Token (ping braucht keine Auth).
+initEkg();
 </script>
 </body>
 </html>
