@@ -1,6 +1,6 @@
 # Web-UI — Machbarkeits- & Scope-Skizze
 
-> Status: **Stufen 1 (Dashboard) + 2 (Live-Event-Viewer) + 3 (Subject-Browser) + 5 (Query-Konsole &amp; Hilfe) + 6 (Sci-Fi-Theme, Telemetrie &amp; EKG) + 7 (Event-/Schema-Generator) umgesetzt** · Stufe 4 skizziert.
+> Status: **Stufen 1 (Dashboard) + 2 (Live-Event-Viewer) + 3 (Subject-Browser) + 5 (Query-Konsole &amp; Hilfe) + 6 (Sci-Fi-Theme &amp; Telemetrie) + 7 (Event-/Schema-Generator) + 8 (Eventstrom-Dashboard) umgesetzt** · Stufe 4 skizziert.
 > Zugehörige Entscheidung: **ADR-020** in [`ARCHITECTURE.md`](../ARCHITECTURE.md).
 
 Ein schlankes Web-UI für **Maintenance, Observing, Monitoring** — ohne Clios
@@ -99,10 +99,8 @@ Optischer Umbau des `/ui` in einen **HUD-/Space-Stil** (Sternenfeld via
 CSS-Gradients, Neon-Glow, Monospace-HUD) — weiterhin Vanilla, kein CDN/Build.
 Neu auf dem Dashboard:
 
-- **Liveness-EKG**: ein Oszilloskop-Sweep (Canvas, `requestAnimationFrame`), der
-  auf jeden `ping` einen PQRST-Komplex zeichnet; BPM aus dem Ping-Intervall,
-  Latenz-Anzeige, Flatline + Alarm bei Ausfall. Der Ping läuft **ohne Token**
-  (Liveness), also auch vor dem Verbinden.
+- **Liveness-EKG** (~~Oszilloskop-Sweep auf jeden `ping`~~): in **Stufe 8 entfernt**
+  und durch das Eventstrom-Diagramm ersetzt (siehe unten).
 - **Live-Telemetrie-Charts**: glühende Sparklines (Canvas) für CPU-Last,
   Heap-Speicher, Event-Durchsatz und Request-Rate, je aus rollierenden
   Messfenstern.
@@ -128,6 +126,23 @@ Es sind **normale Daten-Writes**, die jede:r mit dem Token ohnehin per API
 ausführen kann (keine neue Privilegien-Ebene, kein neuer Endpunkt) — im
 Unterschied zu **destruktiven Maintenance-Operationen** (Kompaktierung etc.),
 die weiterhin zurückgestellt bleiben.
+
+### Stufe 8 — Eventstrom-Dashboard  ✅ umgesetzt
+Umbau des Dashboards weg vom dekorativen **Liveness-EKG** (Stufe 6) hin zur
+Beobachtung des **Eventstroms**. Ein einziger `observe`-Stream auf `/` (rekursiv,
+`GET /api/v1/events?watch=true&recursive=true`) speist zwei Ansichten:
+
+- **Eventstrom-Diagramm seit Serverstart**: Da jedes Event sein `time` trägt,
+  wird die Verteilung über die Achse `[Serverstart … jetzt]` (Serverstart aus
+  `/api/v1/info`) in einem Canvas gezeichnet — umschaltbar **Rate** (Events je
+  Zeitabschnitt) bzw. **kumuliert**. Der „jetzt"-Rand wandert über einen
+  1-Sekunden-Takt, Live-Events aktualisieren das Diagramm sofort.
+- **Einklappbares Live-Events-Fenster**: derselbe Stream füllt eine Liste
+  (neueste oben, aufklappbare `data`, gekappt). Auf-/Zuklapp-Zustand wird im
+  Browser gemerkt (`localStorage`).
+
+Kein neuer Server-Code — nutzt den bestehenden Streaming-Endpunkt. Die
+Telemetrie-Sparklines aus Stufe 6 bleiben erhalten.
 
 ### Stufe 4 — Maintenance-Konsole  ⚠️ bewusst zurückgestellt
 Schreibende **Maintenance**-Aktionen (z. B. Kompaktierung anstoßen). **Out of

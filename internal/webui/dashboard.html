@@ -112,31 +112,25 @@
   section h2 { font-size: 12px; color: var(--accent); text-transform: uppercase; letter-spacing: 1.6px; margin: 26px 0 12px;
     font-family: var(--mono); display: flex; align-items: center; gap: 10px; }
   section h2::after { content: ""; flex: 1; height: 1px; background: linear-gradient(90deg, rgba(34,211,238,.4), transparent); }
-  /* Vitals / EKG-Monitor */
-  .vitals { position: relative; border: 1px solid var(--border); border-radius: 12px; margin: 0 0 18px; overflow: hidden;
+  /* Eventstrom-Chart + einklappbares Live-Panel */
+  .evstream, .dash-live { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; margin: 0 0 18px;
     background: radial-gradient(120% 130% at 0 0, rgba(34,211,238,.07), transparent 55%), rgba(6,11,24,.72);
     box-shadow: inset 0 0 34px rgba(34,211,238,.05), 0 6px 22px rgba(0,0,0,.45); }
-  .vitals-head { display: flex; align-items: center; gap: 14px; padding: 9px 14px; font-family: var(--mono);
+  .evs-head, .dl-head { display: flex; align-items: center; gap: 12px; padding: 9px 14px; font-family: var(--mono);
     border-bottom: 1px solid var(--border); flex-wrap: wrap; }
-  .vitals-title { color: var(--accent); letter-spacing: 1.6px; font-size: 12px; text-shadow: var(--glow); }
-  .vitals-rate { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--muted); letter-spacing: 1px; }
-  .vitals-rate-label { text-transform: uppercase; }
-  #ekg-rate-val { color: var(--accent); font-variant-numeric: tabular-nums; min-width: 56px; text-shadow: var(--glow); }
-  input[type=range] { -webkit-appearance: none; appearance: none; height: 4px; width: 130px; min-width: 130px; padding: 0;
-    background: linear-gradient(90deg, var(--accent), var(--accent-2)); border: none; border-radius: 3px;
-    box-shadow: 0 0 8px rgba(34,211,238,.4); cursor: pointer; }
-  input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%;
-    background: #eaf6ff; border: 1px solid var(--accent); box-shadow: 0 0 8px var(--accent); cursor: pointer; }
-  input[type=range]::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%; background: #eaf6ff;
-    border: 1px solid var(--accent); box-shadow: 0 0 8px var(--accent); cursor: pointer; }
-  .vitals-bpm { display: flex; align-items: baseline; gap: 5px; color: var(--ok); }
-  .vitals-bpm #ekg-bpm { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; text-shadow: 0 0 14px rgba(52,245,197,.6); }
-  .vitals-bpm small { color: var(--muted); font-size: 10px; letter-spacing: 1px; }
-  .vitals-lat { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
-  .vitals-state { font-size: 10px; letter-spacing: 1.6px; padding: 3px 10px; border-radius: 20px;
-    border: 1px solid var(--ok); color: var(--ok); text-shadow: 0 0 8px rgba(52,245,197,.5); }
-  .vitals-state.down { color: var(--err); border-color: var(--err); text-shadow: 0 0 8px rgba(255,93,115,.6); animation: pulse 1s infinite; }
-  .vitals canvas { display: block; width: 100%; height: 140px; }
+  .evs-title, .dl-title { color: var(--accent); letter-spacing: 1.4px; font-size: 12px; text-shadow: var(--glow); }
+  .evs-stats { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .evs-stats b { color: var(--fg); }
+  .evs-modes { display: flex; gap: 4px; }
+  .evs-mode { font-size: 11px; padding: 4px 9px; }
+  .evs-mode.active { border-color: var(--accent); color: var(--accent); text-shadow: var(--glow); }
+  .evstream canvas { display: block; width: 100%; height: 170px; }
+  .dl-head { cursor: pointer; user-select: none; }
+  .dl-toggle { color: var(--muted); width: 14px; text-align: center; }
+  .dash-live.collapsed .dl-head { border-bottom: none; }
+  .dash-live.collapsed .dl-body { display: none; }
+  .dl-body { padding: 10px 12px; }
+  #dash-events { display: flex; flex-direction: column; gap: 6px; max-height: 360px; overflow: auto; }
   .kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 18px; }
   .kv dt { color: var(--muted); }
   .kv dd { margin: 0; font-family: var(--mono); word-break: break-all; }
@@ -297,20 +291,30 @@
         </select></label></span>
     </div>
 
-    <div class="vitals">
-      <div class="vitals-head">
-        <span class="vitals-title">◈ Liveness · Ping-Monitor</span>
-        <label class="vitals-rate" title="Ping-Takt / Ziel-Herzfrequenz">
-          <span class="vitals-rate-label">Takt</span>
-          <input id="ekg-rate" type="range" min="30" max="150" step="5" value="50">
-          <span id="ekg-rate-val">50&nbsp;BPM</span>
-        </label>
+    <div class="evstream">
+      <div class="evs-head">
+        <span class="evs-title">◈ Eventstrom · seit Serverstart</span>
+        <span class="evs-stats">Gesamt <b id="ev-total">–</b> · <span id="ev-peak">–</span></span>
         <span class="spacer"></span>
-        <span class="vitals-bpm"><span id="ekg-bpm">--</span><small>BPM</small></span>
-        <span class="vitals-lat" id="ekg-lat">– ms</span>
-        <span class="vitals-state" id="ekg-state">VERBINDE…</span>
+        <span class="evs-modes">
+          <button id="ev-mode-rate" class="evs-mode active" title="Events je Zeitabschnitt">Rate</button>
+          <button id="ev-mode-cum" class="evs-mode" title="Kumuliert über die Zeit">Kumuliert</button>
+        </span>
       </div>
-      <canvas id="ekg"></canvas>
+      <canvas id="evchart"></canvas>
+    </div>
+
+    <div class="dash-live" id="dash-live">
+      <div class="dl-head" id="ev-collapse" role="button" tabindex="0" aria-expanded="true">
+        <span class="dl-toggle" id="ev-collapse-icon">▾</span>
+        <span class="dl-title">Live-Events</span>
+        <span class="badge" id="ev-live-count">0 Events</span>
+        <span class="spacer"></span>
+        <span class="hint">beobachtet <code>/</code> rekursiv · neueste oben</span>
+      </div>
+      <div class="dl-body">
+        <div id="dash-events"><div class="empty">Token eingeben und <strong>Verbinden</strong> — dann läuft der Eventstrom.</div></div>
+      </div>
     </div>
 
     <section style="margin-top:0">
@@ -680,7 +684,7 @@ function switchView(name) {
   // Query-Tab: Feld-Vorschläge beim ersten Öffnen aus echten Events lernen.
   if (name === "query") { qEditor && qEditor.focus(); if (!qSampleLoaded && tokenInput.value.trim()) refreshQuerySchema(); }
   // Dashboard: Canvas nach erneutem Einblenden frisch vermessen.
-  if (name === "dashboard") { ekgResize(); redrawSparks(); }
+  if (name === "dashboard") { evResize(); redrawSparks(); }
 }
 document.querySelectorAll("nav.tabs button").forEach((b) =>
   b.addEventListener("click", () => switchView(b.dataset.view)));
@@ -822,112 +826,173 @@ function updateTelemetry(info, m, now) {
 }
 window.addEventListener("resize", redrawSparks);
 
-// ---------- Liveness-EKG (Ping-Monitor, Oszilloskop-Sweep) ----------
-const ekg = { cv: null, ctx: null, w: 0, h: 0, dpr: 1, col: 0, step: 2, gap: 16, trace: null,
-  beatPhase: 2, dPhase: 1 / 42, alive: true, bpm: null, lastPingAt: null, raf: null, pingTimer: null,
-  pingMs: 1200 };
-// setPingRate stellt den Ping-Takt aus einer Ziel-Herzfrequenz (BPM) ein.
-function setPingRate(bpm) {
-  bpm = Math.min(150, Math.max(30, Math.round(bpm / 5) * 5));
-  ekg.pingMs = Math.round(60000 / bpm);
-  const val = $("ekg-rate-val"); if (val) val.innerHTML = bpm + "&nbsp;BPM";
-  const sl = $("ekg-rate"); if (sl && +sl.value !== bpm) sl.value = bpm;
-  // dPhase so wählen, dass ein Schlag etwa eine halbe Taktlänge ausfüllt
-  // (schneller Takt → kompakterer PQRST-Komplex).
-  const beatCols = Math.max(18, Math.min(60, (ekg.pingMs / 1000) * 60));
-  ekg.dPhase = 1 / beatCols;
-  try { localStorage.setItem("clioPingBpm", String(bpm)); } catch (_) {}
-}
-// ekgWave bildet einen PQRST-Komplex (p = 0..1) als Summe von Gauß-Glocken.
-function ekgWave(p) {
-  const g = (c, w, a) => a * Math.exp(-((p - c) * (p - c)) / (2 * w * w));
-  return g(0.12, 0.018, 0.12) + g(0.34, 0.009, -0.18) + g(0.385, 0.006, 1.0) + g(0.43, 0.009, -0.30) + g(0.63, 0.04, 0.28);
-}
-function ekgResize() {
-  const cv = ekg.cv; if (!cv) return;
-  ekg.dpr = window.devicePixelRatio || 1;
-  ekg.w = cv.clientWidth || 600; ekg.h = cv.clientHeight || 140;
-  cv.width = Math.round(ekg.w * ekg.dpr); cv.height = Math.round(ekg.h * ekg.dpr);
-  const cols = Math.max(16, Math.floor(ekg.w / ekg.step));
-  ekg.trace = new Float32Array(cols).fill(NaN);
-  if (ekg.col >= cols) ekg.col = 0;
-}
-function ekgGrid(ctx, w, h) {
-  ctx.lineWidth = 1; ctx.strokeStyle = "rgba(34,211,238,.05)";
-  for (let x = 0; x < w; x += 11) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke(); }
-  for (let y = 0; y < h; y += 11) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke(); }
-  ctx.strokeStyle = "rgba(34,211,238,.11)";
-  for (let x = 0; x < w; x += 55) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke(); }
-  for (let y = 0; y < h; y += 55) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke(); }
-}
-function ekgFrame() {
-  const ctx = ekg.ctx; if (!ctx) return;
-  const w = ekg.w, h = ekg.h, dpr = ekg.dpr, cols = ekg.trace.length, mid = h * 0.56, amp = h * 0.34;
-  // neue Probe an der Schreibposition
-  let y;
-  if (ekg.beatPhase < 1) { y = ekgWave(ekg.beatPhase); ekg.beatPhase += ekg.dPhase; }
-  else { y = (Math.random() - 0.5) * 0.015; }
-  const drawCol = ekg.col;
-  ekg.trace[drawCol] = ekg.alive ? y : NaN;
-  ekg.col = (ekg.col + 1) % cols;
-  for (let k = 0; k < ekg.gap; k++) ekg.trace[(ekg.col + k) % cols] = NaN; // Lösch-Lücke vor dem Kopf
+// ---------- Eventstrom (Diagramm seit Serverstart + Live-Liste) ----------
+// Ein einziger observe-Stream auf "/" (rekursiv) speist beides: das
+// Zeitachsen-Diagramm (Events je Zeitabschnitt bzw. kumuliert, seit Serverstart)
+// und die einklappbare Live-Liste. Jedes Event trägt sein `time` — daraus wird
+// die Verteilung über die Achse [Serverstart … jetzt] gebildet.
+const estream = {
+  active: false, ctrl: null,
+  times: [], count: 0,           // Event-Zeitstempel (ms, aufsteigend) + Gesamtzahl
+  mode: "rate",                  // "rate" = Events/Abschnitt, "cum" = kumuliert
+  cv: null, ctx: null, w: 0, h: 0, dpr: 1,
+  serverStart: null,             // ms (aus /api/v1/info startedAt)
+  maxTimes: 200000,              // Speicherkappe fürs Diagramm
+  redrawPending: false,
+};
+const DASH_MAX_ROWS = 200;
 
+function evResize() {
+  const cv = estream.cv; if (!cv) return;
+  estream.dpr = window.devicePixelRatio || 1;
+  estream.w = cv.clientWidth || 600; estream.h = cv.clientHeight || 170;
+  cv.width = Math.round(estream.w * estream.dpr); cv.height = Math.round(estream.h * estream.dpr);
+  drawEvChart();
+}
+function evRedraw() {
+  if (estream.redrawPending) return;
+  estream.redrawPending = true;
+  requestAnimationFrame(() => { estream.redrawPending = false; drawEvChart(); });
+}
+function evClock(ms) { return new Date(ms).toLocaleTimeString("de-CH"); }
+
+function drawEvChart() {
+  const ctx = estream.ctx; if (!ctx) return;
+  const dpr = estream.dpr, W = estream.w, H = estream.h;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, w, h);
-  ekgGrid(ctx, w, h);
-  const color = ekg.alive ? "#34f5c5" : "#ff5d73";
-  if (!ekg.alive) { ctx.globalAlpha = .5; ctx.strokeStyle = color; ctx.lineWidth = 1.6; ctx.beginPath(); ctx.moveTo(0, mid); ctx.lineTo(w, mid); ctx.stroke(); ctx.globalAlpha = 1; }
-  ctx.lineWidth = 1.8; ctx.strokeStyle = color; ctx.shadowColor = color; ctx.shadowBlur = 9;
-  ctx.beginPath();
-  let pen = false;
-  for (let c = 0; c < cols; c++) {
-    const v = ekg.trace[c];
-    if (Number.isNaN(v)) { pen = false; continue; }
-    const px = c * ekg.step, py = mid - v * amp;
-    if (!pen) { ctx.moveTo(px, py); pen = true; } else ctx.lineTo(px, py);
+  ctx.clearRect(0, 0, W, H);
+  const padL = 46, padR = 12, padT = 12, padB = 22;
+  const plotW = Math.max(1, W - padL - padR), plotH = Math.max(1, H - padT - padB);
+  const now = Date.now();
+  const start = estream.serverStart || (estream.times.length ? estream.times[0] : now - 1000);
+  const span = Math.max(1000, now - start);
+  const N = Math.max(20, Math.min(120, Math.floor(plotW / 6)));
+  const buckets = new Array(N).fill(0);
+  for (const t of estream.times) {
+    let idx = Math.floor((t - start) / span * N);
+    if (idx < 0) idx = 0; else if (idx >= N) idx = N - 1;
+    buckets[idx]++;
   }
-  ctx.stroke();
-  const hv = ekg.trace[drawCol];
-  if (!Number.isNaN(hv)) { ctx.beginPath(); ctx.arc(drawCol * ekg.step, mid - hv * amp, 2.8, 0, Math.PI * 2); ctx.fillStyle = color; ctx.fill(); }
-  ctx.shadowBlur = 0;
-  ekg.raf = requestAnimationFrame(ekgFrame);
+  // Grid
+  ctx.strokeStyle = "rgba(34,211,238,.06)"; ctx.lineWidth = 1;
+  for (let i = 0; i <= 6; i++) { const gx = padL + plotW * i / 6; ctx.beginPath(); ctx.moveTo(gx, padT); ctx.lineTo(gx, padT + plotH); ctx.stroke(); }
+  for (let i = 0; i <= 4; i++) { const gy = padT + plotH * i / 4; ctx.beginPath(); ctx.moveTo(padL, gy); ctx.lineTo(padL + plotW, gy); ctx.stroke(); }
+
+  let yMax;
+  if (estream.mode === "cum") {
+    let cum = 0; const pts = new Array(N);
+    for (let i = 0; i < N; i++) { cum += buckets[i]; pts[i] = cum; }
+    yMax = Math.max(1, cum);
+    ctx.beginPath();
+    for (let i = 0; i < N; i++) {
+      const x = padL + (i + 0.5) / N * plotW, y = padT + plotH - pts[i] / yMax * plotH;
+      i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+    }
+    ctx.lineWidth = 2; ctx.strokeStyle = "#34f5c5"; ctx.shadowColor = "#34f5c5"; ctx.shadowBlur = 8; ctx.stroke(); ctx.shadowBlur = 0;
+    ctx.lineTo(padL + plotW, padT + plotH); ctx.lineTo(padL + 0.5 / N * plotW, padT + plotH); ctx.closePath();
+    ctx.fillStyle = "rgba(52,245,197,.10)"; ctx.fill();
+  } else {
+    yMax = 1; for (const b of buckets) if (b > yMax) yMax = b;
+    const bw = plotW / N;
+    ctx.fillStyle = "rgba(52,245,197,.78)"; ctx.shadowColor = "#34f5c5"; ctx.shadowBlur = 6;
+    for (let i = 0; i < N; i++) {
+      if (!buckets[i]) continue;
+      const h = buckets[i] / yMax * plotH, x = padL + i * bw, y = padT + plotH - h;
+      ctx.fillRect(x + 0.5, y, Math.max(1, bw - 1), h);
+    }
+    ctx.shadowBlur = 0;
+  }
+  // Achsenbeschriftung
+  ctx.fillStyle = "#8b93a7"; ctx.font = "10px ui-monospace, Menlo, monospace";
+  ctx.textAlign = "right"; ctx.textBaseline = "middle";
+  ctx.fillText(fmtInt(yMax), padL - 6, padT + 6); ctx.fillText("0", padL - 6, padT + plotH);
+  ctx.textBaseline = "alphabetic";
+  ctx.textAlign = "left"; ctx.fillText(evClock(start), padL, H - 6);
+  ctx.textAlign = "right"; ctx.fillText(evClock(now), padL + plotW, H - 6);
+  // Kopf-Statistik
+  const tot = $("ev-total"); if (tot) tot.textContent = fmtInt(estream.count);
+  const peak = $("ev-peak"); if (peak) peak.textContent = estream.mode === "cum" ? "kumuliert" : "max " + fmtInt(yMax) + " / Abschnitt";
 }
-function setEkgState(up, connecting) {
-  const el = $("ekg-state"); if (!el) return;
-  el.textContent = connecting ? "VERBINDE…" : up ? "● LIVE" : "⚠ KEIN SIGNAL";
-  el.classList.toggle("down", !up && !connecting);
+
+function dashAppendEvent(ev) {
+  const host = $("dash-events"); if (!host) return;
+  if (estream.count === 1) host.innerHTML = "";
+  host.insertBefore(renderEvent(ev), host.firstChild);
+  while (host.children.length > DASH_MAX_ROWS) host.removeChild(host.lastChild);
+  const c = $("ev-live-count"); if (c) c.textContent = fmtInt(estream.count) + " Events";
 }
-function ekgDown() {
-  ekg.alive = false; ekg.bpm = null;
-  $("ekg-bpm").textContent = "--"; $("ekg-lat").textContent = "– ms"; setEkgState(false, false);
+function estreamHandle(ev) {
+  const t = ev.time ? Date.parse(ev.time) : Date.now();
+  estream.count++;
+  if (!Number.isNaN(t)) { estream.times.push(t); if (estream.times.length > estream.maxTimes) estream.times.shift(); }
+  dashAppendEvent(ev);
+  evRedraw();
 }
-async function ekgPing() {
-  const t0 = performance.now();
+
+function stopEventStream() { if (estream.ctrl) { estream.ctrl.abort(); estream.ctrl = null; } estream.active = false; }
+async function startEventStream() {
+  const token = tokenInput.value.trim();
+  if (!token) return;
+  stopEventStream();
+  estream.active = true; estream.ctrl = new AbortController();
+  estream.times = []; estream.count = 0;
+  $("dash-events").innerHTML = '<div class="empty">verbinde …</div>';
+  // Serverstart für die Zeitachse (best effort).
   try {
-    const r = await fetch("/api/v1/ping", { cache: "no-store" });
-    const lat = Math.round(performance.now() - t0);
-    if (r.ok) {
-      const now = Date.now();
-      if (ekg.lastPingAt) { const bpm = Math.round(60000 / (now - ekg.lastPingAt)); ekg.bpm = bpm; $("ekg-bpm").textContent = bpm; }
-      ekg.lastPingAt = now;
-      ekg.alive = true; ekg.beatPhase = 0; // Herzschlag auslösen
-      $("ekg-lat").textContent = lat + " ms"; setEkgState(true, false);
-    } else ekgDown();
-  } catch (_) { ekgDown(); }
-  finally { ekg.pingTimer = setTimeout(ekgPing, ekg.pingMs); }
+    const r = await fetch("/api/v1/info", { headers: { Authorization: "Bearer " + token }, cache: "no-store" });
+    if (r.ok) { const j = await r.json(); estream.serverStart = j.startedAt ? Date.parse(j.startedAt) : null; }
+  } catch (_) {}
+  try {
+    const res = await fetch("/api/v1/events?watch=true&recursive=true", {
+      headers: { Authorization: "Bearer " + token }, signal: estream.ctrl.signal, cache: "no-store",
+    });
+    if (res.status === 401) { $("dash-events").innerHTML = '<div class="empty">Token ungültig (401).</div>'; estream.active = false; return; }
+    if (!res.ok || !res.body) throw new Error("HTTP " + res.status);
+    const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = "";
+    for (;;) {
+      const { done, value } = await reader.read(); if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl); buf = buf.slice(nl + 1);
+        if (line.trim()) { try { estreamHandle(JSON.parse(line)); } catch (_) {} }
+      }
+    }
+  } catch (e) {
+    if (e.name !== "AbortError" && estream.active) $("dash-events").innerHTML = '<div class="empty">Stream-Fehler: ' + e.message + "</div>";
+  } finally {
+    estream.active = false;
+    if (estream.count === 0) $("dash-events").innerHTML = '<div class="empty">Noch keine Events.</div>';
+  }
 }
-function initEkg() {
-  ekg.cv = $("ekg"); if (!ekg.cv) return;
-  ekg.ctx = ekg.cv.getContext("2d");
-  const stored = parseInt(localStorage.getItem("clioPingBpm"), 10);
-  setPingRate(Number.isFinite(stored) ? stored : 50);
-  const slider = $("ekg-rate");
-  if (slider) slider.addEventListener("input", (e) => setPingRate(+e.target.value));
-  ekgResize(); setEkgState(true, true);
-  ekg.raf = requestAnimationFrame(ekgFrame);
-  ekgPing();
+
+function setEvMode(mode) {
+  estream.mode = mode;
+  $("ev-mode-rate").classList.toggle("active", mode === "rate");
+  $("ev-mode-cum").classList.toggle("active", mode === "cum");
+  drawEvChart();
 }
-window.addEventListener("resize", ekgResize);
+function setDashLiveCollapsed(collapsed) {
+  $("dash-live").classList.toggle("collapsed", collapsed);
+  $("ev-collapse-icon").textContent = collapsed ? "▸" : "▾";
+  $("ev-collapse").setAttribute("aria-expanded", String(!collapsed));
+  try { localStorage.setItem("clioDashLiveCollapsed", collapsed ? "1" : "0"); } catch (_) {}
+}
+function initEventStream() {
+  estream.cv = $("evchart"); if (!estream.cv) return;
+  estream.ctx = estream.cv.getContext("2d");
+  evResize();
+  $("ev-mode-rate").addEventListener("click", () => setEvMode("rate"));
+  $("ev-mode-cum").addEventListener("click", () => setEvMode("cum"));
+  const toggle = () => setDashLiveCollapsed(!$("dash-live").classList.contains("collapsed"));
+  $("ev-collapse").addEventListener("click", toggle);
+  $("ev-collapse").addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } });
+  let collapsed = false; try { collapsed = localStorage.getItem("clioDashLiveCollapsed") === "1"; } catch (_) {}
+  setDashLiveCollapsed(collapsed);
+  // Zeitachse weiterlaufen lassen (der „jetzt"-Rand wandert), auch ohne neue Events.
+  setInterval(() => { if ($("view-dashboard").classList.contains("active")) drawEvChart(); }, 1000);
+}
+window.addEventListener("resize", evResize);
 
 function render(info, m) {
   $("m-events").textContent = fmtInt(gauge(m, "clio_events_total") ?? info.eventsTotal);
@@ -974,7 +1039,7 @@ function schedule() {
 }
 function connect() {
   sessionStorage.setItem("clioToken", tokenInput.value.trim());
-  refresh(); schedule();
+  refresh(); schedule(); startEventStream();
 }
 
 $("connect").addEventListener("click", connect);
@@ -1876,11 +1941,11 @@ document.querySelectorAll(".gen-templates .tpl").forEach((b) =>
 $("gen-scenario-library").addEventListener("click", (e) => genScenario("library", e.currentTarget));
 $("gen-scenario-carshare").addEventListener("click", (e) => genScenario("carshare", e.currentTarget));
 
+// Eventstrom-Diagramm + Live-Liste initialisieren (Canvas, Buttons, Collapse).
+initEventStream();
+
 // Auto-Start des Dashboards, falls bereits ein Token im Tab liegt.
 if (tokenInput.value) connect();
-
-// Liveness-EKG läuft unabhängig vom Token (ping braucht keine Auth).
-initEkg();
 </script>
 </body>
 </html>
