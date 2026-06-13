@@ -293,8 +293,8 @@
 
     <div class="evstream">
       <div class="evs-head">
-        <span class="evs-title">◈ Eventstrom · seit Serverstart</span>
-        <span class="evs-stats">Gesamt <b id="ev-total">–</b> · <span id="ev-peak">–</span></span>
+        <span class="evs-title">◈ Eventstrom · live (nur neue)</span>
+        <span class="evs-stats">Neu <b id="ev-total">–</b> · <span id="ev-peak">–</span></span>
         <span class="spacer"></span>
         <span class="evs-modes">
           <button id="ev-mode-rate" class="evs-mode active" title="Events je Zeitabschnitt">Rate</button>
@@ -310,7 +310,7 @@
         <span class="dl-title">Live-Events</span>
         <span class="badge" id="ev-live-count">0 Events</span>
         <span class="spacer"></span>
-        <span class="hint">beobachtet <code>/</code> rekursiv · neueste oben</span>
+        <span class="hint">beobachtet <code>/</code> rekursiv · nur neue · neueste oben</span>
       </div>
       <div class="dl-body">
         <div id="dash-events"><div class="empty">Token eingeben und <strong>Verbinden</strong> — dann läuft der Eventstrom.</div></div>
@@ -836,7 +836,7 @@ const estream = {
   times: [], count: 0,           // Event-Zeitstempel (ms, aufsteigend) + Gesamtzahl
   mode: "rate",                  // "rate" = Events/Abschnitt, "cum" = kumuliert
   cv: null, ctx: null, w: 0, h: 0, dpr: 1,
-  serverStart: null,             // ms (aus /api/v1/info startedAt)
+  obsStart: null,                // ms — Beginn der Beobachtung (beim Verbinden)
   maxTimes: 200000,              // Speicherkappe fürs Diagramm
   redrawPending: false,
 };
@@ -856,6 +856,22 @@ function evRedraw() {
 }
 function evClock(ms) { return new Date(ms).toLocaleTimeString("de-CH"); }
 
+// evStroke zeichnet eine Wertereihe als glühende Linie mit zarter Fläche darunter
+// (Puls-Optik). x-Position je Wert ist die Bucket-Mitte.
+function evStroke(ctx, vals, N, yMax, x0, plotW, top, plotH, color) {
+  ctx.beginPath();
+  for (let i = 0; i < N; i++) {
+    const x = x0 + (i + 0.5) / N * plotW, y = top + plotH - vals[i] / yMax * plotH;
+    i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+  }
+  ctx.lineWidth = 2; ctx.strokeStyle = color; ctx.shadowColor = color; ctx.shadowBlur = 8;
+  ctx.lineJoin = "round"; ctx.stroke(); ctx.shadowBlur = 0;
+  ctx.lineTo(x0 + (N - 0.5) / N * plotW, top + plotH);
+  ctx.lineTo(x0 + 0.5 / N * plotW, top + plotH);
+  ctx.closePath();
+  ctx.fillStyle = "rgba(52,245,197,.10)"; ctx.fill();
+}
+
 function drawEvChart() {
   const ctx = estream.ctx; if (!ctx) return;
   const dpr = estream.dpr, W = estream.w, H = estream.h;
@@ -864,7 +880,7 @@ function drawEvChart() {
   const padL = 46, padR = 12, padT = 12, padB = 22;
   const plotW = Math.max(1, W - padL - padR), plotH = Math.max(1, H - padT - padB);
   const now = Date.now();
-  const start = estream.serverStart || (estream.times.length ? estream.times[0] : now - 1000);
+  const start = estream.obsStart || (estream.times.length ? estream.times[0] : now - 1000);
   const span = Math.max(1000, now - start);
   const N = Math.max(20, Math.min(120, Math.floor(plotW / 6)));
   const buckets = new Array(N).fill(0);
@@ -878,30 +894,16 @@ function drawEvChart() {
   for (let i = 0; i <= 6; i++) { const gx = padL + plotW * i / 6; ctx.beginPath(); ctx.moveTo(gx, padT); ctx.lineTo(gx, padT + plotH); ctx.stroke(); }
   for (let i = 0; i <= 4; i++) { const gy = padT + plotH * i / 4; ctx.beginPath(); ctx.moveTo(padL, gy); ctx.lineTo(padL + plotW, gy); ctx.stroke(); }
 
-  let yMax;
+  let yMax, series;
   if (estream.mode === "cum") {
-    let cum = 0; const pts = new Array(N);
-    for (let i = 0; i < N; i++) { cum += buckets[i]; pts[i] = cum; }
+    let cum = 0; series = new Array(N);
+    for (let i = 0; i < N; i++) { cum += buckets[i]; series[i] = cum; }
     yMax = Math.max(1, cum);
-    ctx.beginPath();
-    for (let i = 0; i < N; i++) {
-      const x = padL + (i + 0.5) / N * plotW, y = padT + plotH - pts[i] / yMax * plotH;
-      i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
-    }
-    ctx.lineWidth = 2; ctx.strokeStyle = "#34f5c5"; ctx.shadowColor = "#34f5c5"; ctx.shadowBlur = 8; ctx.stroke(); ctx.shadowBlur = 0;
-    ctx.lineTo(padL + plotW, padT + plotH); ctx.lineTo(padL + 0.5 / N * plotW, padT + plotH); ctx.closePath();
-    ctx.fillStyle = "rgba(52,245,197,.10)"; ctx.fill();
   } else {
+    series = buckets;
     yMax = 1; for (const b of buckets) if (b > yMax) yMax = b;
-    const bw = plotW / N;
-    ctx.fillStyle = "rgba(52,245,197,.78)"; ctx.shadowColor = "#34f5c5"; ctx.shadowBlur = 6;
-    for (let i = 0; i < N; i++) {
-      if (!buckets[i]) continue;
-      const h = buckets[i] / yMax * plotH, x = padL + i * bw, y = padT + plotH - h;
-      ctx.fillRect(x + 0.5, y, Math.max(1, bw - 1), h);
-    }
-    ctx.shadowBlur = 0;
   }
+  evStroke(ctx, series, N, yMax, padL, plotW, padT, plotH, "#34f5c5");
   // Achsenbeschriftung
   ctx.fillStyle = "#8b93a7"; ctx.font = "10px ui-monospace, Menlo, monospace";
   ctx.textAlign = "right"; ctx.textBaseline = "middle";
@@ -935,19 +937,24 @@ async function startEventStream() {
   if (!token) return;
   stopEventStream();
   estream.active = true; estream.ctrl = new AbortController();
-  estream.times = []; estream.count = 0;
+  estream.times = []; estream.count = 0; estream.obsStart = Date.now();
   $("dash-events").innerHTML = '<div class="empty">verbinde …</div>';
-  // Serverstart für die Zeitachse (best effort).
+  // Nur NEUE Events: lowerBound hinter die aktuell höchste Event-ID setzen.
+  // Event-IDs sind global monoton ab 1, daher entspricht die höchste ID der
+  // Gesamtzahl (eventsTotal aus /api/v1/info). So liefert observe keine History.
+  let lowerBound = null;
   try {
     const r = await fetch("/api/v1/info", { headers: { Authorization: "Bearer " + token }, cache: "no-store" });
-    if (r.ok) { const j = await r.json(); estream.serverStart = j.startedAt ? Date.parse(j.startedAt) : null; }
+    if (r.ok) { const j = await r.json(); const tot = Number(j.eventsTotal); if (Number.isFinite(tot)) lowerBound = tot + 1; }
   } catch (_) {}
   try {
-    const res = await fetch("/api/v1/events?watch=true&recursive=true", {
+    const url = "/api/v1/events?watch=true&recursive=true" + (lowerBound != null ? "&lowerBound=" + lowerBound : "");
+    const res = await fetch(url, {
       headers: { Authorization: "Bearer " + token }, signal: estream.ctrl.signal, cache: "no-store",
     });
     if (res.status === 401) { $("dash-events").innerHTML = '<div class="empty">Token ungültig (401).</div>'; estream.active = false; return; }
     if (!res.ok || !res.body) throw new Error("HTTP " + res.status);
+    $("dash-events").innerHTML = '<div class="empty">wartet auf neue Events …</div>';
     const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = "";
     for (;;) {
       const { done, value } = await reader.read(); if (done) break;
@@ -962,7 +969,7 @@ async function startEventStream() {
     if (e.name !== "AbortError" && estream.active) $("dash-events").innerHTML = '<div class="empty">Stream-Fehler: ' + e.message + "</div>";
   } finally {
     estream.active = false;
-    if (estream.count === 0) $("dash-events").innerHTML = '<div class="empty">Noch keine Events.</div>';
+    if (estream.count === 0) $("dash-events").innerHTML = '<div class="empty">Verbindung beendet — keine neuen Events.</div>';
   }
 }
 

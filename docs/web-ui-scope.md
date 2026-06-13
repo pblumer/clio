@@ -132,17 +132,24 @@ Umbau des Dashboards weg vom dekorativen **Liveness-EKG** (Stufe 6) hin zur
 Beobachtung des **Eventstroms**. Ein einziger `observe`-Stream auf `/` (rekursiv,
 `GET /api/v1/events?watch=true&recursive=true`) speist zwei Ansichten:
 
-- **Eventstrom-Diagramm seit Serverstart**: Da jedes Event sein `time` trägt,
-  wird die Verteilung über die Achse `[Serverstart … jetzt]` (Serverstart aus
-  `/api/v1/info`) in einem Canvas gezeichnet — umschaltbar **Rate** (Events je
-  Zeitabschnitt) bzw. **kumuliert**. Der „jetzt"-Rand wandert über einen
-  1-Sekunden-Takt, Live-Events aktualisieren das Diagramm sofort.
+- **Live-Eventstrom-Liniendiagramm**: Der Stream liefert **nur neue Events** ab
+  dem Verbinden — `lowerBound` wird hinter die höchste Event-ID gesetzt
+  (`= eventsTotal + 1` aus `/api/v1/info`; IDs sind global monoton), sodass keine
+  History übertragen wird. Aus dem `time` jedes Events wird die Verteilung über
+  die Achse `[Beobachtungsbeginn … jetzt]` als **glühende Linie** (Canvas)
+  gezeichnet — umschaltbar **Rate** (Events je Zeitabschnitt) bzw. **kumuliert**.
+  Der „jetzt"-Rand wandert über einen 1-Sekunden-Takt, neue Events aktualisieren
+  sofort.
 - **Einklappbares Live-Events-Fenster**: derselbe Stream füllt eine Liste
   (neueste oben, aufklappbare `data`, gekappt). Auf-/Zuklapp-Zustand wird im
   Browser gemerkt (`localStorage`).
 
-Kein neuer Server-Code — nutzt den bestehenden Streaming-Endpunkt. Die
-Telemetrie-Sparklines aus Stufe 6 bleiben erhalten.
+Kein neuer Server-Code — nutzt den bestehenden Streaming-Endpunkt (`observe` mit
+`lowerBound`). Die Telemetrie-Sparklines aus Stufe 6 bleiben erhalten.
+
+> Hinweis: Eine frühere Variante streamte die **gesamte** History und zeigte
+> „seit Serverstart"; das Diagramm bildet nun bewusst nur den **laufenden**
+> Strom ab dem Verbinden ab (Säulen → Linie).
 
 ### Stufe 4 — Maintenance-Konsole  ⚠️ bewusst zurückgestellt
 Schreibende **Maintenance**-Aktionen (z. B. Kompaktierung anstoßen). **Out of
