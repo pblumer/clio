@@ -20,6 +20,7 @@ import (
 	"github.com/pblumer/clio/internal/apidocs"
 	"github.com/pblumer/clio/internal/config"
 	"github.com/pblumer/clio/internal/event"
+	"github.com/pblumer/clio/internal/eventstats"
 	"github.com/pblumer/clio/internal/metrics"
 	"github.com/pblumer/clio/internal/pubsub"
 	"github.com/pblumer/clio/internal/query"
@@ -36,6 +37,7 @@ type Server struct {
 	store     *store.Store
 	broker    *pubsub.Broker
 	metrics   *metrics.Metrics
+	events    *eventstats.Histogram
 	queryC    *query.Compiler
 	logger    *slog.Logger
 	mux       *http.ServeMux
@@ -86,6 +88,8 @@ func New(cfg config.Config, st *store.Store, logger *slog.Logger, opts ...Option
 			opt(s)
 		}
 	}
+	// Eventmengen-Histogramm ab der (ggf. via Option gesetzten) Startzeit.
+	s.events = eventstats.New(s.startedAt)
 	s.routes()
 	return s
 }
@@ -163,6 +167,7 @@ func (s *Server) routes() {
 
 	// Datenrouten sind durch das Bearer-Token geschützt (ADR-008).
 	s.mux.HandleFunc("GET /api/v1/info", s.requireAuth(s.handleInfo))
+	s.mux.HandleFunc("GET /api/v1/event-stats", s.requireAuth(s.handleEventStats))
 	s.mux.HandleFunc("POST /api/v1/write-events", s.requireAuth(s.handleWriteEvents))
 	s.mux.HandleFunc("POST /api/v1/read-events", s.requireAuth(s.handleReadEvents))
 	s.mux.HandleFunc("POST /api/v1/observe-events", s.requireAuth(s.handleObserveEvents))
@@ -235,6 +240,21 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 		"syncMode":         s.cfg.Sync,
 		"httpListenAddr":   s.cfg.Addr,
 		"databaseFilePath": s.cfg.DBPath,
+	})
+}
+
+// handleEventStats liefert das Histogramm der seit Serverstart geschriebenen
+// Events über die Zeit: Startzeitpunkt, Bucket-Breite (Sekunden) und die
+// Bucket-Zähler. So kann das /ui-Dashboard die Eventmengen über die Zeitachse
+// zeichnen, ohne die gesamte Historie zu streamen.
+func (s *Server) handleEventStats(w http.ResponseWriter, r *http.Request) {
+	snap := s.events.Snapshot()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"start":         snap.Origin.Format(time.RFC3339Nano),
+		"bucketSeconds": snap.Width.Seconds(),
+		"counts":        snap.Counts,
+		"total":         snap.Total,
+		"serverTime":    time.Now().UTC().Format(time.RFC3339Nano),
 	})
 }
 
@@ -516,6 +536,7 @@ func (s *Server) handleWriteEvents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.metrics.AddEventsWritten(len(written))
+	s.events.Add(len(written), time.Now().UTC())
 
 	// Live-Observer benachrichtigen (nach erfolgreichem, committetem Write).
 	s.broker.Publish(written)
