@@ -132,24 +132,27 @@ Umbau des Dashboards weg vom dekorativen **Liveness-EKG** (Stufe 6) hin zur
 Beobachtung des **Eventstroms**. Ein einziger `observe`-Stream auf `/` (rekursiv,
 `GET /api/v1/events?watch=true&recursive=true`) speist zwei Ansichten:
 
-- **Live-Eventstrom-Liniendiagramm**: Der Stream liefert **nur neue Events** ab
-  dem Verbinden — `lowerBound` wird hinter die höchste Event-ID gesetzt
-  (`= eventsTotal + 1` aus `/api/v1/info`; IDs sind global monoton), sodass keine
-  History übertragen wird. Aus dem `time` jedes Events wird die Verteilung über
-  die Achse `[Beobachtungsbeginn … jetzt]` als **glühende Linie** (Canvas)
-  gezeichnet — umschaltbar **Rate** (Events je Zeitabschnitt) bzw. **kumuliert**.
-  Der „jetzt"-Rand wandert über einen 1-Sekunden-Takt, neue Events aktualisieren
-  sofort.
-- **Einklappbares Live-Events-Fenster**: derselbe Stream füllt eine Liste
+- **Eventstrom-Liniendiagramm seit Serverstart**: gespeist aus dem neuen
+  Endpunkt **`GET /api/v1/event-stats`** — einem serverseitigen In-Memory-
+  Histogramm der pro Zeit geschriebenen Events seit Serverstart
+  (`internal/eventstats`, adaptive Bucket-Breite, gedeckelte Bucketzahl; passt zu
+  ADR-013, keine Fremd-Abhängigkeit). Das Dashboard pollt den Endpunkt und
+  zeichnet die Verteilung als **glühende Linie** (Canvas) — umschaltbar **Rate**
+  (Events je Zeitabschnitt) bzw. **kumuliert**. So braucht es die Historie
+  **nicht** zu streamen.
+- **Einklappbares Live-Events-Fenster**: hängt an einem `observe`-Stream auf `/`
+  mit `lowerBound = höchste ID + 1` (`= eventsTotal + 1` aus `/api/v1/info`; IDs
+  sind global monoton) und zeigt damit **nur neue Events** ab dem Verbinden
   (neueste oben, aufklappbare `data`, gekappt). Auf-/Zuklapp-Zustand wird im
   Browser gemerkt (`localStorage`).
 
-Kein neuer Server-Code — nutzt den bestehenden Streaming-Endpunkt (`observe` mit
-`lowerBound`). Die Telemetrie-Sparklines aus Stufe 6 bleiben erhalten.
+**Einzige Server-Erweiterung**: das `eventstats`-Histogramm + der read-only
+Endpunkt `event-stats`. Die Telemetrie-Sparklines aus Stufe 6 bleiben erhalten.
 
-> Hinweis: Eine frühere Variante streamte die **gesamte** History und zeigte
-> „seit Serverstart"; das Diagramm bildet nun bewusst nur den **laufenden**
-> Strom ab dem Verbinden ab (Säulen → Linie).
+> Verlauf der Iterationen: zuerst „seit Serverstart" durch Streamen der gesamten
+> History → dann „nur neue Events" (Linie statt Säulen) → nun **seit Serverstart
+> über `event-stats`** fürs Diagramm und **nur neue** für die Live-Liste. Damit
+> ist beides erfüllt, ohne die Historie zu streamen.
 
 ### Stufe 4 — Maintenance-Konsole  ⚠️ bewusst zurückgestellt
 Schreibende **Maintenance**-Aktionen (z. B. Kompaktierung anstoßen). **Out of

@@ -856,6 +856,59 @@ func TestBuildSubjectTree(t *testing.T) {
 	}
 }
 
+func TestEventStatsEndpoint(t *testing.T) {
+	srv := newTestServer(t)
+
+	// Ohne Auth: 401.
+	if rec := do(t, srv, http.MethodGet, "/api/v1/event-stats", "", ""); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status ohne auth = %d, want 401", rec.Code)
+	}
+
+	// Vor jedem Write: leeres, aber wohlgeformtes Histogramm (counts = []).
+	rec := do(t, srv, http.MethodGet, "/api/v1/event-stats", "secret-token", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; %s", rec.Code, rec.Body.String())
+	}
+	var empty struct {
+		Start         string   `json:"start"`
+		BucketSeconds float64  `json:"bucketSeconds"`
+		Counts        []uint64 `json:"counts"`
+		Total         uint64   `json:"total"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &empty); err != nil {
+		t.Fatalf("dekodieren: %v", err)
+	}
+	if empty.Counts == nil {
+		t.Fatal("counts ist null, erwartet []")
+	}
+	if empty.Total != 0 || empty.BucketSeconds <= 0 {
+		t.Fatalf("leer: total=%d bucketSeconds=%v", empty.Total, empty.BucketSeconds)
+	}
+
+	// Nach drei Writes: total = 3 und die Bucket-Summe stimmt.
+	do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token",
+		`{"events":[{"source":"s","subject":"/a","type":"t1"},{"source":"s","subject":"/a","type":"t2"},{"source":"s","subject":"/b","type":"t3"}]}`)
+
+	rec = do(t, srv, http.MethodGet, "/api/v1/event-stats", "secret-token", "")
+	var got struct {
+		Counts []uint64 `json:"counts"`
+		Total  uint64   `json:"total"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("dekodieren: %v", err)
+	}
+	if got.Total != 3 {
+		t.Fatalf("total = %d, want 3", got.Total)
+	}
+	var sum uint64
+	for _, c := range got.Counts {
+		sum += c
+	}
+	if sum != 3 {
+		t.Fatalf("bucket-summe = %d, want 3", sum)
+	}
+}
+
 func TestMetricsEndpoint(t *testing.T) {
 	srv := newTestServer(t)
 	do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token",

@@ -376,6 +376,40 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "500": { $ref: "#/components/responses/InternalError" }
 
+  /api/v1/event-stats:
+    get:
+      tags: [Events]
+      summary: Eventmengen über die Zeit (seit Serverstart)
+      description: |
+        Liefert ein Histogramm der seit Serverstart geschriebenen Events über die
+        Zeit: Startzeitpunkt, Bucket-Breite (Sekunden) und die Bucket-Zähler.
+        Damit lässt sich die Eventmenge über die Zeitachse darstellen, ohne die
+        gesamte Historie zu streamen. Die Bucket-Breite ist adaptiv (verdoppelt
+        sich bei langer Laufzeit), die Anzahl der Buckets ist beschränkt.
+      responses:
+        "200":
+          description: Histogramm der Eventmengen
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  start: { type: string, format: date-time, description: Beginn von Bucket 0 (Serverstart) }
+                  bucketSeconds: { type: number, description: Bucket-Breite in Sekunden }
+                  counts:
+                    type: array
+                    items: { type: integer, format: int64 }
+                    description: Events je Bucket, ab `start` in Schritten von `bucketSeconds`
+                  total: { type: integer, format: int64 }
+                  serverTime: { type: string, format: date-time }
+              example:
+                start: "2026-06-13T18:00:00Z"
+                bucketSeconds: 1
+                counts: [0, 3, 1, 0, 5]
+                total: 9
+                serverTime: "2026-06-13T18:00:05Z"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
   /api/v1/events/{subject}:
     get:
       tags: [Events]

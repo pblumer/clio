@@ -293,8 +293,8 @@
 
     <div class="evstream">
       <div class="evs-head">
-        <span class="evs-title">◈ Eventstrom · live (nur neue)</span>
-        <span class="evs-stats">Neu <b id="ev-total">–</b> · <span id="ev-peak">–</span></span>
+        <span class="evs-title">◈ Eventstrom · seit Serverstart</span>
+        <span class="evs-stats">Gesamt <b id="ev-total">–</b> · <span id="ev-peak">–</span></span>
         <span class="spacer"></span>
         <span class="evs-modes">
           <button id="ev-mode-rate" class="evs-mode active" title="Events je Zeitabschnitt">Rate</button>
@@ -827,17 +827,19 @@ function updateTelemetry(info, m, now) {
 window.addEventListener("resize", redrawSparks);
 
 // ---------- Eventstrom (Diagramm seit Serverstart + Live-Liste) ----------
-// Ein einziger observe-Stream auf "/" (rekursiv) speist beides: das
-// Zeitachsen-Diagramm (Events je Zeitabschnitt bzw. kumuliert, seit Serverstart)
-// und die einklappbare Live-Liste. Jedes Event trägt sein `time` — daraus wird
-// die Verteilung über die Achse [Serverstart … jetzt] gebildet.
+// Zwei entkoppelte Quellen:
+//  - Das Zeitachsen-Diagramm liest GET /api/v1/event-stats (serverseitiges
+//    Histogramm der Eventmengen SEIT SERVERSTART) — gepollt, ohne die Historie
+//    zu streamen.
+//  - Die einklappbare Live-Liste hängt an einem observe-Stream auf "/" (rekursiv)
+//    mit lowerBound = höchste ID + 1, liefert also NUR NEUE Events ab dem Verbinden.
 const estream = {
   active: false, ctrl: null,
-  times: [], count: 0,           // Event-Zeitstempel (ms, aufsteigend) + Gesamtzahl
+  count: 0,                      // neue Events seit Verbinden (für die Live-Liste)
   mode: "rate",                  // "rate" = Events/Abschnitt, "cum" = kumuliert
   cv: null, ctx: null, w: 0, h: 0, dpr: 1,
-  obsStart: null,                // ms — Beginn der Beobachtung (beim Verbinden)
-  maxTimes: 200000,              // Speicherkappe fürs Diagramm
+  stats: null,                   // Histogramm aus /api/v1/event-stats
+  statsAt: 0,                    // letzter Abruf (ms) — drosselt Live-Refetch
   redrawPending: false,
 };
 const DASH_MAX_ROWS = 200;
@@ -848,11 +850,6 @@ function evResize() {
   estream.w = cv.clientWidth || 600; estream.h = cv.clientHeight || 170;
   cv.width = Math.round(estream.w * estream.dpr); cv.height = Math.round(estream.h * estream.dpr);
   drawEvChart();
-}
-function evRedraw() {
-  if (estream.redrawPending) return;
-  estream.redrawPending = true;
-  requestAnimationFrame(() => { estream.redrawPending = false; drawEvChart(); });
 }
 function evClock(ms) { return new Date(ms).toLocaleTimeString("de-CH"); }
 
@@ -879,20 +876,30 @@ function drawEvChart() {
   ctx.clearRect(0, 0, W, H);
   const padL = 46, padR = 12, padT = 12, padB = 22;
   const plotW = Math.max(1, W - padL - padR), plotH = Math.max(1, H - padT - padB);
-  const now = Date.now();
-  const start = estream.obsStart || (estream.times.length ? estream.times[0] : now - 1000);
-  const span = Math.max(1000, now - start);
-  const N = Math.max(20, Math.min(120, Math.floor(plotW / 6)));
-  const buckets = new Array(N).fill(0);
-  for (const t of estream.times) {
-    let idx = Math.floor((t - start) / span * N);
-    if (idx < 0) idx = 0; else if (idx >= N) idx = N - 1;
-    buckets[idx]++;
-  }
+
   // Grid
   ctx.strokeStyle = "rgba(34,211,238,.06)"; ctx.lineWidth = 1;
   for (let i = 0; i <= 6; i++) { const gx = padL + plotW * i / 6; ctx.beginPath(); ctx.moveTo(gx, padT); ctx.lineTo(gx, padT + plotH); ctx.stroke(); }
   for (let i = 0; i <= 4; i++) { const gy = padT + plotH * i / 4; ctx.beginPath(); ctx.moveTo(padL, gy); ctx.lineTo(padL + plotW, gy); ctx.stroke(); }
+
+  const st = estream.stats;
+  const buckets = st && st.counts ? st.counts : [];
+  const N = buckets.length;
+  const startMs = st ? st.startMs : Date.now();
+  const bucketMs = st && st.bucketSeconds ? st.bucketSeconds * 1000 : 1000;
+  const endMs = st ? (st.serverTimeMs || startMs + N * bucketMs) : Date.now();
+
+  const tot = $("ev-total"); if (tot) tot.textContent = st ? fmtInt(st.total) : "–";
+  const peak = $("ev-peak");
+
+  if (N === 0) {
+    ctx.fillStyle = "#8b93a7"; ctx.font = "10px ui-monospace, Menlo, monospace";
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText(st ? "noch keine Events" : "verbinden, um Eventmengen zu sehen", padL + plotW / 2, padT + plotH / 2);
+    ctx.textAlign = "left"; ctx.textBaseline = "alphabetic"; ctx.fillText(evClock(startMs), padL, H - 6);
+    if (peak) peak.textContent = "–";
+    return;
+  }
 
   let yMax, series;
   if (estream.mode === "cum") {
@@ -909,12 +916,32 @@ function drawEvChart() {
   ctx.textAlign = "right"; ctx.textBaseline = "middle";
   ctx.fillText(fmtInt(yMax), padL - 6, padT + 6); ctx.fillText("0", padL - 6, padT + plotH);
   ctx.textBaseline = "alphabetic";
-  ctx.textAlign = "left"; ctx.fillText(evClock(start), padL, H - 6);
-  ctx.textAlign = "right"; ctx.fillText(evClock(now), padL + plotW, H - 6);
-  // Kopf-Statistik
-  const tot = $("ev-total"); if (tot) tot.textContent = fmtInt(estream.count);
-  const peak = $("ev-peak"); if (peak) peak.textContent = estream.mode === "cum" ? "kumuliert" : "max " + fmtInt(yMax) + " / Abschnitt";
+  ctx.textAlign = "left"; ctx.fillText(evClock(startMs), padL, H - 6);
+  ctx.textAlign = "right"; ctx.fillText(evClock(endMs), padL + plotW, H - 6);
+  if (peak) peak.textContent = estream.mode === "cum" ? "kumuliert" : "max " + fmtInt(yMax) + " / Abschnitt · " + Math.round(bucketMs / 1000) + "s";
 }
+
+// fetchEventStats holt das serverseitige Histogramm (seit Serverstart) und
+// zeichnet das Diagramm neu. Best effort.
+async function fetchEventStats() {
+  const token = tokenInput.value.trim(); if (!token) return;
+  estream.statsAt = Date.now();
+  try {
+    const r = await fetch("/api/v1/event-stats", { headers: { Authorization: "Bearer " + token }, cache: "no-store" });
+    if (!r.ok) return;
+    const j = await r.json();
+    estream.stats = {
+      startMs: Date.parse(j.start),
+      bucketSeconds: j.bucketSeconds,
+      counts: j.counts || [],
+      total: j.total || 0,
+      serverTimeMs: j.serverTime ? Date.parse(j.serverTime) : Date.now(),
+    };
+    drawEvChart();
+  } catch (_) {}
+}
+// Bei Live-Events das Diagramm gedrosselt nachziehen (auch ohne Auto-Refresh).
+function maybeFetchStats() { if (Date.now() - estream.statsAt > 1500) fetchEventStats(); }
 
 function dashAppendEvent(ev) {
   const host = $("dash-events"); if (!host) return;
@@ -924,11 +951,9 @@ function dashAppendEvent(ev) {
   const c = $("ev-live-count"); if (c) c.textContent = fmtInt(estream.count) + " Events";
 }
 function estreamHandle(ev) {
-  const t = ev.time ? Date.parse(ev.time) : Date.now();
   estream.count++;
-  if (!Number.isNaN(t)) { estream.times.push(t); if (estream.times.length > estream.maxTimes) estream.times.shift(); }
-  dashAppendEvent(ev);
-  evRedraw();
+  dashAppendEvent(ev);   // Live-Liste (nur neue Events)
+  maybeFetchStats();     // Diagramm gedrosselt nachziehen
 }
 
 function stopEventStream() { if (estream.ctrl) { estream.ctrl.abort(); estream.ctrl = null; } estream.active = false; }
@@ -937,7 +962,8 @@ async function startEventStream() {
   if (!token) return;
   stopEventStream();
   estream.active = true; estream.ctrl = new AbortController();
-  estream.times = []; estream.count = 0; estream.obsStart = Date.now();
+  estream.count = 0;
+  fetchEventStats(); // Diagramm sofort (seit Serverstart) befüllen
   $("dash-events").innerHTML = '<div class="empty">verbinde …</div>';
   // Nur NEUE Events: lowerBound hinter die aktuell höchste Event-ID setzen.
   // Event-IDs sind global monoton ab 1, daher entspricht die höchste ID der
@@ -996,8 +1022,9 @@ function initEventStream() {
   $("ev-collapse").addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } });
   let collapsed = false; try { collapsed = localStorage.getItem("clioDashLiveCollapsed") === "1"; } catch (_) {}
   setDashLiveCollapsed(collapsed);
-  // Zeitachse weiterlaufen lassen (der „jetzt"-Rand wandert), auch ohne neue Events.
-  setInterval(() => { if ($("view-dashboard").classList.contains("active")) drawEvChart(); }, 1000);
+  // Diagramm regelmäßig aus /event-stats auffrischen, solange das Dashboard
+  // sichtbar ist und ein Token vorliegt (zusätzlich zum Auto-Refresh/Live-Events).
+  setInterval(() => { if ($("view-dashboard").classList.contains("active") && tokenInput.value.trim()) fetchEventStats(); }, 5000);
 }
 window.addEventListener("resize", evResize);
 
