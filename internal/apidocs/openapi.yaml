@@ -379,13 +379,15 @@ paths:
   /api/v1/event-stats:
     get:
       tags: [Events]
-      summary: Eventmengen über die Zeit (seit Serverstart)
+      summary: Eventmengen über die Zeit (gesamte Historie)
       description: |
-        Liefert ein Histogramm der seit Serverstart geschriebenen Events über die
-        Zeit: Startzeitpunkt, Bucket-Breite (Sekunden) und die Bucket-Zähler.
-        Damit lässt sich die Eventmenge über die Zeitachse darstellen, ohne die
-        gesamte Historie zu streamen. Die Bucket-Breite ist adaptiv (verdoppelt
-        sich bei langer Laufzeit), die Anzahl der Buckets ist beschränkt.
+        Liefert ein Histogramm der Events über die Zeit (nach Event-Zeit):
+        Startzeitpunkt (= Zeit des ersten Events), Bucket-Breite (Sekunden) und
+        die Bucket-Zähler. Das Histogramm wird beim Serverstart aus der gesamten
+        Historie aufgebaut und danach bei jedem Write fortgeschrieben. Damit lässt
+        sich die Eventmenge über die Zeitachse darstellen, ohne die Historie zu
+        streamen. Die Bucket-Breite ist adaptiv (verdoppelt sich bei langer
+        Zeitspanne), die Anzahl der Buckets ist beschränkt.
       responses:
         "200":
           description: Histogramm der Eventmengen
