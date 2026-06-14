@@ -297,6 +297,7 @@
         <span class="evs-stats">Gesamt <b id="ev-total">–</b> · <span id="ev-peak">–</span></span>
         <span class="spacer"></span>
         <span class="evs-modes">
+          <button id="ev-reset" class="evs-mode" style="display:none" title="Zoom zurücksetzen (Esc / Doppelklick)">⤢ Reset</button>
           <button id="ev-mode-rate" class="evs-mode active" title="Events je Zeitabschnitt">Rate</button>
           <button id="ev-mode-cum" class="evs-mode" title="Kumuliert über die Zeit">Kumuliert</button>
         </span>
@@ -840,6 +841,9 @@ const estream = {
   cv: null, ctx: null, w: 0, h: 0, dpr: 1,
   stats: null,                   // Histogramm aus /api/v1/event-stats
   statsAt: 0,                    // letzter Abruf (ms) — drosselt Live-Refetch
+  zoom: null,                    // {x0,x1 (ms), y0,y1 (Werte)} — gewählter Ausschnitt
+  sel: null,                     // {x0,y0,x1,y1} Pixel — Auswahl-Rechteck beim Ziehen
+  geom: null,                    // zuletzt gezeichnete Geometrie (für Maus-Inversion)
   redrawPending: false,
 };
 const DASH_MAX_ROWS = 200;
@@ -852,22 +856,6 @@ function evResize() {
   drawEvChart();
 }
 function evClock(ms) { return new Date(ms).toLocaleTimeString("de-CH"); }
-
-// evStroke zeichnet eine Wertereihe als glühende Linie mit zarter Fläche darunter
-// (Puls-Optik). x-Position je Wert ist die Bucket-Mitte.
-function evStroke(ctx, vals, N, yMax, x0, plotW, top, plotH, color) {
-  ctx.beginPath();
-  for (let i = 0; i < N; i++) {
-    const x = x0 + (i + 0.5) / N * plotW, y = top + plotH - vals[i] / yMax * plotH;
-    i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
-  }
-  ctx.lineWidth = 2; ctx.strokeStyle = color; ctx.shadowColor = color; ctx.shadowBlur = 8;
-  ctx.lineJoin = "round"; ctx.stroke(); ctx.shadowBlur = 0;
-  ctx.lineTo(x0 + (N - 0.5) / N * plotW, top + plotH);
-  ctx.lineTo(x0 + 0.5 / N * plotW, top + plotH);
-  ctx.closePath();
-  ctx.fillStyle = "rgba(52,245,197,.10)"; ctx.fill();
-}
 
 function drawEvChart() {
   const ctx = estream.ctx; if (!ctx) return;
@@ -887,10 +875,11 @@ function drawEvChart() {
   const N = buckets.length;
   const startMs = st ? st.startMs : Date.now();
   const bucketMs = st && st.bucketSeconds ? st.bucketSeconds * 1000 : 1000;
-  const endMs = st ? (st.serverTimeMs || startMs + N * bucketMs) : Date.now();
+  const fullEndMs = st ? (st.serverTimeMs || startMs + N * bucketMs) : Date.now();
 
   const tot = $("ev-total"); if (tot) tot.textContent = st ? fmtInt(st.total) : "–";
   const peak = $("ev-peak");
+  const reset = $("ev-reset"); if (reset) reset.style.display = estream.zoom ? "" : "none";
 
   if (N === 0) {
     ctx.fillStyle = "#8b93a7"; ctx.font = "10px ui-monospace, Menlo, monospace";
@@ -898,27 +887,62 @@ function drawEvChart() {
     ctx.fillText(st ? "noch keine Events" : "verbinden, um Eventmengen zu sehen", padL + plotW / 2, padT + plotH / 2);
     ctx.textAlign = "left"; ctx.textBaseline = "alphabetic"; ctx.fillText(evClock(startMs), padL, H - 6);
     if (peak) peak.textContent = "–";
+    estream.geom = null;
     return;
   }
 
-  let yMax, series;
-  if (estream.mode === "cum") {
-    let cum = 0; series = new Array(N);
-    for (let i = 0; i < N; i++) { cum += buckets[i]; series[i] = cum; }
-    yMax = Math.max(1, cum);
-  } else {
-    series = buckets;
-    yMax = 1; for (const b of buckets) if (b > yMax) yMax = b;
+  // Werte je Bucket (Rate oder kumuliert) + Zeit der Bucket-Mitte.
+  const vals = new Array(N), times = new Array(N);
+  let cum = 0;
+  for (let i = 0; i < N; i++) {
+    cum += buckets[i];
+    vals[i] = estream.mode === "cum" ? cum : buckets[i];
+    times[i] = startMs + (i + 0.5) * bucketMs;
   }
-  evStroke(ctx, series, N, yMax, padL, plotW, padT, plotH, "#34f5c5");
+
+  // Domänen: x = Zeit, y = Wert. Ohne Zoom volle Zeit und y von 0 bis zum
+  // sichtbaren Maximum; mit Zoom der gewählte Ausschnitt.
+  const z = estream.zoom;
+  const xd0 = z ? z.x0 : startMs;
+  const xd1 = z ? z.x1 : fullEndMs;
+  let yd0, yd1;
+  if (z) { yd0 = z.y0; yd1 = z.y1; }
+  else { yd0 = 0; yd1 = 1; for (let i = 0; i < N; i++) if (times[i] >= xd0 && times[i] <= xd1 && vals[i] > yd1) yd1 = vals[i]; }
+  const xSpan = Math.max(1, xd1 - xd0), ySpan = Math.max(1e-9, yd1 - yd0);
+  const X = (t) => padL + (t - xd0) / xSpan * plotW;
+  const Y = (v) => padT + plotH - (v - yd0) / ySpan * plotH;
+
+  // Linie + Fläche, auf den Plotbereich geclippt (gezoomte Werte liegen außerhalb).
+  ctx.save();
+  ctx.beginPath(); ctx.rect(padL, padT, plotW, plotH); ctx.clip();
+  ctx.beginPath();
+  for (let i = 0; i < N; i++) { const x = X(times[i]), y = Y(vals[i]); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }
+  ctx.lineWidth = 2; ctx.strokeStyle = "#34f5c5"; ctx.shadowColor = "#34f5c5"; ctx.shadowBlur = 8; ctx.lineJoin = "round"; ctx.stroke(); ctx.shadowBlur = 0;
+  ctx.lineTo(X(times[N - 1]), padT + plotH); ctx.lineTo(X(times[0]), padT + plotH); ctx.closePath();
+  ctx.fillStyle = "rgba(52,245,197,.10)"; ctx.fill();
+  ctx.restore();
+
   // Achsenbeschriftung
   ctx.fillStyle = "#8b93a7"; ctx.font = "10px ui-monospace, Menlo, monospace";
   ctx.textAlign = "right"; ctx.textBaseline = "middle";
-  ctx.fillText(fmtInt(yMax), padL - 6, padT + 6); ctx.fillText("0", padL - 6, padT + plotH);
+  ctx.fillText(fmtInt(Math.round(yd1)), padL - 6, padT + 6); ctx.fillText(fmtInt(Math.round(yd0)), padL - 6, padT + plotH);
   ctx.textBaseline = "alphabetic";
-  ctx.textAlign = "left"; ctx.fillText(evClock(startMs), padL, H - 6);
-  ctx.textAlign = "right"; ctx.fillText(evClock(endMs), padL + plotW, H - 6);
-  if (peak) peak.textContent = estream.mode === "cum" ? "kumuliert" : "max " + fmtInt(yMax) + " / Abschnitt · " + Math.round(bucketMs / 1000) + "s";
+  ctx.textAlign = "left"; ctx.fillText(evClock(xd0), padL, H - 6);
+  ctx.textAlign = "right"; ctx.fillText(evClock(xd1), padL + plotW, H - 6);
+
+  // Auswahl-Rechteck beim Ziehen.
+  if (estream.sel) {
+    const s = estream.sel;
+    const rx = Math.min(s.x0, s.x1), ry = Math.min(s.y0, s.y1), rw = Math.abs(s.x1 - s.x0), rh = Math.abs(s.y1 - s.y0);
+    ctx.fillStyle = "rgba(110,168,254,.18)"; ctx.strokeStyle = "rgba(110,168,254,.85)"; ctx.lineWidth = 1;
+    ctx.fillRect(rx, ry, rw, rh); ctx.strokeRect(rx + 0.5, ry + 0.5, rw, rh);
+  }
+
+  estream.geom = { padL, padT, plotW, plotH, xd0, xd1, yd0, yd1 };
+  if (peak) {
+    const base = estream.mode === "cum" ? "kumuliert" : "max " + fmtInt(Math.round(yd1)) + " / Abschnitt · " + Math.round(bucketMs / 1000) + "s";
+    peak.textContent = base + (z ? " · 🔍 gezoomt (Esc)" : " · ziehen zum Zoomen");
+  }
 }
 
 // fetchEventStats holt das serverseitige Histogramm (seit Serverstart) und
@@ -1001,9 +1025,46 @@ async function startEventStream() {
 
 function setEvMode(mode) {
   estream.mode = mode;
+  estream.zoom = null; // Rate/kumuliert haben andere y-Skalen -> Zoom verwerfen
   $("ev-mode-rate").classList.toggle("active", mode === "rate");
   $("ev-mode-cum").classList.toggle("active", mode === "cum");
   drawEvChart();
+}
+function resetEvZoom() { if (!estream.zoom && !estream.sel) return; estream.zoom = null; estream.sel = null; drawEvChart(); }
+// Maus-Box-Zoom: Bereich aufziehen -> auf x- (Zeit) und y- (Wert) Ausschnitt zoomen.
+function initEvZoom() {
+  const cv = estream.cv; if (!cv) return;
+  cv.style.cursor = "crosshair";
+  const pos = (e) => { const r = cv.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
+  const inPlot = (g, p) => p.x >= g.padL && p.x <= g.padL + g.plotW && p.y >= g.padT && p.y <= g.padT + g.plotH;
+  let dragging = false, down = null;
+  cv.addEventListener("mousedown", (e) => {
+    const g = estream.geom; if (!g) return;
+    const p = pos(e); if (!inPlot(g, p)) return;
+    dragging = true; down = p; estream.sel = { x0: p.x, y0: p.y, x1: p.x, y1: p.y };
+    e.preventDefault();
+  });
+  window.addEventListener("mousemove", (e) => {
+    if (!dragging) return; const g = estream.geom; if (!g) return; const p = pos(e);
+    const cx = Math.max(g.padL, Math.min(g.padL + g.plotW, p.x)), cy = Math.max(g.padT, Math.min(g.padT + g.plotH, p.y));
+    estream.sel = { x0: down.x, y0: down.y, x1: cx, y1: cy }; drawEvChart();
+  });
+  window.addEventListener("mouseup", () => {
+    if (!dragging) return; dragging = false;
+    const g = estream.geom, sel = estream.sel; estream.sel = null;
+    if (!g || !sel) { drawEvChart(); return; }
+    if (Math.abs(sel.x1 - sel.x0) < 5 || Math.abs(sel.y1 - sel.y0) < 5) { drawEvChart(); return; }
+    const toT = (px) => g.xd0 + (px - g.padL) / g.plotW * (g.xd1 - g.xd0);
+    const toV = (py) => g.yd0 + (g.padT + g.plotH - py) / g.plotH * (g.yd1 - g.yd0);
+    estream.zoom = {
+      x0: Math.min(toT(sel.x0), toT(sel.x1)), x1: Math.max(toT(sel.x0), toT(sel.x1)),
+      y0: Math.max(0, Math.min(toV(sel.y0), toV(sel.y1))), y1: Math.max(toV(sel.y0), toV(sel.y1)),
+    };
+    drawEvChart();
+  });
+  cv.addEventListener("dblclick", resetEvZoom);
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") resetEvZoom(); });
+  $("ev-reset").addEventListener("click", resetEvZoom);
 }
 function setDashLiveCollapsed(collapsed) {
   $("dash-live").classList.toggle("collapsed", collapsed);
@@ -1022,6 +1083,7 @@ function initEventStream() {
   $("ev-collapse").addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } });
   let collapsed = false; try { collapsed = localStorage.getItem("clioDashLiveCollapsed") === "1"; } catch (_) {}
   setDashLiveCollapsed(collapsed);
+  initEvZoom();
   // Diagramm regelmäßig aus /event-stats auffrischen, solange das Dashboard
   // sichtbar ist und ein Token vorliegt (zusätzlich zum Auto-Refresh/Live-Events).
   setInterval(() => { if ($("view-dashboard").classList.contains("active") && tokenInput.value.trim()) fetchEventStats(); }, 5000);

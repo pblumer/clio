@@ -73,7 +73,10 @@ Build-Step/CDN:
     `GET /api/v1/event-stats` (serverseitiges Histogramm der Eventmengen nach
     Event-Zeit — beim Start aus der **gesamten Historie** aufgebaut, danach live
     fortgeschrieben; **ohne** die Historie zu streamen), umschaltbar **Rate** je
-    Zeitabschnitt bzw. **kumuliert**. Darunter ein **einklappbares
+    Zeitabschnitt bzw. **kumuliert**. Mit der Maus lässt sich ein **Bereich
+    aufziehen** (zoomt auf Zeit- **und** Wertausschnitt — so wird auch ein
+    wenige-aber-stetig-Fluss neben einer Spitze sichtbar); **Esc**, Doppelklick
+    oder **Reset** stellt die Standardskala wieder her. Darunter ein **einklappbares
     Live-Events-Fenster**, das per `observe`-Stream (`lowerBound` = höchste ID + 1)
     **nur neue Events** ab dem Verbinden zeigt (neueste oben, aufklappbare `data`).
     Dazu **Live-Telemetrie-Charts**

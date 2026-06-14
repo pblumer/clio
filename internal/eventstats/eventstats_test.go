@@ -9,9 +9,9 @@ func TestAddAndSnapshot(t *testing.T) {
 	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	h := New(start)
 
-	h.Add(2, start)                              // Bucket 0
-	h.Add(3, start.Add(500*time.Millisecond))    // ebenfalls Bucket 0 (1s breit)
-	h.Add(1, start.Add(2*time.Second))           // Bucket 2
+	h.Add(2, start)                           // Bucket 0
+	h.Add(3, start.Add(500*time.Millisecond)) // ebenfalls Bucket 0 (1s breit)
+	h.Add(1, start.Add(2*time.Second))        // Bucket 2
 
 	s := h.Snapshot()
 	if s.Width != time.Second {
