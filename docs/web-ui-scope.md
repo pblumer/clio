@@ -132,14 +132,17 @@ Umbau des Dashboards weg vom dekorativen **Liveness-EKG** (Stufe 6) hin zur
 Beobachtung des **Eventstroms**. Ein einziger `observe`-Stream auf `/` (rekursiv,
 `GET /api/v1/events?watch=true&recursive=true`) speist zwei Ansichten:
 
-- **Eventstrom-Liniendiagramm seit Serverstart**: gespeist aus dem neuen
-  Endpunkt **`GET /api/v1/event-stats`** — einem serverseitigen In-Memory-
-  Histogramm der pro Zeit geschriebenen Events seit Serverstart
-  (`internal/eventstats`, adaptive Bucket-Breite, gedeckelte Bucketzahl; passt zu
-  ADR-013, keine Fremd-Abhängigkeit). Das Dashboard pollt den Endpunkt und
-  zeichnet die Verteilung als **glühende Linie** (Canvas) — umschaltbar **Rate**
-  (Events je Zeitabschnitt) bzw. **kumuliert**. So braucht es die Historie
-  **nicht** zu streamen.
+- **Eventstrom-Liniendiagramm über die Zeit**: gespeist aus dem neuen Endpunkt
+  **`GET /api/v1/event-stats`** — einem serverseitigen In-Memory-Histogramm der
+  Events nach Event-Zeit (`internal/eventstats`, adaptive Bucket-Breite,
+  gedeckelte Bucketzahl; passt zu ADR-013, keine Fremd-Abhängigkeit). Das
+  Histogramm wird beim **Serverstart aus der gesamten Historie** aufgebaut
+  (`store.ForEachEventTime`, ein günstiger Scan, der nur das `time`-Feld
+  dekodiert; origin = erste Eventzeit) und danach bei jedem Write fortgeschrieben.
+  So zeigt das Dashboard auch **ohne neue Writes**, wann wie viele Events gesendet
+  wurden — und muss die Historie trotzdem **nicht** zum Client streamen. Das
+  Dashboard pollt den Endpunkt und zeichnet die Verteilung als **glühende Linie**
+  (Canvas) — umschaltbar **Rate** (Events je Zeitabschnitt) bzw. **kumuliert**.
 - **Einklappbares Live-Events-Fenster**: hängt an einem `observe`-Stream auf `/`
   mit `lowerBound = höchste ID + 1` (`= eventsTotal + 1` aus `/api/v1/info`; IDs
   sind global monoton) und zeigt damit **nur neue Events** ab dem Verbinden

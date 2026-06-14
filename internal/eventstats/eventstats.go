@@ -1,7 +1,9 @@
 // Package eventstats führt ein schlankes, abhängigkeitsfreies In-Memory-
-// Histogramm der pro Zeit geschriebenen Events seit Serverstart. Es erlaubt dem
+// Histogramm der Events über die Zeit (Buckets ab origin). Es erlaubt dem
 // /ui-Dashboard, die Eventmengen über die Zeitachse darzustellen, ohne die
-// gesamte Historie zu streamen.
+// gesamte Historie zum Client zu streamen. Der Server baut es beim Start aus der
+// vorhandenen Historie auf (origin = erste Eventzeit) und schreibt es bei jedem
+// Write fort.
 //
 // Die Bucket-Breite ist adaptiv: Sie beginnt fein (eine Sekunde) und verdoppelt
 // sich, sobald die Bucketzahl eine Obergrenze überschreitet (paarweises Mergen).

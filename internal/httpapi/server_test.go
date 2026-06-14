@@ -909,6 +909,45 @@ func TestEventStatsEndpoint(t *testing.T) {
 	}
 }
 
+func TestEventStatsSeededFromHistory(t *testing.T) {
+	// Erst Events über einen Server schreiben …
+	st, err := store.Open(filepath.Join(t.TempDir(), "seed.db"))
+	if err != nil {
+		t.Fatalf("store öffnen: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	cfg := config.Config{Addr: ":0", APIToken: "secret-token"}
+
+	srv1 := New(cfg, st, nil)
+	do(t, srv1, http.MethodPost, "/api/v1/write-events", "secret-token",
+		`{"events":[{"source":"s","subject":"/a","type":"t"},{"source":"s","subject":"/a","type":"t"},{"source":"s","subject":"/b","type":"t"}]}`)
+
+	// … dann einen NEUEN Server auf demselben Store erzeugen (wie ein Neustart):
+	// das Histogramm muss aus der bestehenden Historie aufgebaut werden.
+	srv2 := New(cfg, st, nil)
+	rec := do(t, srv2, http.MethodGet, "/api/v1/event-stats", "secret-token", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var got struct {
+		Counts []uint64 `json:"counts"`
+		Total  uint64   `json:"total"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("dekodieren: %v", err)
+	}
+	if got.Total != 3 {
+		t.Fatalf("total nach Neustart = %d, want 3 (Seeding aus Historie)", got.Total)
+	}
+	var sum uint64
+	for _, c := range got.Counts {
+		sum += c
+	}
+	if sum != 3 {
+		t.Fatalf("bucket-summe = %d, want 3", sum)
+	}
+}
+
 func TestMetricsEndpoint(t *testing.T) {
 	srv := newTestServer(t)
 	do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token",
