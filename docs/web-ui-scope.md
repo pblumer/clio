@@ -143,6 +143,10 @@ Beobachtung des **Eventstroms**. Ein einziger `observe`-Stream auf `/` (rekursiv
   wurden — und muss die Historie trotzdem **nicht** zum Client streamen. Das
   Dashboard pollt den Endpunkt und zeichnet die Verteilung als **glühende Linie**
   (Canvas) — umschaltbar **Rate** (Events je Zeitabschnitt) bzw. **kumuliert**.
+  **Box-Zoom**: Mit der Maus einen Bereich aufziehen zoomt auf den gewählten
+  Zeit- **und** Wertausschnitt (so wird auch ein kleiner, stetiger Fluss neben
+  einer dominanten Spitze sichtbar); **Esc**/Doppelklick/Reset stellt die
+  Standardskala wieder her.
 - **Einklappbares Live-Events-Fenster**: hängt an einem `observe`-Stream auf `/`
   mit `lowerBound = höchste ID + 1` (`= eventsTotal + 1` aus `/api/v1/info`; IDs
   sind global monoton) und zeigt damit **nur neue Events** ab dem Verbinden
