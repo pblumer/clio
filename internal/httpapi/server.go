@@ -88,8 +88,22 @@ func New(cfg config.Config, st *store.Store, logger *slog.Logger, opts ...Option
 			opt(s)
 		}
 	}
-	// Eventmengen-Histogramm ab der (ggf. via Option gesetzten) Startzeit.
-	s.events = eventstats.New(s.startedAt)
+	// Eventmengen-Histogramm aus der bestehenden Historie aufbauen (nach
+	// Event-Zeit), damit das Dashboard auch ohne neue Writes zeigt, wann wie
+	// viele Events gesendet wurden. origin = früheste (erste) Eventzeit.
+	var hist *eventstats.Histogram
+	if err := st.ForEachEventTime(func(t time.Time) {
+		if hist == nil {
+			hist = eventstats.New(t)
+		}
+		hist.Add(1, t)
+	}); err != nil {
+		s.logger.Error("event-stats: seeding aus der historie fehlgeschlagen", "err", err)
+	}
+	if hist == nil {
+		hist = eventstats.New(s.startedAt)
+	}
+	s.events = hist
 	s.routes()
 	return s
 }
@@ -243,10 +257,10 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleEventStats liefert das Histogramm der seit Serverstart geschriebenen
-// Events über die Zeit: Startzeitpunkt, Bucket-Breite (Sekunden) und die
-// Bucket-Zähler. So kann das /ui-Dashboard die Eventmengen über die Zeitachse
-// zeichnen, ohne die gesamte Historie zu streamen.
+// handleEventStats liefert das Histogramm der Events über die Zeit (nach
+// Event-Zeit; beim Start aus der Historie aufgebaut): Startzeitpunkt,
+// Bucket-Breite (Sekunden) und die Bucket-Zähler. So kann das /ui-Dashboard die
+// Eventmengen über die Zeitachse zeichnen, ohne die gesamte Historie zu streamen.
 func (s *Server) handleEventStats(w http.ResponseWriter, r *http.Request) {
 	snap := s.events.Snapshot()
 	writeJSON(w, http.StatusOK, map[string]any{

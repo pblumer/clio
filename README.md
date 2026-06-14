@@ -69,9 +69,10 @@ Build-Step/CDN:
 
 - **`http://127.0.0.1:3000/ui`** — Bearer-Token eingeben, **Verbinden**. Statische
   Seite (Vanilla JS, kein Build-Step) mit sechs Tabs:
-  - **Dashboard** — ein **Eventstrom-Liniendiagramm seit Serverstart**: gespeist
-    aus `GET /api/v1/event-stats` (serverseitiges Histogramm der Eventmengen über
-    die Zeit — **ohne** die Historie zu streamen), umschaltbar **Rate** je
+  - **Dashboard** — ein **Eventstrom-Liniendiagramm über die Zeit**: gespeist aus
+    `GET /api/v1/event-stats` (serverseitiges Histogramm der Eventmengen nach
+    Event-Zeit — beim Start aus der **gesamten Historie** aufgebaut, danach live
+    fortgeschrieben; **ohne** die Historie zu streamen), umschaltbar **Rate** je
     Zeitabschnitt bzw. **kumuliert**. Darunter ein **einklappbares
     Live-Events-Fenster**, das per `observe`-Stream (`lowerBound` = höchste ID + 1)
     **nur neue Events** ab dem Verbinden zeigt (neueste oben, aufklappbare `data`).

@@ -228,6 +228,31 @@ func (s *Store) Count() (uint64, error) {
 	return n, err
 }
 
+// ForEachEventTime ruft fn für jedes gespeicherte Event mit dessen Zeitstempel
+// auf, in globaler Reihenfolge (= Schreibreihenfolge). Es wird nur das `time`-
+// Feld dekodiert (günstig), damit Aufrufer z. B. ein Zeit-Histogramm der gesamten
+// Historie aufbauen können, ohne die Events vollständig zu laden. Events mit
+// fehlendem/ungültigem Zeitstempel werden übersprungen.
+func (s *Store) ForEachEventTime(fn func(time.Time)) error {
+	return s.db.View(func(tx *bolt.Tx) error {
+		c := tx.Bucket(bucketEvents).Cursor()
+		for k, v := c.First(); k != nil; k, v = c.Next() {
+			var rec struct {
+				Time string `json:"time"`
+			}
+			if err := json.Unmarshal(v, &rec); err != nil {
+				continue
+			}
+			t, err := time.Parse(time.RFC3339Nano, rec.Time)
+			if err != nil {
+				continue
+			}
+			fn(t.UTC())
+		}
+		return nil
+	})
+}
+
 // TypeInfo beschreibt einen bisher geschriebenen Event-Typ.
 type TypeInfo struct {
 	Type      string `json:"type"`
