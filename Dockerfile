@@ -1,6 +1,6 @@
 # Mehrstufiger Build: statisches Binary, dann minimales distroless-Image.
 
-FROM golang:1.24 AS build
+FROM --platform=$BUILDPLATFORM golang:1.24 AS build
 WORKDIR /src
 
 # Abhängigkeiten zuerst (besseres Layer-Caching).
@@ -9,7 +9,12 @@ RUN go mod download
 
 COPY . .
 ARG VERSION=docker
-RUN CGO_ENABLED=0 go build -trimpath \
+# TARGETOS/TARGETARCH werden von BuildKit je Zielplattform gesetzt → echtes
+# Cross-Compile statt QEMU-Emulation. Bei `docker build` ohne --platform fallen
+# sie leer aus, dann nutzt Go automatisch die Host-Plattform.
+ARG TARGETOS
+ARG TARGETARCH
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath \
 	-ldflags "-s -w -X main.version=${VERSION}" \
 	-o /cliostore ./cmd/cliostore
 

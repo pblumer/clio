@@ -4,13 +4,16 @@ on:
   push:
     tags: ["v*"]
 
+# Minimal-Default; die einzelnen Jobs erhöhen gezielt.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  release:
+  binaries:
     name: build & publish binaries
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # GitHub-Release anlegen und Assets hochladen
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -23,11 +26,45 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Cross-build binaries
-        run: make dist
+      - name: Cross-build & package (Archive + Checksums)
+        run: make package
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*
+          files: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/checksums.txt
           generate_release_notes: true
+
+  docker:
+    name: build & push image (GHCR)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # Image nach ghcr.io pushen
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push (linux/amd64, linux/arm64)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: VERSION=${{ github.ref_name }}
+          tags: |
+            ghcr.io/pblumer/clio:${{ github.ref_name }}
+            ghcr.io/pblumer/clio:latest
