@@ -276,6 +276,13 @@ dann offen, um neue Events sofort als NDJSON nachzuliefern. Nach einem
 Verbindungsabbruch verbindet man sich mit `lowerBound` neu und lädt so die
 verpassten Events nach.
 
+> **Hinter einem Reverse-Proxy / Firmennetz:** Der offene Stream sendet alle
+> ~15 s eine Heartbeat-Leerzeile (vom Client ignoriert) und setzt
+> `X-Accel-Buffering: no`. Das hält die Verbindung gegen Idle-Timeouts offen und
+> verhindert, dass ein puffernder Proxy die nie endende Antwort zurückhält
+> (sonst „hängt" der Live-Stream). Bei nginx zusätzlich ggf. `proxy_buffering off;`
+> bzw. `proxy_read_timeout` erhöhen.
+
 ```bash
 # Live alle Events unterhalb von /books beobachten (-N = ungepuffert)
 curl -N -X POST http://127.0.0.1:3000/api/v1/observe-events \
