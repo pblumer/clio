@@ -190,7 +190,38 @@ persistieren).
 | `CLIO_DB_PATH`    | nein    | `clio.db`  | Pfad zur bbolt-Datenbankdatei      |
 | `CLIO_SYNC`       | nein    | `group`    | Schreibstrategie: `group`/`always`/`off` (siehe Performance) |
 | `CLIO_SIGNING_KEY`| nein    | —          | base64-Ed25519-Schlüssel; aktiviert Event-Signaturen        |
-| `CLIO_DEV_MODE`   | nein    | `false`    | Dev-Mode (truthy, z. B. `1`/`true`): schaltet den destruktiven DB-Reset `POST /api/v1/dev/reset-database` und die „Dev-Zone" im Dashboard frei. **Nicht in Produktion** (siehe ADR-022). |
+| `CLIO_DEV_MODE`   | nein    | `false`    | Dev-Mode (truthy, z. B. `1`/`true`): schaltet die destruktiven Dev-Routen (`POST /api/v1/dev/reset-database`, `POST /api/v1/dev/bulk-import-events`, `POST /api/v1/dev/close-bulk-import`) und die „Dev-Zone" im Dashboard frei. **Nicht in Produktion** (siehe ADR-022). |
+
+### Dev-Mode: Reset & Bulk-Import-Fenster
+
+> ⚠️ Nur für Entwicklung/Demo. Ohne `CLIO_DEV_MODE` sind diese Routen **nicht
+> registriert** (`404`), nicht nur gesperrt — Defense in Depth (ADR-022).
+
+Im Dev-Mode steht ein **Bulk-Import-Fenster** für einmaliges Seeding/Migration
+bereit. Es ist beim Start offen und wird durch einen Reset („Supernova") wieder
+geöffnet — so ist High-Volume-Import direkt nach Start/Reset möglich, später im
+Betrieb aber blockiert (Schutz vor versehentlichen Massenimporten).
+
+| Zustand | `POST /api/v1/dev/bulk-import-events` |
+|---|---|
+| Fenster offen (Start / nach Reset) | **200** — Events werden geschrieben (Semantik wie `write-events`) |
+| Fenster geschlossen | **409** — erst `dev/reset-database` ausführen |
+| Ohne `CLIO_DEV_MODE` | **404** — Route nicht registriert |
+
+Lebenszyklus: **Start → offen → `close-bulk-import` → 409 → `reset-database` → wieder offen**.
+
+```bash
+# 1) Supernova: Datenbank zurücksetzen → Fenster öffnet sich wieder
+curl -sS -X POST "$BASE/api/v1/dev/reset-database" -H "Authorization: Bearer $TOK"
+
+# 2) Bulk-Import (nur im offenen Fenster) — Body wie bei write-events
+curl -sS -X POST "$BASE/api/v1/dev/bulk-import-events" \
+  -H "Authorization: Bearer $TOK" -H "Content-Type: application/json" \
+  -d '{"events":[{"source":"migration","subject":"/books/42","type":"book-acquired","data":{"title":"Dune"}}]}'
+
+# 3) Fenster schließen → weitere Bulk-Importe liefern 409
+curl -sS -X POST "$BASE/api/v1/dev/close-bulk-import" -H "Authorization: Bearer $TOK"
+```
 
 ### Fehlerformat
 
