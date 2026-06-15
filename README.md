@@ -15,6 +15,18 @@ Die vollständige Architektur, Roadmap und alle Entscheidungen stehen in
 > Contributor, Architekt:in) — mit Modulen und lauffähigen Beispielen unter
 > [`examples/`](./examples/).
 
+## 👁 Ein Blick ins Betriebs-Dashboard
+
+![clio Betriebs-Dashboard — Eventstrom über die Zeit, Live-Events und Telemetrie unter /ui](docs/screenshots/dashboard.png)
+
+> Alles eingebettet im **Single-Binary**, ganz ohne externe Dienste: ein
+> **Eventstrom-Diagramm über die Zeit** (mit Maus-**Box-Zoom**), ein
+> **Live-Event-Stream**, ein **Explorer**, eine **Query-Konsole** und
+> **Live-Telemetrie** — erreichbar unter `http://127.0.0.1:3000/ui`.
+>
+> Sechs Tabs, kein Build-Step, kein CDN, kein Grafana nötig. Wie das alles im
+> Detail funktioniert? 👉 [**Betriebs-Dashboard (`/ui`)**](#betriebs-dashboard-ui)
+
 ## Status
 
 **Stufe 0–2 — abgeschlossen.** Lauffähig: `ping`, `write-events` (atomar,
@@ -66,6 +78,8 @@ Ein schlankes, ebenfalls eingebettetes Dashboard für Monitoring & Observing —
 kein Prometheus/Grafana nötig, um „mal eben draufzuschauen". Optik im
 **Sci-Fi-/HUD-Stil** (Sternenfeld, Neon-Glow), weiterhin Vanilla JS ohne
 Build-Step/CDN:
+
+![Betriebs-Dashboard: Eventstrom-Diagramm, Live-Events und Telemetrie](docs/screenshots/dashboard.png)
 
 - **`http://127.0.0.1:3000/ui`** — Bearer-Token eingeben, **Verbinden**. Statische
   Seite (Vanilla JS, kein Build-Step) mit sechs Tabs:
