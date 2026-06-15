@@ -3,9 +3,9 @@
 > **Zweck dieses Dokuments**
 > Dieses Dokument ist die *Single Source of Truth* für das Projekt. Es ist so geschrieben, dass eine KI oder eine Person ohne Vorwissen nach dem Lesen vollständig versteht: **Was** gebaut wird, **warum**, **welche Ziele** verfolgt werden, **welche Entscheidungen** getroffen wurden und **wo das Projekt aktuell steht**. Es kombiniert ein Kontextdokument mit eingebetteten Architecture Decision Records (ADRs).
 >
-> **Status des Gesamtprojekts:** `IN ENTWICKLUNG` — **Stufe 0–3 abgeschlossen** plus **Ed25519-Signaturen** (Authentizität). Write/Read/Observe, Optimistic Concurrency, Hash-Kette + Signaturen (`/verify`, `/public-key`), Event-Typen + JSON-Schemas, Group Commit (`CLIO_SYNC`), Observability (`/metrics`), Distribution (Cross-Builds/Docker/Release), Kompaktierung (`cliostore compact`), OpenAPI/Swagger UI. Geplant (Stufe 4): CEL-basierte Abfrageschicht (`run-query`, ADR-017) statt eigener EventQL-Sprache.
-> **Letzte Aktualisierung:** 2026-06-12
-> **Dokumentversion:** 1.28
+> **Status des Gesamtprojekts:** `IN ENTWICKLUNG` — **Stufe 0–3 abgeschlossen** plus **Ed25519-Signaturen** (Authentizität). Write/Read/Observe, Optimistic Concurrency, Hash-Kette + Signaturen (`/verify`, `/public-key`), Event-Typen + JSON-Schemas, Group Commit (`CLIO_SYNC`), Observability (`/metrics`), Distribution (Cross-Builds/Docker/Release), Kompaktierung (`cliostore compact`), OpenAPI/Swagger UI, **CEL-Abfragen (`run-query`, ADR-017) mit Typ-Index (ADR-021)** und ein **eingebettetes Betriebs-Dashboard (`/ui`, ADR-020)**. Offen (Stufe 4): Aggregation/Grouping und Snapshots.
+> **Letzte Aktualisierung:** 2026-06-15
+> **Dokumentversion:** 1.29
 
 ---
 
@@ -186,13 +186,13 @@ Jede Stufe ist für sich lauffähig. Statusmarkierungen: `⬜ offen` · `🟡 in
 - [x] Docker-Image — mehrstufig, `distroless/static`, nonroot, `/data`-Volume
 - **Ergebnis:** Betriebsreif — Durability-Tuning, Observability, Distribution, Wartung. ✅
 
-### Stufe 4 — Abfragen (CEL-basiert) & Snapshots `⬜`
+### Stufe 4 — Abfragen (CEL-basiert) & Snapshots `🟡`
 *Schätzung: mehrere überschaubare PRs statt Parser-Marathon (siehe ADR-017)*
 
 Statt EventQL syntaxgetreu nachzubauen (kein offener Parser verfügbar, eigener Lexer/Parser/Planner nötig) setzen wir auf **CEL** (`google/cel-go`) für die Prädikate und wiederverwenden unsere vorhandenen Scan-Primitive für die Struktur. Etappen, jede für sich lauffähig:
 
 1. [x] **CEL-Prädikat-Layer** (`internal/query`): Ausdruck mit `event`-Variable kompilieren (Metadaten typisiert, `event.data` als dynamische Map), gegen ein Event auswerten → bool; Compile-Cache + Tests. *(Etappe 1 — umgesetzt.)*
-2. [x] **`POST /api/v1/run-query`** (read-only): `{subject, recursive, where, lowerBound/upperBound, limit}` → `store.Read` + CEL-Filter → NDJSON. *(Etappe 2 — umgesetzt.)*
+2. [x] **`POST /api/v1/run-query`** (read-only): `{subject, recursive, where, lowerBound/upperBound, limit}` → CEL-Filter → NDJSON. *(Etappe 2 — umgesetzt.)* **Performance (ADR-021):** Bei einem zwingenden `event.type`-Constraint lädt die Abfrage nur die Treffer über den **Typ-Index** (Millisekunden statt Sekunden über große Scopes) statt `store.Read` über den ganzen Scope; sonst voller Scan. Zudem wird `event.data` nur geparst, wenn das Prädikat es referenziert.
 3. [x] **Query-Precondition** `isQueryResultEmpty`/`isQueryResultNonEmpty`: Optimistic Concurrency auf einer CEL-Bedingung (unser `isEventQlQueryTrue`-Äquivalent), atomar im Write-Pfad ausgewertet. *(Etappe 3 — umgesetzt.)*
 4. [x] **Projektion**: optionales `select` (punktseparierte Feldliste) in `run-query` — Ausgabe auf gewählte Felder reduzieren; Verschachtelung bleibt erhalten, fehlende Felder werden ausgelassen (kein `null`). *(Etappe 4 — umgesetzt, Feldliste; CEL-Projektion mit abgeleiteten Feldern bleibt eine spätere Option.)*
 5. [ ] **Aggregation/Grouping** (später) sowie **Snapshots** (App-geliefert; semantisch optional, da wir bewusst keine Aggregate berechnen).
@@ -344,6 +344,7 @@ Statt EventQL syntaxgetreu nachzubauen (kein offener Parser verfügbar, eigener 
 - ~~fsync-Politik: pro Write vs. gebündelt (Durability-/Performance-Abwägung) — spätestens Stufe 3.~~ **Entschieden:** Group Commit als Default, umschaltbar via `CLIO_SYNC` (ADR-009).
 - ~~Event-Schemas (geplant, PR B)~~ **Umgesetzt:** JSON Schema je Event-Typ (`register-event-schema`/`read-event-schema`), Validierung beim Write, `read-event-types` liefert `hasSchema` (ADR-014).
 - Versionierung von Event-Typen: nur Konvention oder Tooling-Unterstützung?
+- Weitere `run-query`-Indizierung (Aufbauend auf dem Typ-Index, ADR-021): kombinierter **Subject-und-Typ-Index** für enge Subjects mit Typ-Filter, **Index-Nutzung für `lowerBound`/`upperBound`-Bereiche** sowie ggf. Indizes auf häufige `event.data`-Felder. Offen, bis ein konkreter Bedarf das rechtfertigt; bewusst nicht vorab gebaut.
 - Namespace: `cliostore` ist als Name auf GitHub/in der Go-Welt frei (kein nennenswertes bestehendes Projekt). Bewusst gewählt statt des kürzeren `clio` (mehrfach belegt, u. a. OpenTelemetry-Collector `openconfig/clio`) und `cliodb` (existiert bereits als Datomic-ähnliche immutable DB, `loganmhb/cliodb`). Modulpfad voraussichtlich `github.com/<owner>/cliostore`.
 
 ---

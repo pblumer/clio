@@ -371,6 +371,13 @@ curl -X POST http://127.0.0.1:3000/api/v1/run-query \
 `has(event.data.x)` schützt vor fehlenden Feldern; ein Auswertungsfehler eines
 Events gilt als „kein Treffer".
 
+> **Performance:** Schränkt das Prädikat den `event.type` zwingend ein
+> (`event.type == 'x'`, `event.type in [...]`, auch als `&&`-Teil), nutzt
+> `run-query` einen **Typ-Index** und lädt nur die passenden Events statt den
+> ganzen Scope zu scannen — schnell auch über Hunderttausende Events (ADR-021).
+> Lässt sich der Typ nicht sicher eingrenzen (z. B. `!=` oder ein `||` mit
+> unbeschränkter Seite), wird vollständig gescannt.
+
 #### Projektion (`select`)
 
 Optional reduziert `select` die Ausgabe auf ausgewählte Feldpfade (punkt-
