@@ -93,6 +93,9 @@ Build-Step/CDN:
     oder **Reset** stellt die Standardskala wieder her. Darunter ein **einklappbares
     Live-Events-Fenster**, das per `observe`-Stream (`lowerBound` = höchste ID + 1)
     **nur neue Events** ab dem Verbinden zeigt (neueste oben, aufklappbare `data`).
+    Reißt ein Stream ab (Hintergrund-Tab-Drosselung, Broker-Drop, Netzwerk),
+    **verbindet sich der Ticker automatisch neu** (Backoff, lückenloses Fortsetzen
+    ab der zuletzt gesehenen ID) — gleiches gilt für den Live-Events-Tab.
     Dazu **Live-Telemetrie-Charts**
     (CPU-Last, Heap-Speicher, Event-Durchsatz, Request-Rate als glühende
     Sparklines) sowie Events total, DB-Größe, aktive Observer, Uptime und

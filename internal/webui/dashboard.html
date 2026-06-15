@@ -899,6 +899,9 @@ window.addEventListener("resize", redrawSparks);
 //    mit lowerBound = höchste ID + 1, liefert also NUR NEUE Events ab dem Verbinden.
 const estream = {
   active: false, ctrl: null,
+  connected: false,              // läuft gerade eine offene Leseschleife?
+  lastId: null,                  // höchste gesehene Event-ID (für lückenlosen Reconnect)
+  retry: 0, reconnectT: null,    // Backoff-Zähler und Reconnect-Timer
   count: 0,                      // neue Events seit Verbinden (für die Live-Liste)
   mode: "rate",                  // "rate" = Events/Abschnitt, "cum" = kumuliert
   cv: null, ctx: null, w: 0, h: 0, dpr: 1,
@@ -1038,36 +1041,56 @@ function dashAppendEvent(ev) {
   const c = $("ev-live-count"); if (c) c.textContent = fmtInt(estream.count) + " Events";
 }
 function estreamHandle(ev) {
+  const id = Number(ev.id);
+  if (Number.isFinite(id) && (estream.lastId == null || id > estream.lastId)) estream.lastId = id;
   estream.count++;
   dashAppendEvent(ev);   // Live-Liste (nur neue Events)
   maybeFetchStats();     // Diagramm gedrosselt nachziehen
 }
 
-function stopEventStream() { if (estream.ctrl) { estream.ctrl.abort(); estream.ctrl = null; } estream.active = false; }
+function stopEventStream() {
+  estream.active = false; estream.connected = false;
+  if (estream.reconnectT) { clearTimeout(estream.reconnectT); estream.reconnectT = null; }
+  if (estream.ctrl) { estream.ctrl.abort(); estream.ctrl = null; }
+}
+
+// startEventStream startet den Dashboard-Live-Ticker frisch (nur neue Events ab
+// jetzt) und hält ihn anschließend über runEventStream offen — inkl. Reconnect.
 async function startEventStream() {
   const token = tokenInput.value.trim();
   if (!token) return;
   stopEventStream();
-  estream.active = true; estream.ctrl = new AbortController();
-  estream.count = 0;
+  estream.active = true;
+  estream.count = 0; estream.lastId = null; estream.retry = 0;
   fetchEventStats(); // Diagramm sofort (seit Serverstart) befüllen
   $("dash-events").innerHTML = '<div class="empty">verbinde …</div>';
   // Nur NEUE Events: lowerBound hinter die aktuell höchste Event-ID setzen.
   // Event-IDs sind global monoton ab 1, daher entspricht die höchste ID der
   // Gesamtzahl (eventsTotal aus /api/v1/info). So liefert observe keine History.
-  let lowerBound = null;
   try {
     const r = await fetch("/api/v1/info", { headers: { Authorization: "Bearer " + token }, cache: "no-store" });
-    if (r.ok) { const j = await r.json(); const tot = Number(j.eventsTotal); if (Number.isFinite(tot)) lowerBound = tot + 1; }
+    if (r.ok) { const j = await r.json(); const tot = Number(j.eventsTotal); if (Number.isFinite(tot)) estream.lastId = tot; }
   } catch (_) {}
+  if (!estream.active) return;
+  runEventStream(token);
+}
+
+// runEventStream hält die Observe-Verbindung und baut sie nach Abriss (EOF wegen
+// Broker-Drop, oder Netzwerkfehler) automatisch wieder auf. lowerBound =
+// höchste gesehene ID + 1 setzt lückenlos und ohne Dubletten fort — genau der
+// im Broker dokumentierte Reconnect, den das Dashboard bisher nicht umsetzte.
+async function runEventStream(token) {
+  estream.ctrl = new AbortController();
+  const lower = estream.lastId != null ? estream.lastId + 1 : null;
   try {
-    const url = "/api/v1/events?watch=true&recursive=true" + (lowerBound != null ? "&lowerBound=" + lowerBound : "");
+    const url = "/api/v1/events?watch=true&recursive=true" + (lower != null ? "&lowerBound=" + lower : "");
     const res = await fetch(url, {
       headers: { Authorization: "Bearer " + token }, signal: estream.ctrl.signal, cache: "no-store",
     });
-    if (res.status === 401) { $("dash-events").innerHTML = '<div class="empty">Token ungültig (401).</div>'; estream.active = false; return; }
+    if (res.status === 401) { stopEventStream(); $("dash-events").innerHTML = '<div class="empty">Token ungültig (401).</div>'; return; }
     if (!res.ok || !res.body) throw new Error("HTTP " + res.status);
-    $("dash-events").innerHTML = '<div class="empty">wartet auf neue Events …</div>';
+    estream.connected = true; estream.retry = 0; // erfolgreiche Verbindung -> Backoff zurücksetzen
+    if (estream.count === 0) $("dash-events").innerHTML = '<div class="empty">wartet auf neue Events …</div>';
     const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = "";
     for (;;) {
       const { done, value } = await reader.read(); if (done) break;
@@ -1079,11 +1102,21 @@ async function startEventStream() {
       }
     }
   } catch (e) {
-    if (e.name !== "AbortError" && estream.active) $("dash-events").innerHTML = '<div class="empty">Stream-Fehler: ' + e.message + "</div>";
+    if (e.name === "AbortError" || !estream.active) return; // manuell gestoppt
   } finally {
-    estream.active = false;
-    if (estream.count === 0) $("dash-events").innerHTML = '<div class="empty">Verbindung beendet — keine neuen Events.</div>';
+    estream.connected = false;
   }
+  if (estream.active) scheduleEventReconnect(token); // Abriss -> erneut verbinden
+}
+
+function scheduleEventReconnect(token) {
+  estream.retry = Math.min(estream.retry + 1, 6);
+  const delay = Math.min(1000 * 2 ** (estream.retry - 1), 15000); // 1s,2s,4s,…,15s
+  if (estream.count === 0) {
+    $("dash-events").innerHTML = '<div class="empty">Verbindung unterbrochen — neuer Versuch in ' + Math.round(delay / 1000) + ' s …</div>';
+  }
+  if (estream.reconnectT) clearTimeout(estream.reconnectT);
+  estream.reconnectT = setTimeout(() => { if (estream.active) runEventStream(token); }, delay);
 }
 
 function setEvMode(mode) {
@@ -1208,6 +1241,22 @@ $("connect").addEventListener("click", connect);
 tokenInput.addEventListener("keydown", (e) => { if (e.key === "Enter") connect(); });
 intervalSel.addEventListener("change", schedule);
 
+// Hintergrund-Tabs werden vom Browser gedrosselt, wodurch ein offener
+// Observe-Stream abreißen kann. Beim Zurückkehren sofort neu verbinden, statt
+// auf das nächste Backoff-Intervall zu warten.
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState !== "visible") return;
+  const token = tokenInput.value.trim(); if (!token) return;
+  if (estream.active && !estream.connected) {
+    if (estream.reconnectT) { clearTimeout(estream.reconnectT); estream.reconnectT = null; }
+    estream.retry = 0; runEventStream(token);
+  }
+  if (live.active && !live.connected) {
+    if (live.reconnectT) { clearTimeout(live.reconnectT); live.reconnectT = null; }
+    live.retry = 0; runLive(token);
+  }
+});
+
 // ---------- Dev-Zone · Tabula Rasa (Supernova-Reset, nur im Dev-Mode) ----------
 // Gegen versehentliches Auslösen: der Knopf muss gedrückt gehalten werden, bis
 // die „Ladung" voll ist (Hold-to-fire). Loslassen vorher bricht ab. Erst dann
@@ -1300,7 +1349,7 @@ async function fireSupernova() {
 
 // ---------- Live-Event-Viewer ----------
 const MAX_ROWS = 500;
-const live = { active: false, ctrl: null, paused: false, pending: [], count: 0 };
+const live = { active: false, ctrl: null, paused: false, pending: [], count: 0, lastId: null, retry: 0, reconnectT: null, connected: false };
 const eventsEl = $("events");
 
 function liveStatus(state, text) {
@@ -1356,6 +1405,8 @@ function appendEvent(ev) {
   $("live-count").textContent = fmtInt(live.count) + " Events";
 }
 function handleEvent(ev) {
+  const id = Number(ev.id);
+  if (Number.isFinite(id) && (live.lastId == null || id > live.lastId)) live.lastId = id;
   if (live.paused) {
     live.pending.push(ev);
     const pe = $("live-pending");
@@ -1370,21 +1421,34 @@ function flushPending() {
   $("live-pending").style.display = "none";
 }
 
-async function startLive() {
+function startLive() {
   const token = tokenInput.value.trim();
   if (!token) { liveStatus("err", "Token fehlt"); return; }
   sessionStorage.setItem("clioToken", token);
-  live.active = true; live.ctrl = new AbortController();
+  live.active = true;
+  live.count = 0; live.lastId = null; live.retry = 0;
   $("live-start").textContent = "Stoppen";
   $("live-pause").disabled = false;
   $("live-subject").disabled = $("live-recursive").disabled = $("live-types").disabled = true;
   liveStatus("live", "live: beobachte " + ($("live-subject").value.trim() || "/"));
+  runLive(token);
+}
+
+// runLive hält den Live-Tab-Stream offen und verbindet nach einem Abriss
+// automatisch neu. Erstverbindung ohne lowerBound (zeigt zuerst die History);
+// jeder Reconnect setzt ab der höchsten gesehenen ID + 1 fort (keine Dubletten).
+async function runLive(token) {
+  live.ctrl = new AbortController();
+  let url = buildPath();
+  if (live.lastId != null) url += "&lowerBound=" + (live.lastId + 1);
   try {
-    const res = await fetch(buildPath(), {
+    const res = await fetch(url, {
       headers: { Authorization: "Bearer " + token }, signal: live.ctrl.signal, cache: "no-store",
     });
     if (res.status === 401) { liveStatus("err", "Token ungültig (401)"); stopLive(); return; }
     if (!res.ok || !res.body) throw new Error("HTTP " + res.status);
+    live.connected = true; live.retry = 0;
+    if (live.lastId != null) liveStatus("live", "live: beobachte " + ($("live-subject").value.trim() || "/"));
     const reader = res.body.getReader();
     const dec = new TextDecoder();
     let buf = "";
@@ -1398,17 +1462,28 @@ async function startLive() {
         if (line.trim()) { try { handleEvent(JSON.parse(line)); } catch (_) { /* Teilzeile ignorieren */ } }
       }
     }
-    // Stream regulär beendet (Server geschlossen).
-    if (live.active) liveStatus("err", "Stream beendet");
   } catch (e) {
-    if (e.name !== "AbortError" && live.active) liveStatus("err", "Stream-Fehler: " + e.message);
+    if (e.name === "AbortError" || !live.active) return; // manuell gestoppt
   } finally {
-    finishLive();
+    live.connected = false;
   }
+  if (live.active) scheduleLiveReconnect(token); // Abriss -> erneut verbinden
 }
-function stopLive() { if (live.ctrl) live.ctrl.abort(); finishLive(); }
+
+function scheduleLiveReconnect(token) {
+  live.retry = Math.min(live.retry + 1, 6);
+  const delay = Math.min(1000 * 2 ** (live.retry - 1), 15000);
+  liveStatus("err", "Verbindung unterbrochen — neuer Versuch in " + Math.round(delay / 1000) + " s …");
+  if (live.reconnectT) clearTimeout(live.reconnectT);
+  live.reconnectT = setTimeout(() => { if (live.active) runLive(token); }, delay);
+}
+function stopLive() {
+  if (live.reconnectT) { clearTimeout(live.reconnectT); live.reconnectT = null; }
+  if (live.ctrl) live.ctrl.abort();
+  finishLive();
+}
 function finishLive() {
-  live.active = false;
+  live.active = false; live.connected = false;
   $("live-start").textContent = "Beobachten";
   $("live-pause").disabled = true; $("live-pause").textContent = "Pause"; live.paused = false;
   flushPending();
