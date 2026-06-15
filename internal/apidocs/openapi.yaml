@@ -471,6 +471,10 @@ paths:
         nicht registriert und antwortet mit `404`. Gedacht ausschließlich für
         Entwicklungs- und Demoumgebungen — im Produktivbetrieb widerspricht das
         Löschen der Unveränderlichkeit (vgl. ADR-015).
+
+        Als Nebeneffekt **öffnet der Reset das Bulk-Import-Fenster wieder**
+        (`bulkImportOpen=true`): nach einer „Supernova" darf erneut per
+        `POST /api/v1/dev/bulk-import-events` in großen Mengen geladen werden.
       responses:
         "200":
           description: Datenbank zurückgesetzt
@@ -482,11 +486,98 @@ paths:
                   status: { type: string, example: "tabula-rasa" }
                   deletedEvents: { type: integer, format: int64, example: 42 }
                   resetAt: { type: string, format: date-time }
+                  bulkImportOpen:
+                    type: boolean
+                    example: true
+                    description: Nach dem Reset ist das Bulk-Import-Fenster wieder offen.
                   message: { type: string }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404":
           description: Dev-Mode nicht aktiv — Route nicht verfügbar
         "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/v1/dev/bulk-import-events:
+    post:
+      tags: [Dev]
+      summary: Bulk-Import großer Eventmengen — nur im offenen Startfenster (Dev-Mode)
+      description: |
+        Schreibt Events mit derselben Semantik wie `POST /api/v1/write-events`
+        (atomar, Preconditions möglich), ist aber **nur im Bulk-Import-Fenster**
+        erlaubt. Gedacht für einmaliges Seeding/Migration direkt nach dem Start
+        oder nach einer „Supernova" (`reset-database`).
+
+        Das Fenster ist bei Server-Start (im Dev-Mode) offen, kann per
+        `POST /api/v1/dev/close-bulk-import` geschlossen werden und wird durch
+        `POST /api/v1/dev/reset-database` wieder geöffnet. Ist das Fenster
+        geschlossen, antwortet die Route mit `409` — so werden versehentliche
+        High-Volume-Importe im laufenden Betrieb verhindert.
+
+        Diese Route existiert **nur** im Dev-Mode (`CLIO_DEV_MODE`, ADR-022);
+        ohne Dev-Mode ist sie nicht registriert (`404`).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WriteEventsRequest" }
+            examples:
+              massenimport:
+                value:
+                  events:
+                    - source: "migration"
+                      subject: "/books/42"
+                      type: "io.example.library.book-acquired"
+                      data: { title: "Dune", author: "Herbert" }
+                    - source: "migration"
+                      subject: "/books/43"
+                      type: "io.example.library.book-acquired"
+                      data: { title: "Solaris", author: "Lem" }
+      responses:
+        "200":
+          description: Geschriebene Events als NDJSON
+          content:
+            application/x-ndjson:
+              schema: { $ref: "#/components/schemas/EventStream" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409":
+          description: |
+            Bulk-Import-Fenster ist geschlossen — erst `dev/reset-database`
+            ausführen — oder eine Precondition war nicht erfüllt.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/ProblemDetails" }
+        "404":
+          description: Dev-Mode nicht aktiv — Route nicht verfügbar
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/v1/dev/close-bulk-import:
+    post:
+      tags: [Dev]
+      summary: Bulk-Import-Fenster explizit schließen — nur im Dev-Mode
+      description: |
+        Schließt das Bulk-Import-Fenster. Danach liefert
+        `POST /api/v1/dev/bulk-import-events` ein `409`, bis ein
+        `POST /api/v1/dev/reset-database` es wieder öffnet. Idempotent — ein
+        bereits geschlossenes Fenster bleibt geschlossen.
+
+        Diese Route existiert **nur** im Dev-Mode (`CLIO_DEV_MODE`, ADR-022);
+        ohne Dev-Mode ist sie nicht registriert (`404`).
+      responses:
+        "200":
+          description: Fenster geschlossen
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: "closed" }
+                  bulkImportOpen: { type: boolean, example: false }
+                  closedAt: { type: string, format: date-time }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404":
+          description: Dev-Mode nicht aktiv — Route nicht verfügbar
+        "500": { $ref: "#/components/responses/InternalError" }
+
 
 components:
   securitySchemes:
