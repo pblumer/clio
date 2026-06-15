@@ -7,6 +7,8 @@ Ein schlankes Web-UI für **Maintenance, Observing, Monitoring** — ohne Clios
 Kernprinzip („ein abhängigkeitsfreies Single-Binary, alles eingebettet, kein
 Internet nötig") zu verwässern.
 
+![Betriebs-Dashboard (`/ui`)](screenshots/dashboard.png)
+
 ## 1. Motivation
 
 Betriebssichtbarkeit gibt es heute nur **maschinenlesbar**: `/metrics`
