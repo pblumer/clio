@@ -7,6 +7,7 @@ package query
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 
@@ -15,11 +16,20 @@ import (
 	"github.com/pblumer/clio/internal/event"
 )
 
+// dataRefRe erkennt, ob ein Ausdruck überhaupt auf `data` Bezug nimmt. Feldzugriff
+// auf `event.data` (oder `event["data"]`, `has(event.data…)`) enthält stets das
+// Token `data`. Trifft das Muster nicht zu, kann `event.data` nicht referenziert
+// werden — dann sparen wir das (teure) Parsen des data-Payloads je Event. Ein
+// falsch-positiver Treffer (z. B. der String `'data'`) ist unkritisch: dann wird
+// data wie bisher geparst (nur kein Speedup), nie ein falsches Ergebnis.
+var dataRefRe = regexp.MustCompile(`\bdata\b`)
+
 // Predicate ist ein kompilierter CEL-Ausdruck, der gegen Events ausgewertet
 // werden kann.
 type Predicate struct {
-	expr string
-	prg  cel.Program
+	expr     string
+	prg      cel.Program
+	usesData bool // referenziert der Ausdruck event.data?
 }
 
 // Expr liefert den ursprünglichen Ausdruck (für Logging/Fehlermeldungen).
@@ -65,7 +75,7 @@ func (c *Compiler) Compile(expr string) (*Predicate, error) {
 		return nil, fmt.Errorf("programm erzeugen: %w", err)
 	}
 
-	p := &Predicate{expr: expr, prg: prg}
+	p := &Predicate{expr: expr, prg: prg, usesData: dataRefRe.MatchString(expr)}
 	c.cache[expr] = p
 	return p, nil
 }
@@ -74,7 +84,7 @@ func (c *Compiler) Compile(expr string) (*Predicate, error) {
 // Zugriff auf ein fehlendes data-Feld) wird zurückgegeben; Aufrufer können ihn
 // als „kein Treffer" behandeln. Tipp: mit `has(event.data.x)` defensiv prüfen.
 func (p *Predicate) Eval(ev event.Event) (bool, error) {
-	m, err := eventToActivation(ev)
+	m, err := eventToActivation(ev, p.usesData)
 	if err != nil {
 		return false, err
 	}
@@ -172,9 +182,11 @@ func setPath(dst map[string]any, segs []string, val any) {
 }
 
 // eventToActivation bildet ein Event auf die CEL-Variable `event` ab.
-func eventToActivation(ev event.Event) (map[string]any, error) {
+func eventToActivation(ev event.Event, parseData bool) (map[string]any, error) {
 	var data any
-	if len(ev.Data) > 0 {
+	// data nur dekodieren, wenn das Prädikat es auch referenziert — das spart bei
+	// type-/subject-Filtern über große Scopes das teuerste Stück pro Event.
+	if parseData && len(ev.Data) > 0 {
 		if err := json.Unmarshal(ev.Data, &data); err != nil {
 			return nil, fmt.Errorf("data dekodieren: %w", err)
 		}
