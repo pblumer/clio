@@ -29,6 +29,13 @@ Die vollständige Architektur, Roadmap und alle Entscheidungen stehen in
 
 ## Status
 
+**🎉 v0.1.0 veröffentlicht** — das erste getaggte Release. Fertige
+Single-Binaries für alle Plattformen (Linux/macOS/Windows × amd64/arm64) als
+Archive **inkl. SHA-256-Checksums** sowie ein Multi-Arch-Docker-Image liegen
+unter [Releases](https://github.com/pblumer/clio/releases/latest) bzw. in der
+GitHub Container Registry (`ghcr.io/pblumer/clio`). Siehe
+[Installation](#single-binaries-für-alle-plattformen).
+
 **Stufe 0–2 — abgeschlossen.** Lauffähig: `ping`, `write-events` (atomar,
 monotone Event-IDs, `bbolt`-Storage, **Preconditions** für Optimistic
 Concurrency), `read-events` (NDJSON, optionale **`lowerBound`/`upperBound`**,
@@ -36,11 +43,12 @@ Concurrency), `read-events` (NDJSON, optionale **`lowerBound`/`upperBound`**,
 offene Verbindung) — wahlweise auch bequem per **`GET /api/v1/events/<subject>`**.
 Alle Datenrouten Bearer-Token-geschützt.
 
-**Stufe 3 in Arbeit:** **Group Commit** als Default-Schreibstrategie (hoher
+**Stufe 3 — abgeschlossen.** **Group Commit** als Default-Schreibstrategie (hoher
 Durchsatz bei voller Durability, umschaltbar via `CLIO_SYNC`) — siehe
 [Performance](#performance--durability) — sowie **Distribution**: statische
-Single-Binaries für alle Plattformen (`make dist`), Docker-Image und
-Release-Workflow. Offen: Kompaktierung, Metrics/Observability.
+Single-Binaries (`make dist` / `make package`), Docker-Image und ein
+tag-getriggerter Release-Workflow (GitHub-Release + GHCR). Kompaktierung
+(`cliostore compact`) und Observability (`/metrics`) sind ebenfalls vorhanden.
 
 ## Bauen & Starten
 
@@ -203,6 +211,28 @@ make docker                       # Image cliostore:<version> bauen
 Das Image basiert auf `distroless/static` (kein Shell, nonroot-User, statisches
 Binary). Die Datenbank liegt unter `/data` (Volume mounten, um Daten zu
 persistieren).
+
+### Ein Release erstellen (Maintainer)
+
+Releases sind tag-getrieben — ein annotierter SemVer-Tag `vX.Y.Z` auf `main`
+genügt, der Rest läuft automatisch:
+
+```bash
+git tag -a v0.2.0 -m "clio v0.2.0"
+git push origin v0.2.0
+```
+
+Der Workflow [`release.yml`](.github/workflows/release.yml) baut daraufhin in
+zwei Jobs
+
+1. die plattform-spezifischen Archive + `checksums.txt` und hängt sie ans
+   automatisch erzeugte GitHub-Release, und
+2. das Multi-Arch-Image und pusht es nach `ghcr.io/pblumer/clio:vX.Y.Z` und
+   `:latest`.
+
+Die Version landet via `git describe` (bzw. dem Tag-Namen) über `-ldflags` im
+Binary und ist per `cliostore -version` abrufbar. Vor dem Taggen lässt sich der
+Build lokal mit `make package` proben.
 
 ### Konfiguration
 

@@ -182,9 +182,10 @@ Jede Stufe ist für sich lauffähig. Statusmarkierungen: `⬜ offen` · `🟡 in
 - [x] fsync-Strategie (Durability vs. Performance) → **Group Commit** als Default (ADR-009), umschaltbar via `CLIO_SYNC` (`group`/`always`/`off`). Benchmarks belegen den Effekt.
 - [x] Kompaktierung — `cliostore compact` (offline, atomarer Swap) defragmentiert die bbolt-Datei ohne Events zu löschen; `clio_db_size_bytes`-Metrik (ADR-015). *Rotation/Archivierung bewusst nicht: widerspricht der Unveränderlichkeit (siehe ADR-015).*
 - [x] Observability: strukturiertes Request-Logging (slog) + Prometheus-`/metrics` (Requests, Latenz-Histogramm, geschriebene Events, 409-Failures, aktive Observer, Event-Count, DB-Größe, Laufzeit: Speicher/Goroutinen/CPU) — ADR-013, ohne Prometheus-Client-Dependency
-- [x] Single-Binary-Builds für alle Plattformen (`GOOS`/`GOARCH`) — `make dist` (linux/darwin/windows × amd64/arm64), Version via `-ldflags` eingebettet; Release-Workflow bei Tags `v*`
-- [x] Docker-Image — mehrstufig, `distroless/static`, nonroot, `/data`-Volume
-- **Ergebnis:** Betriebsreif — Durability-Tuning, Observability, Distribution, Wartung. ✅
+- [x] Single-Binary-Builds für alle Plattformen (`GOOS`/`GOARCH`) — `make dist` (linux/darwin/windows × amd64/arm64), Version via `-ldflags` eingebettet
+- [x] Release-Artefakte — `make package` schnürt pro Plattform ein Archiv (`.tar.gz`/`.zip`, inkl. `LICENSE`/`README`) und eine `checksums.txt` (SHA-256); der Release-Workflow (Tags `v*`) hängt sie ans GitHub-Release. `DiskUsage` ist per Build-Constraints in Unix-/Windows-Varianten getrennt, damit der Windows-Cross-Build trägt.
+- [x] Docker-Image — mehrstufig, `distroless/static`, nonroot, `/data`-Volume; cross-compile-fähig (`BUILDPLATFORM`/`TARGETOS`/`TARGETARCH`) und im Release-Workflow als Multi-Arch-Image (`linux/amd64`+`arm64`) nach `ghcr.io/pblumer/clio` gepusht
+- **Ergebnis:** Betriebsreif — Durability-Tuning, Observability, Distribution, Wartung. **v0.1.0** als erstes getaggtes Release veröffentlicht. ✅
 
 ### Stufe 4 — Abfragen (CEL-basiert) & Snapshots `🟡`
 *Schätzung: mehrere überschaubare PRs statt Parser-Marathon (siehe ADR-017)*
