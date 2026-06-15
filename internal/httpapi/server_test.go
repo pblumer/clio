@@ -1146,6 +1146,67 @@ func idsOfEvents(events []event.Event) []string {
 	return ids
 }
 
+// TestRunQueryTypeIndex prüft, dass der Typ-Index-Schnellpfad dieselben
+// Ergebnisse liefert wie ein voller Scan — inkl. Subject-Scope, Limit und
+// dem ODER-Fallback (der nicht einschränkbar ist und voll scannen muss).
+func TestRunQueryTypeIndex(t *testing.T) {
+	srv := newTestServer(t)
+	do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token",
+		`{"events":[
+			{"source":"s","subject":"/orders/1","type":"placed","data":{"amount":250}},
+			{"source":"s","subject":"/orders/2","type":"cancelled"},
+			{"source":"s","subject":"/shipments/9","type":"placed","data":{"amount":10}},
+			{"source":"s","subject":"/orders/3","type":"placed","data":{"amount":300}},
+			{"source":"s","subject":"/orders/4","type":"shipped"}
+		]}`)
+
+	run := func(body string) []string {
+		t.Helper()
+		rec := do(t, srv, http.MethodPost, "/api/v1/run-query", "secret-token", body)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d; %s", rec.Code, rec.Body.String())
+		}
+		return idsOfEvents(decodeNDJSON(t, rec.Body.String()))
+	}
+
+	// Reiner Typ-Filter (Index-Pfad): alle placed über /, global geordnet.
+	if got := run(`{"subject":"/","recursive":true,"where":"event.type == 'placed'"}`); !equalStrs(got, []string{"1", "3", "4"}) {
+		t.Fatalf("placed = %v, want [1 3 4]", got)
+	}
+	// Typ + Subject-Scope (Index-Pfad, danach MatchSubject): nur /orders.
+	if got := run(`{"subject":"/orders","recursive":true,"where":"event.type == 'placed'"}`); !equalStrs(got, []string{"1", "4"}) {
+		t.Fatalf("placed in /orders = %v, want [1 4]", got)
+	}
+	// Typ + data-Prädikat (Index schränkt auf placed ein, dann volle Auswertung).
+	if got := run(`{"subject":"/","recursive":true,"where":"event.type == 'placed' && has(event.data.amount) && event.data.amount >= 250"}`); !equalStrs(got, []string{"1", "4"}) {
+		t.Fatalf("placed&amount>=250 = %v, want [1 4]", got)
+	}
+	// in-Liste.
+	if got := run(`{"subject":"/","recursive":true,"where":"event.type in ['cancelled','shipped']"}`); !equalStrs(got, []string{"2", "5"}) {
+		t.Fatalf("in[...] = %v, want [2 5]", got)
+	}
+	// Limit auf dem Index-Pfad.
+	if got := run(`{"subject":"/","recursive":true,"where":"event.type == 'placed'","limit":2}`); !equalStrs(got, []string{"1", "3"}) {
+		t.Fatalf("placed limit 2 = %v, want [1 3]", got)
+	}
+	// ODER mit unbeschränkter Seite -> Full-Scan-Fallback, muss korrekt bleiben.
+	if got := run(`{"subject":"/","recursive":true,"where":"event.type == 'cancelled' || event.subject == '/orders/4'"}`); !equalStrs(got, []string{"2", "5"}) {
+		t.Fatalf("OR-fallback = %v, want [2 5]", got)
+	}
+}
+
+func equalStrs(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func TestObserveEventsBadRequest(t *testing.T) {
 	srv := newTestServer(t)
 	tests := []struct {

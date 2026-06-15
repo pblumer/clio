@@ -925,25 +925,56 @@ func (s *Server) handleRunQuery(w http.ResponseWriter, r *http.Request) {
 		pred = p
 	}
 
-	events, err := s.store.Read(req.Subject, req.Recursive, store.ReadOptions{LowerBound: lower, UpperBound: upper})
-	if err != nil {
-		s.logger.Error("run-query fehlgeschlagen", "err", err)
-		writeError(w, http.StatusInternalServerError, "interner fehler beim lesen")
-		return
-	}
+	opts := store.ReadOptions{LowerBound: lower, UpperBound: upper}
+	var result []event.Event
 
-	result := make([]event.Event, 0, len(events))
-	for _, ev := range events {
+	// collect wendet das Prädikat an und sammelt Treffer bis zum Limit. Rückgabe
+	// true = weiter scannen, false = genug (Limit erreicht).
+	collect := func(ev event.Event) bool {
 		if pred != nil {
 			ok, err := pred.Eval(ev)
 			if err != nil || !ok {
-				continue
+				return true
 			}
 		}
 		result = append(result, ev)
-		if req.Limit > 0 && len(result) >= req.Limit {
-			break
+		return req.Limit == 0 || len(result) < req.Limit
+	}
+
+	// Typ-Constraint aus dem Prädikat ableiten: Schränkt es den event.type
+	// zwingend ein, laden wir nur die Events dieser Typen über den Typ-Index —
+	// statt den ganzen Scope zu scannen (ADR-021).
+	var reqTypes []string
+	typeBounded := false
+	if pred != nil {
+		reqTypes, typeBounded = pred.RequiredTypes()
+	}
+
+	var scanErr error
+	switch {
+	case typeBounded && len(reqTypes) == 0:
+		// Kein Typ kann das Prädikat erfüllen → leeres Ergebnis (kein Scan).
+	case typeBounded:
+		scanErr = s.store.ReadByTypesFunc(reqTypes, opts, func(ev event.Event) bool {
+			if !store.MatchSubject(ev.Subject, req.Subject, req.Recursive) {
+				return true
+			}
+			return collect(ev)
+		})
+	default:
+		// Kein sicherer Typ-Filter → vollständiger Scan des Scopes.
+		var events []event.Event
+		events, scanErr = s.store.Read(req.Subject, req.Recursive, opts)
+		for _, ev := range events {
+			if !collect(ev) {
+				break
+			}
 		}
+	}
+	if scanErr != nil {
+		s.logger.Error("run-query fehlgeschlagen", "err", scanErr)
+		writeError(w, http.StatusInternalServerError, "interner fehler beim lesen")
+		return
 	}
 
 	if len(req.Select) == 0 {

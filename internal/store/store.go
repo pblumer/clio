@@ -32,6 +32,7 @@ import (
 var (
 	bucketEvents     = []byte("events")
 	bucketSubjectIdx = []byte("subject_idx")
+	bucketTypeIdx    = []byte("type_idx")
 	bucketMeta       = []byte("meta")
 	bucketTypes      = []byte("types")
 	bucketSchemas    = []byte("schemas")
@@ -163,7 +164,7 @@ func OpenWithOptions(path string, opts Options) (*Store, error) {
 	}
 
 	err = db.Update(func(tx *bolt.Tx) error {
-		for _, name := range [][]byte{bucketEvents, bucketSubjectIdx, bucketMeta, bucketTypes, bucketSchemas} {
+		for _, name := range [][]byte{bucketEvents, bucketSubjectIdx, bucketTypeIdx, bucketMeta, bucketTypes, bucketSchemas} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return err
 			}
@@ -173,7 +174,13 @@ func OpenWithOptions(path string, opts Options) (*Store, error) {
 		// aber existieren Events, werden die Typ-Zähler einmalig aus den
 		// vorhandenen Events rekonstruiert. Idempotent — bei neuen oder bereits
 		// gepflegten Stores ist nichts zu tun.
-		return backfillTypeCounts(tx)
+		if err := backfillTypeCounts(tx); err != nil {
+			return err
+		}
+		// Ebenso den Typ-Index (Typ → Event-Sequenzen) einmalig nachbauen, wenn
+		// er leer ist, aber Events existieren (für Stores aus der Zeit vor dem
+		// Index). Beschleunigt Typ-Filter in run-query auf Index-Geschwindigkeit.
+		return backfillTypeIdx(tx)
 	})
 	if err != nil {
 		_ = db.Close()
@@ -369,6 +376,114 @@ func backfillTypeCounts(tx *bolt.Tx) error {
 	return nil
 }
 
+// backfillTypeIdx baut den Typ-Index (Typ → Event-Sequenzen) einmalig aus den
+// vorhandenen Events nach, falls er leer ist, aber bereits Events existieren.
+// Idempotent — bei neuen oder bereits indizierten Stores passiert nichts.
+func backfillTypeIdx(tx *bolt.Tx) error {
+	tidx := tx.Bucket(bucketTypeIdx)
+	if k, _ := tidx.Cursor().First(); k != nil {
+		return nil // bereits indiziert
+	}
+	evts := tx.Bucket(bucketEvents)
+	c := evts.Cursor()
+	for k, v := c.First(); k != nil; k, v = c.Next() {
+		var ev event.Event
+		if err := json.Unmarshal(v, &ev); err != nil {
+			return fmt.Errorf("event für type-index-backfill dekodieren: %w", err)
+		}
+		seq := binary.BigEndian.Uint64(k)
+		if err := tidx.Put(typeKey(ev.Type, seq), k); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ReadByTypesFunc streamt — über den Typ-Index — alle Events der angegebenen
+// Typen in globaler Reihenfolge (Sequenz), gefiltert nach lowerBound/upperBound,
+// und ruft fn je Event auf. Liefert fn false, bricht der Scan ab (für Limit).
+// Subject-Scope und weitere Prädikate prüft der Aufrufer. So werden bei
+// Typ-Filtern nur die Treffer geladen statt der gesamte Store gescannt.
+func (s *Store) ReadByTypesFunc(types []string, opts ReadOptions, fn func(event.Event) bool) error {
+	return s.db.View(func(tx *bolt.Tx) error {
+		tidx := tx.Bucket(bucketTypeIdx)
+		evts := tx.Bucket(bucketEvents)
+		if tidx == nil {
+			return nil
+		}
+
+		load := func(seq uint64) (event.Event, bool, error) {
+			if !inBounds(seq, opts) {
+				return event.Event{}, false, nil
+			}
+			raw := evts.Get(seqKey(seq))
+			if raw == nil {
+				return event.Event{}, false, fmt.Errorf("inkonsistenter type-index: event %d fehlt", seq)
+			}
+			var ev event.Event
+			if err := json.Unmarshal(raw, &ev); err != nil {
+				return event.Event{}, false, fmt.Errorf("event dekodieren: %w", err)
+			}
+			return ev, true, nil
+		}
+
+		// Ein Typ: direkt vom Cursor in Sequenzreihenfolge streamen (früher Abbruch
+		// möglich). Mehrere Typen: Sequenzen sammeln, global sortieren, dann laden.
+		if len(types) == 1 {
+			prefix := typePrefix(types[0])
+			cur := tidx.Cursor()
+			for k, v := cur.Seek(prefix); k != nil && hasPrefix(k, prefix); k, v = cur.Next() {
+				if len(k) != len(prefix)+8 {
+					continue // exakter Typ (keine Separator-Kollision)
+				}
+				ev, ok, err := load(binary.BigEndian.Uint64(v))
+				if err != nil {
+					return err
+				}
+				if ok && !fn(ev) {
+					return nil
+				}
+			}
+			return nil
+		}
+
+		var seqs []uint64
+		for _, t := range types {
+			prefix := typePrefix(t)
+			cur := tidx.Cursor()
+			for k, v := cur.Seek(prefix); k != nil && hasPrefix(k, prefix); k, v = cur.Next() {
+				if len(k) != len(prefix)+8 {
+					continue
+				}
+				seqs = append(seqs, binary.BigEndian.Uint64(v))
+			}
+		}
+		sort.Slice(seqs, func(i, j int) bool { return seqs[i] < seqs[j] })
+		for _, seq := range seqs {
+			ev, ok, err := load(seq)
+			if err != nil {
+				return err
+			}
+			if ok && !fn(ev) {
+				return nil
+			}
+		}
+		return nil
+	})
+}
+
+// typePrefix bildet den Index-Prefix type + sep (zum Seek je Typ).
+func typePrefix(typ string) []byte {
+	p := make([]byte, 0, len(typ)+1)
+	p = append(p, typ...)
+	return append(p, subjectSep)
+}
+
+// typeKey bildet den Typ-Index-Schlüssel type + sep + seq.
+func typeKey(typ string, seq uint64) []byte {
+	return append(typePrefix(typ), seqKey(seq)...)
+}
+
 // incrTypeCount erhöht den Zähler eines Event-Typs im types-Bucket.
 func incrTypeCount(types *bolt.Bucket, t string) error {
 	var cnt uint64
@@ -403,6 +518,7 @@ func (s *Store) Append(candidates []event.Candidate, preconditions []Preconditio
 
 		evts := tx.Bucket(bucketEvents)
 		idx := tx.Bucket(bucketSubjectIdx)
+		tidx := tx.Bucket(bucketTypeIdx)
 		meta := tx.Bucket(bucketMeta)
 		types := tx.Bucket(bucketTypes)
 
@@ -464,6 +580,9 @@ func (s *Store) Append(candidates []event.Candidate, preconditions []Preconditio
 				return err
 			}
 			if err := idx.Put(subjectKey(c.Subject, seq), key); err != nil {
+				return err
+			}
+			if err := tidx.Put(typeKey(c.Type, seq), key); err != nil {
 				return err
 			}
 			if err := incrTypeCount(types, c.Type); err != nil {
