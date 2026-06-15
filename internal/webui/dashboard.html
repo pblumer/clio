@@ -94,6 +94,11 @@
     font-family: var(--mono); color: #eaf6ff; text-shadow: 0 0 10px rgba(120,200,255,.25); }
   .card .sub { color: var(--muted); font-size: 12px; margin-top: 4px; }
   .card .value.mono, .sub.mono { font-family: var(--mono); }
+  /* DB-Füllbalken: belegter Anteil der Datei vs. wiederverwendbarer freier Platz */
+  .dbbar { margin-top: 8px; height: 6px; border-radius: 3px; background: rgba(120,140,170,.18); overflow: hidden; }
+  .dbbar-fill { height: 100%; width: 0; border-radius: 3px; background: var(--accent); transition: width .4s ease, background .4s ease; }
+  .dbbar-fill.warn { background: #e0b341; }
+  .dbbar-fill.crit { background: #e0564b; }
   /* Telemetrie / Live-Charts */
   .telemetry { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); margin-bottom: 4px; }
   .hud { position: relative; border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px 8px;
@@ -379,7 +384,10 @@
 
     <div class="grid">
       <div class="card"><div class="label">Events gesamt</div><div id="m-events" class="value">–</div><div id="m-events-sub" class="sub">gespeichert</div></div>
-      <div class="card"><div class="label">DB-Größe</div><div id="m-dbsize" class="value">–</div><div class="sub">Datenbankdatei</div></div>
+      <div class="card" title="Dateigröße der bbolt-Datenbank auf der Platte. bbolt vergrößert die Datei bei Bedarf, gibt sie aber nie von selbst frei — freie Seiten (z. B. nach einem Reset) werden zuerst wiederverwendet. Die Datei wächst erst, wenn die Nutzdaten die bisherige Größe übersteigen; echte Grenze ist der Plattenplatz. Freien Platz zurückgewinnen: cliostore compact (offline).">
+        <div class="label">DB-Größe</div><div id="m-dbsize" class="value">–</div>
+        <div class="dbbar"><div id="m-dbfill" class="dbbar-fill"></div></div>
+        <div id="m-dbsub" class="sub">Datenbankdatei</div></div>
       <div class="card"><div class="label">Aktive Observer</div><div id="m-observers" class="value">–</div><div class="sub">offene Streams</div></div>
       <div class="card"><div class="label">Uptime</div><div id="m-uptime" class="value">–</div><div id="m-started" class="sub">seit Start</div></div>
       <div class="card"><div class="label">HTTP-Anfragen</div><div id="m-requests" class="value">–</div><div id="m-rate" class="sub">gesamt</div></div>
@@ -1186,9 +1194,36 @@ function initEventStream() {
 }
 window.addEventListener("resize", evResize);
 
+// pickNum liefert den ersten endlichen Zahlenwert (überspringt null/undefined).
+function pickNum(...vals) {
+  for (const v of vals) { if (v == null) continue; const n = Number(v); if (Number.isFinite(n)) return n; }
+  return NaN;
+}
+// renderDbUsage zeigt die DB-Dateigröße plus Füllgrad: wie viel der Datei
+// belegt ist vs. wiederverwendbarer freier Platz (per compact rückgewinnbar).
+function renderDbUsage(info, m) {
+  const file = pickNum(info.databaseFileBytes, gauge(m, "clio_db_size_bytes"));
+  $("m-dbsize").textContent = fmtBytes(Number.isFinite(file) ? file : null);
+  const used = pickNum(info.databaseUsedBytes, gauge(m, "clio_db_used_bytes"));
+  const free = pickNum(info.databaseFreeBytes, gauge(m, "clio_db_free_bytes"));
+  const bar = $("m-dbfill");
+  if (!Number.isFinite(file) || file <= 0 || !Number.isFinite(used)) {
+    bar.style.width = "0"; bar.classList.remove("warn", "crit");
+    $("m-dbsub").textContent = "Datenbankdatei"; return;
+  }
+  let fill = pickNum(info.databaseFillPercent);
+  if (!Number.isFinite(fill)) fill = used / file * 100;
+  bar.style.width = Math.max(2, Math.min(100, fill)) + "%";
+  bar.classList.toggle("warn", fill >= 80 && fill < 95);
+  bar.classList.toggle("crit", fill >= 95);
+  let sub = (fill < 10 ? fill.toFixed(1) : Math.round(fill)) + "% belegt";
+  if (Number.isFinite(free) && free > 0 && free / file >= 0.05) sub += " · " + fmtBytes(free) + " frei (compact)";
+  $("m-dbsub").textContent = sub;
+}
+
 function render(info, m) {
   $("m-events").textContent = fmtInt(gauge(m, "clio_events_total") ?? info.eventsTotal);
-  $("m-dbsize").textContent = fmtBytes(gauge(m, "clio_db_size_bytes"));
+  renderDbUsage(info, m);
   $("m-observers").textContent = fmtInt(gauge(m, "clio_active_observers"));
   $("m-uptime").textContent = fmtDuration(info.uptimeSeconds);
   $("m-started").textContent = info.startedAt ? "seit " + new Date(info.startedAt).toLocaleString("de-CH") : "seit Start";

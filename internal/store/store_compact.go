@@ -18,6 +18,48 @@ func (s *Store) Size() (int64, error) {
 	return info.Size(), nil
 }
 
+// DBStats beschreibt die Speicherbelegung der bbolt-Datei: ihre Größe auf der
+// Platte und – aus der bbolt-Freelist – wie viel davon belegt bzw. freier,
+// wiederverwendbarer Platz ist. bbolt vergrößert die Datei bei Bedarf, gibt sie
+// aber nie von selbst frei (freie Seiten werden zuerst wiederverwendet); echtes
+// Verkleinern geschieht nur offline via `cliostore compact` (ADR-015). Der
+// Füllgrad macht sichtbar, wie viel der Datei tatsächlich genutzt wird.
+type DBStats struct {
+	FileBytes   int64   `json:"fileBytes"`   // Dateigröße auf der Platte (os.Stat)
+	UsedBytes   int64   `json:"usedBytes"`   // FileBytes - FreeBytes (Nutzdaten + Strukturen)
+	FreeBytes   int64   `json:"freeBytes"`   // in freien Seiten gebundener, wiederverwendbarer Platz
+	FillPercent float64 `json:"fillPercent"` // UsedBytes / FileBytes * 100
+	FreePages   int     `json:"freePages"`   // Anzahl freier (+ pending) Seiten
+	PageSize    int     `json:"pageSize"`    // Seitengröße in Bytes
+}
+
+// Stats liefert die Speicherbelegung der Datenbankdatei (siehe DBStats). Der
+// freie Anteil wird aus der bbolt-Freelist ermittelt (FreeAlloc).
+func (s *Store) Stats() (DBStats, error) {
+	fileBytes, err := s.Size()
+	if err != nil {
+		return DBStats{}, err
+	}
+	st := s.db.Stats()
+	freeBytes := int64(st.FreeAlloc)
+	if freeBytes > fileBytes {
+		freeBytes = fileBytes
+	}
+	used := fileBytes - freeBytes
+	var fill float64
+	if fileBytes > 0 {
+		fill = float64(used) / float64(fileBytes) * 100
+	}
+	return DBStats{
+		FileBytes:   fileBytes,
+		UsedBytes:   used,
+		FreeBytes:   freeBytes,
+		FillPercent: fill,
+		FreePages:   st.FreePageN + st.PendingPageN,
+		PageSize:    s.db.Info().PageSize,
+	}, nil
+}
+
 // Compact schreibt die Datenbank unter path defragmentiert in eine temporäre
 // Datei und ersetzt das Original atomar. Da die DB dabei exklusiv gelesen wird,
 // schlägt der Aufruf fehl, wenn eine laufende Instanz die Datei hält

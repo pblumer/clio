@@ -64,6 +64,37 @@ func TestSize(t *testing.T) {
 	}
 }
 
+func TestStats(t *testing.T) {
+	st := openTemp(t)
+	for i := 0; i < 50; i++ {
+		appendAll(t, st, event.Candidate{
+			Source: "s", Subject: "/a", Type: "t",
+			Data: json.RawMessage(`{"n":` + itoa(i) + `}`),
+		})
+	}
+	stats, err := st.Stats()
+	if err != nil {
+		t.Fatalf("Stats: %v", err)
+	}
+	if stats.FileBytes <= 0 || stats.PageSize <= 0 {
+		t.Fatalf("unplausibel: %+v", stats)
+	}
+	// Invarianten: belegt + frei = Datei, Füllgrad konsistent, frei <= Datei.
+	if stats.UsedBytes+stats.FreeBytes != stats.FileBytes {
+		t.Fatalf("used+free != file: %+v", stats)
+	}
+	if stats.FreeBytes < 0 || stats.FreeBytes > stats.FileBytes {
+		t.Fatalf("freeBytes außerhalb [0,file]: %+v", stats)
+	}
+	if stats.FillPercent < 0 || stats.FillPercent > 100 {
+		t.Fatalf("fillPercent außerhalb [0,100]: %+v", stats)
+	}
+	wantFill := float64(stats.UsedBytes) / float64(stats.FileBytes) * 100
+	if d := stats.FillPercent - wantFill; d < -0.001 || d > 0.001 {
+		t.Fatalf("fillPercent inkonsistent: %v vs %v", stats.FillPercent, wantFill)
+	}
+}
+
 func itoa(i int) string {
 	return strconv.Itoa(i)
 }

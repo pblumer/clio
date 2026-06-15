@@ -29,6 +29,8 @@ type Gauges struct {
 	ActiveObservers int
 	EventsTotal     uint64
 	DBSizeBytes     int64
+	DBUsedBytes     int64 // belegter Anteil der DB-Datei (< 0 = unbekannt)
+	DBFreeBytes     int64 // wiederverwendbarer freier Anteil (< 0 = unbekannt)
 }
 
 // Metrics sammelt HTTP- und Domänen-Metriken. Alle Methoden sind nebenläufig
@@ -121,6 +123,12 @@ func (m *Metrics) Write(w io.Writer, g Gauges) {
 	writeGauge(w, "clio_events_total", "Anzahl gespeicherter Events.", g.EventsTotal)
 	if g.DBSizeBytes >= 0 {
 		writeGauge(w, "clio_db_size_bytes", "Größe der Datenbankdatei in Bytes.", uint64(g.DBSizeBytes))
+	}
+	if g.DBUsedBytes >= 0 {
+		writeGauge(w, "clio_db_used_bytes", "Belegter Anteil der Datenbankdatei in Bytes (Nutzdaten + Strukturen).", uint64(g.DBUsedBytes))
+	}
+	if g.DBFreeBytes >= 0 {
+		writeGauge(w, "clio_db_free_bytes", "Freier, wiederverwendbarer Anteil der Datenbankdatei in Bytes (per compact rückgewinnbar).", uint64(g.DBFreeBytes))
 	}
 
 	writeRuntime(w)

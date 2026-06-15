@@ -20,7 +20,7 @@ func TestRenderContainsAllSeries(t *testing.T) {
 	m.AddEventsWritten(3)
 	m.IncPreconditionFailure()
 
-	out := render(m, Gauges{ActiveObservers: 2, EventsTotal: 42, DBSizeBytes: 4096})
+	out := render(m, Gauges{ActiveObservers: 2, EventsTotal: 42, DBSizeBytes: 4096, DBUsedBytes: 3072, DBFreeBytes: 1024})
 
 	wants := []string{
 		`clio_http_requests_total{method="POST",route="POST /api/v1/write-events",status="200"} 2`,
@@ -32,6 +32,8 @@ func TestRenderContainsAllSeries(t *testing.T) {
 		"clio_active_observers 2",
 		"clio_events_total 42",
 		"clio_db_size_bytes 4096",
+		"clio_db_used_bytes 3072",
+		"clio_db_free_bytes 1024",
 		"# TYPE clio_http_requests_total counter",
 		"# TYPE clio_active_observers gauge",
 	}
