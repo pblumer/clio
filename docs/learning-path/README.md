@@ -57,8 +57,12 @@ orientieren musst:
 
 ## Bevor du loslegst
 
-Du brauchst **Go ≥ 1.24** und ein Terminal. Alle Hands-on-Teile arbeiten gegen
-eine echte, lokal laufende Clio-Instanz. Der Schnellstart steht in
+Du brauchst nur ein Terminal. Clio selbst holst du dir am einfachsten als
+**fertiges Binary** von der
+[Releases-Seite](https://github.com/pblumer/clio/releases/latest) (oder als
+Docker-Image) — **Go ≥ 1.24** brauchst du nur, wenn du lieber selbst baust oder
+in den Contributor-Track gehst. Alle Hands-on-Teile arbeiten gegen eine echte,
+lokal laufende Clio-Instanz. Der Schnellstart steht in
 [`00-grundlagen/02-clio-quickstart.md`](00-grundlagen/02-clio-quickstart.md);
 die lauffähigen Skripte liegen unter [`examples/`](../../examples/).
 

@@ -11,14 +11,16 @@ gut ist — und du hast selbst Events geschrieben, gelesen und live beobachtet.
 
 ## Voraussetzungen
 
-- Ein Terminal, **Go ≥ 1.24**, `curl`. Sonst nichts.
+- Ein Terminal und `curl`. Clio holst du dir als **fertiges Binary** von der
+  [Releases-Seite](https://github.com/pblumer/clio/releases/latest) — **kein Go
+  nötig** (Details im Quickstart). Sonst nichts.
 
 ## Reihenfolge
 
 | # | Schritt | Worum es geht |
 |---|---|---|
 | 1 | [Grundlagen 1 — Was ist Event Sourcing?](../00-grundlagen/01-was-ist-event-sourcing.md) | Das Konzept, ganz ohne Code |
-| 2 | [Grundlagen 2 — Quickstart](../00-grundlagen/02-clio-quickstart.md) | Bauen, starten, erstes Event |
+| 2 | [Grundlagen 2 — Quickstart](../00-grundlagen/02-clio-quickstart.md) | Holen (Binary o. bauen), starten, erstes Event |
 | 3 | [Grundlagen 3 — Das Beispiel](../00-grundlagen/03-beispiel-bibliothek.md) | Die Bibliotheks-Domäne kennenlernen |
 | 4 | [M01 — Erstes Event](../module/M01-erstes-event.md) | Events bewusst schreiben & verstehen |
 | 5 | [M02 — Lesen & Filtern](../module/M02-lesen-und-filtern.md) | Streams lesen, `recursive`, Filter |

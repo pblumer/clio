@@ -7,22 +7,62 @@
 
 Nach diesem Modul kannst du:
 
-- Clio bauen und mit einem API-Token starten,
+- Clio installieren (fertiges Binary **oder** selbst bauen) und mit einem
+  API-Token starten,
 - die Erreichbarkeit prüfen (`ping`),
 - dein erstes Event schreiben und wieder lesen,
 - die interaktive API-Doku (Swagger UI) öffnen.
 
 ## Voraussetzungen
 
-- **Go ≥ 1.24** und ein Terminal.
+- Ein Terminal.
 - Für die Hands-on-Teile: `curl` (Linux/macOS) **oder** PowerShell (Windows).
+- **Nur wenn du selbst baust** (Variante B unten): **Go ≥ 1.24**.
 
 > **Windows-Nutzer:innen:** Die Beispiele gibt es in zwei Varianten —
 > Bash/`curl` (`.sh`) und **native PowerShell** (`.ps1`). Unten stehen beide
 > Wege nebeneinander. Die `.ps1`-Skripte laufen mit Windows PowerShell 5.1
 > (vorinstalliert) und PowerShell 7+ und brauchen kein `curl`.
 
-## Schritt 1 — Bauen
+## Schritt 1 — Clio holen
+
+Du brauchst Clio als ausführbares `cliostore`(`.exe`). Wähle **einen** Weg:
+
+### Variante A — Fertiges Binary herunterladen (empfohlen, kein Go nötig)
+
+Auf der [**Releases-Seite**](https://github.com/pblumer/clio/releases/latest)
+liegt für jede Plattform ein Archiv (`…_linux_amd64.tar.gz`,
+`…_darwin_arm64.tar.gz`, `…_windows_amd64.zip` …) plus eine `checksums.txt`.
+Lade das passende, entpacke es — fertig.
+
+**Linux/macOS** (Beispiel Linux/amd64; für Apple Silicon `darwin_arm64` wählen):
+```bash
+VERSION=v0.1.0
+BASE=https://github.com/pblumer/clio/releases/download/$VERSION
+curl -sSL -O $BASE/cliostore_${VERSION}_linux_amd64.tar.gz
+curl -sSL -O $BASE/checksums.txt
+sha256sum --check --ignore-missing checksums.txt   # Integrität prüfen -> OK
+tar -xzf cliostore_${VERSION}_linux_amd64.tar.gz
+cd cliostore_${VERSION}_linux_amd64
+./cliostore -version                               # -> cliostore v0.1.0
+```
+
+**Windows (PowerShell):**
+```powershell
+$VERSION = 'v0.1.0'
+$base = "https://github.com/pblumer/clio/releases/download/$VERSION"
+Invoke-WebRequest "$base/cliostore_${VERSION}_windows_amd64.zip" -OutFile clio.zip
+Expand-Archive clio.zip -DestinationPath .
+cd "cliostore_${VERSION}_windows_amd64"
+.\cliostore.exe -version                           # -> cliostore v0.1.0
+```
+
+> Lieber Docker? Dann brauchst du gar nichts herunterzuladen:
+> `docker run --rm -p 3000:3000 -e CLIO_API_TOKEN=dein-token ghcr.io/pblumer/clio:latest`
+> — siehe [Docker in der README](../../../README.md#docker). Schritt 2 entfällt
+> dann (das Token gibst du direkt mit).
+
+### Variante B — Selbst bauen (für Contributor:innen, braucht Go ≥ 1.24)
 
 **Linux/macOS:**
 ```bash
