@@ -129,6 +129,9 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		}
 	}()
 	logger.Info("store geöffnet", "path", cfg.DBPath, "sync", cfg.Sync, "signing", signing)
+	if cfg.DevMode {
+		logger.Warn("DEV-MODE aktiv — destruktiver DB-Reset unter POST /api/v1/dev/reset-database freigeschaltet (nicht in Produktion verwenden)")
+	}
 
 	srv := &http.Server{
 		Addr: cfg.Addr,

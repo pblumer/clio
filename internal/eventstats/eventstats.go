@@ -62,6 +62,18 @@ func (h *Histogram) Add(n int, at time.Time) {
 	h.total += uint64(n)
 }
 
+// Reset leert das Histogramm und setzt den Startzeitpunkt (origin) neu. Genutzt
+// vom Dev-Mode-DB-Reset (ADR-022), damit der Eventstrom-Chart nach dem Tabula
+// rasa ebenfalls bei null beginnt. Nebenläufig sicher.
+func (h *Histogram) Reset(start time.Time) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.origin = start.UTC()
+	h.width = time.Second
+	h.counts = nil
+	h.total = 0
+}
+
 // compact halbiert die Auflösung: je zwei benachbarte Buckets werden summiert,
 // die Breite verdoppelt. Caller hält den Lock.
 func (h *Histogram) compact() {

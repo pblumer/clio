@@ -29,6 +29,17 @@ func newTestServer(t *testing.T) *Server {
 	return New(config.Config{Addr: ":0", APIToken: "secret-token"}, st, nil)
 }
 
+// newDevServer baut einen Server im Dev-Mode (Reset-Route freigeschaltet).
+func newDevServer(t *testing.T) *Server {
+	t.Helper()
+	st, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("store öffnen: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	return New(config.Config{Addr: ":0", APIToken: "secret-token", DevMode: true}, st, nil)
+}
+
 func do(t *testing.T, srv *Server, method, path, token, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	var r *http.Request
@@ -1442,4 +1453,81 @@ func decodeNDJSONMaps(t *testing.T, body string) []map[string]any {
 		out = append(out, m)
 	}
 	return out
+}
+
+func TestDevResetNotRegisteredWithoutDevMode(t *testing.T) {
+	srv := newTestServer(t) // kein Dev-Mode
+
+	// Route existiert nicht → 404 (nicht nur 401), auch mit gültigem Token.
+	rec := do(t, srv, http.MethodPost, "/api/v1/dev/reset-database", "secret-token", "")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 ohne dev-mode", rec.Code)
+	}
+
+	// /info meldet devMode=false.
+	rec = do(t, srv, http.MethodGet, "/api/v1/info", "secret-token", "")
+	var info map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&info); err != nil {
+		t.Fatalf("info dekodieren: %v", err)
+	}
+	if info["devMode"] != false {
+		t.Fatalf("devMode = %v, want false", info["devMode"])
+	}
+}
+
+func TestDevResetRequiresAuth(t *testing.T) {
+	srv := newDevServer(t)
+
+	rec := do(t, srv, http.MethodPost, "/api/v1/dev/reset-database", "", "")
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status ohne auth = %d, want 401", rec.Code)
+	}
+}
+
+func TestDevResetClearsDatabase(t *testing.T) {
+	srv := newDevServer(t)
+
+	// /info meldet devMode=true.
+	rec := do(t, srv, http.MethodGet, "/api/v1/info", "secret-token", "")
+	var info map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&info); err != nil {
+		t.Fatalf("info dekodieren: %v", err)
+	}
+	if info["devMode"] != true {
+		t.Fatalf("devMode = %v, want true", info["devMode"])
+	}
+
+	// Ein paar Events schreiben.
+	writeBody := `{"events":[
+		{"source":"lib","subject":"/books/1","type":"acquired"},
+		{"source":"lib","subject":"/books/2","type":"acquired"}
+	]}`
+	if rec := do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token", writeBody); rec.Code != http.StatusOK {
+		t.Fatalf("write status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+
+	// Reset.
+	rec = do(t, srv, http.MethodPost, "/api/v1/dev/reset-database", "secret-token", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("reset status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("reset-antwort dekodieren: %v", err)
+	}
+	if body["status"] != "tabula-rasa" {
+		t.Fatalf("status = %v, want tabula-rasa", body["status"])
+	}
+	if got, _ := body["deletedEvents"].(float64); got != 2 {
+		t.Fatalf("deletedEvents = %v, want 2", body["deletedEvents"])
+	}
+
+	// Danach ist der Store leer.
+	rec = do(t, srv, http.MethodGet, "/api/v1/info", "secret-token", "")
+	if err := json.NewDecoder(rec.Body).Decode(&info); err != nil {
+		t.Fatalf("info dekodieren: %v", err)
+	}
+	if got, _ := info["eventsTotal"].(float64); got != 0 {
+		t.Fatalf("eventsTotal nach reset = %v, want 0", info["eventsTotal"])
+	}
 }

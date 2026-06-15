@@ -251,6 +251,39 @@
   .gen-result.ok { color: var(--ok); }
   .gen-result.err { color: var(--err); }
   .gen-scenario { margin-top: 14px; }
+  /* Dev-Zone · Tabula Rasa (nur im Dev-Mode sichtbar) */
+  #dev-zone h2 { color: var(--err); }
+  #dev-zone h2::after { background: linear-gradient(90deg, rgba(255,93,115,.5), transparent); }
+  .card.danger { border-color: var(--err); box-shadow: inset 0 0 30px rgba(255,93,115,.08), 0 6px 22px rgba(0,0,0,.4); }
+  .card.danger::before { border-top-color: var(--err); border-left-color: var(--err); }
+  .card.danger::after { border-bottom-color: var(--err); border-right-color: var(--err); }
+  .dz-grid { display: grid; gap: 18px; grid-template-columns: 1fr auto; align-items: center; }
+  @media (max-width: 620px) { .dz-grid { grid-template-columns: 1fr; } }
+  .dz-desc { color: var(--muted); font-size: 13px; }
+  .dz-desc b { color: var(--fg); }
+  .dz-stats { display: flex; gap: 22px; flex-wrap: wrap; margin-top: 14px; }
+  .dz-stat .dz-num { font-family: var(--mono); font-size: 22px; font-weight: 700; color: var(--accent-2);
+    font-variant-numeric: tabular-nums; text-shadow: 0 0 10px rgba(244,114,182,.4); }
+  .dz-stat .dz-lbl { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 1px; }
+  .dz-rank { color: var(--warn) !important; text-shadow: 0 0 10px rgba(251,191,36,.4) !important; }
+  .dz-fire {
+    position: relative; overflow: hidden; user-select: none; min-width: 200px;
+    background: linear-gradient(180deg, #ff5d73, #b3243a); color: #fff;
+    border: 1px solid var(--err); border-radius: 10px; padding: 16px 24px;
+    font-family: var(--mono); font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase;
+    box-shadow: 0 0 16px rgba(255,93,115,.5); white-space: nowrap;
+  }
+  .dz-fire:hover { box-shadow: 0 0 24px rgba(255,93,115,.85); color: #fff; border-color: var(--err); }
+  .dz-fire .dz-label { position: relative; z-index: 1; }
+  .dz-charge { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: rgba(255,255,255,.32); pointer-events: none; }
+  .dz-fire.armed { animation: dzPulse .7s infinite; }
+  @keyframes dzPulse { 0%,100% { box-shadow: 0 0 16px rgba(255,93,115,.5); } 50% { box-shadow: 0 0 38px rgba(255,93,115,1); } }
+  .dz-hint { color: var(--muted); font-size: 11px; font-family: var(--mono); margin-top: 8px; text-align: center; }
+  /* Supernova-Blitz (Vollbild, einmalig) */
+  #supernova-flash { position: fixed; inset: 0; z-index: 100; pointer-events: none; opacity: 0;
+    background: radial-gradient(circle at 50% 50%, #fff, #ffe9a8 18%, #ff8a5c 38%, #f472b6 55%, transparent 72%); }
+  #supernova-flash.boom { animation: boom 1.2s ease-out forwards; }
+  @keyframes boom { 0% { opacity: 0; transform: scale(.2); } 12% { opacity: 1; } 100% { opacity: 0; transform: scale(2.4); } }
 </style>
 </head>
 <body>
@@ -364,6 +397,34 @@
         <dt>Datenbankpfad</dt><dd id="i-db">–</dd>
         <dt>Serverzeit</dt><dd id="i-time">–</dd>
       </dl>
+    </section>
+
+    <!-- Dev-Zone: nur sichtbar, wenn der Server im Dev-Mode läuft (info.devMode) -->
+    <section id="dev-zone" style="display:none">
+      <h2>☢ Dev-Zone · Tabula Rasa</h2>
+      <div class="card danger">
+        <div class="dz-grid">
+          <div>
+            <div class="label" style="color:var(--err)">Datenbank zurücksetzen</div>
+            <p class="dz-desc" style="margin:8px 0 0">Verglüht <b>alle Events</b>, Indizes, Typ-Zähler und Schemas
+              unwiderruflich — frischer Start ab <b>#0</b>. Nur im <b>Dev-Mode</b> (<code>CLIO_DEV_MODE</code>)
+              verfügbar; im Produktivbetrieb existiert dieser Knopf gar nicht. Perfekt, um im Entwicklungsumfeld
+              wieder Tabula rasa zu machen.</p>
+            <div class="dz-stats">
+              <div class="dz-stat"><div class="dz-num" id="dz-resets">0</div><div class="dz-lbl">Supernovae</div></div>
+              <div class="dz-stat"><div class="dz-num" id="dz-vaporized">0</div><div class="dz-lbl">verglühte Events</div></div>
+              <div class="dz-stat"><div class="dz-num dz-rank" id="dz-rank">Schöpfer</div><div class="dz-lbl">Rang</div></div>
+            </div>
+          </div>
+          <div>
+            <button id="dz-fire" class="dz-fire" title="Gedrückt halten zum Zünden">
+              <span class="dz-charge" id="dz-charge"></span><span class="dz-label">☄ Supernova</span>
+            </button>
+            <div class="dz-hint" id="dz-hint">gedrückt halten zum Zünden</div>
+          </div>
+        </div>
+        <div id="dz-result" class="gen-result" style="margin-top:12px"></div>
+      </div>
     </section>
   </div>
 
@@ -635,6 +696,8 @@
     <span id="lastUpdate">noch nicht aktualisiert</span>
   </footer>
 </main>
+
+<div id="supernova-flash"></div>
 
 <script>
 "use strict";
@@ -1119,6 +1182,9 @@ function render(info, m) {
   $("i-db").textContent = info.databaseFilePath ?? "–";
   $("i-time").textContent = info.serverTime ? new Date(info.serverTime).toLocaleString("de-CH") : "–";
 
+  // Dev-Zone nur einblenden, wenn der Server im Dev-Mode läuft.
+  $("dev-zone").style.display = info.devMode ? "block" : "none";
+
   updateTelemetry(info, m, now);
 }
 
@@ -1141,6 +1207,96 @@ function connect() {
 $("connect").addEventListener("click", connect);
 tokenInput.addEventListener("keydown", (e) => { if (e.key === "Enter") connect(); });
 intervalSel.addEventListener("change", schedule);
+
+// ---------- Dev-Zone · Tabula Rasa (Supernova-Reset, nur im Dev-Mode) ----------
+// Gegen versehentliches Auslösen: der Knopf muss gedrückt gehalten werden, bis
+// die „Ladung" voll ist (Hold-to-fire). Loslassen vorher bricht ab. Erst dann
+// geht POST /api/v1/dev/reset-database raus. Ein bisschen Gamification: lokaler
+// Zähler, verglühte Events und ein aufsteigender Rang (alles in localStorage).
+const DZ_HOLD_MS = 1400;
+const dz = { raf: null, start: 0, firing: false };
+
+function dzRank(n) {
+  if (n >= 25) return "Entropie-Lord";
+  if (n >= 10) return "Urknall-Meister";
+  if (n >= 5) return "Supernova-Veteran";
+  if (n >= 1) return "Sternenstaub-Sammler";
+  return "Schöpfer";
+}
+function dzGet(key) { return parseInt(localStorage.getItem(key) || "0", 10) || 0; }
+function dzRenderStats() {
+  const resets = dzGet("clioResets"), vap = dzGet("clioVaporized");
+  $("dz-resets").textContent = fmtInt(resets);
+  $("dz-vaporized").textContent = fmtInt(vap);
+  $("dz-rank").textContent = dzRank(resets);
+}
+function dzReset() {
+  if (dz.raf) cancelAnimationFrame(dz.raf);
+  dz.raf = null;
+  $("dz-fire").classList.remove("armed");
+  $("dz-charge").style.width = "0";
+  if (!dz.firing) $("dz-hint").textContent = "gedrückt halten zum Zünden";
+}
+function dzTick(now) {
+  const pct = Math.min(1, (now - dz.start) / DZ_HOLD_MS);
+  $("dz-charge").style.width = (pct * 100) + "%";
+  if (pct >= 1) { dzReset(); fireSupernova(); return; }
+  $("dz-hint").textContent = "lädt … " + (((1 - pct) * DZ_HOLD_MS) / 1000).toFixed(1) + "s";
+  dz.raf = requestAnimationFrame(dzTick);
+}
+function dzArm() {
+  if (dz.firing) return;
+  if (!tokenInput.value.trim()) {
+    $("dz-result").className = "gen-result err";
+    $("dz-result").textContent = "Erst Token eingeben und verbinden.";
+    return;
+  }
+  $("dz-fire").classList.add("armed");
+  dz.start = performance.now();
+  dz.raf = requestAnimationFrame(dzTick);
+}
+async function fireSupernova() {
+  dz.firing = true;
+  $("dz-hint").textContent = "💥 …";
+  const flash = $("supernova-flash");
+  flash.classList.remove("boom"); void flash.offsetWidth; flash.classList.add("boom");
+  try {
+    const res = await fetch("/api/v1/dev/reset-database", {
+      method: "POST", headers: { Authorization: "Bearer " + tokenInput.value.trim() }, cache: "no-store",
+    });
+    if (!res.ok) {
+      $("dz-result").className = "gen-result err";
+      $("dz-result").textContent = "Reset fehlgeschlagen (HTTP " + res.status + ") " + (await res.text());
+      return;
+    }
+    const out = await res.json();
+    const before = dzGet("clioResets");
+    const resets = before + 1, vap = dzGet("clioVaporized") + (out.deletedEvents || 0);
+    localStorage.setItem("clioResets", String(resets));
+    localStorage.setItem("clioVaporized", String(vap));
+    dzRenderStats();
+    const rankUp = dzRank(resets) !== dzRank(before);
+    $("dz-result").className = "gen-result ok";
+    $("dz-result").textContent = "☄ " + (out.message || "Tabula rasa.") + " — " +
+      fmtInt(out.deletedEvents || 0) + " Events verglüht · Reset #" + resets +
+      (rankUp ? " · neuer Rang: " + dzRank(resets) + "! 🏆" : "");
+    refresh(); // Kennzahlen sofort auffrischen (Chart startet bei null neu).
+  } catch (e) {
+    $("dz-result").className = "gen-result err";
+    $("dz-result").textContent = "Reset fehlgeschlagen: " + e.message;
+  } finally {
+    dz.firing = false;
+    dzReset();
+  }
+}
+(function initDevZone() {
+  const btn = $("dz-fire");
+  if (!btn) return;
+  btn.addEventListener("mousedown", dzArm);
+  btn.addEventListener("touchstart", (e) => { e.preventDefault(); dzArm(); }, { passive: false });
+  for (const ev of ["mouseup", "mouseleave", "touchend", "touchcancel"]) btn.addEventListener(ev, dzReset);
+  dzRenderStats();
+})();
 
 // ---------- Live-Event-Viewer ----------
 const MAX_ROWS = 500;

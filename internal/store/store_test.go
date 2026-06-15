@@ -522,6 +522,65 @@ func TestHasPrefix(t *testing.T) {
 	}
 }
 
+func TestResetClearsEverything(t *testing.T) {
+	st := openTemp(t)
+
+	appendAll(t, st,
+		event.Candidate{Source: "s", Subject: "/books/1", Type: "created", Data: []byte(`{"n":1}`)},
+		event.Candidate{Source: "s", Subject: "/books/2", Type: "created", Data: []byte(`{"n":2}`)},
+		event.Candidate{Source: "s", Subject: "/users/7", Type: "joined"},
+	)
+	if err := st.RegisterSchema("created", []byte(`{"type":"object"}`)); err != nil {
+		t.Fatalf("schema registrieren: %v", err)
+	}
+
+	deleted, err := st.Reset()
+	if err != nil {
+		t.Fatalf("reset: %v", err)
+	}
+	if deleted != 3 {
+		t.Errorf("deleted = %d, want 3", deleted)
+	}
+
+	// Alles leer nach dem Reset.
+	if n, _ := st.Count(); n != 0 {
+		t.Errorf("Count nach reset = %d, want 0", n)
+	}
+	if subs, _ := st.Subjects(""); len(subs) != 0 {
+		t.Errorf("Subjects nach reset = %v, want leer", subs)
+	}
+	if types, _ := st.EventTypes(); len(types) != 0 {
+		t.Errorf("EventTypes nach reset = %v, want leer", types)
+	}
+	if _, found, _ := st.SchemaFor("created"); found {
+		t.Error("Schema für 'created' noch vorhanden, sollte verglüht sein")
+	}
+
+	// Neue Sequenz beginnt wieder bei 1, und die (frische) Kette verifiziert.
+	got := appendAll(t, st, event.Candidate{Source: "s", Subject: "/fresh", Type: "created"})
+	if got[0].ID != "1" {
+		t.Errorf("erste ID nach reset = %q, want \"1\"", got[0].ID)
+	}
+	res, err := st.Verify()
+	if err != nil {
+		t.Fatalf("verify nach reset: %v", err)
+	}
+	if !res.OK {
+		t.Errorf("Verify nach reset nicht ok: %+v", res)
+	}
+}
+
+func TestResetEmptyStore(t *testing.T) {
+	st := openTemp(t)
+	deleted, err := st.Reset()
+	if err != nil {
+		t.Fatalf("reset auf leerem store: %v", err)
+	}
+	if deleted != 0 {
+		t.Errorf("deleted = %d, want 0", deleted)
+	}
+}
+
 func openTemp(t *testing.T) *Store {
 	t.Helper()
 	st, err := Open(filepath.Join(t.TempDir(), "test.db"))

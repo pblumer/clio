@@ -225,6 +225,41 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
+// Reset löscht alle Events samt Indizes, Typ-Zählern, Schemas und Ketten-Kopf —
+// die Datenbank kehrt in den jungfräulichen Zustand zurück (Tabula rasa) und die
+// globale Event-Sequenz beginnt wieder bei 0. Gedacht ist das ausschließlich für
+// Entwicklungsumgebungen (Dev-Mode, ADR-022): im Normalbetrieb widerspricht das
+// Löschen bewusst der Unveränderlichkeit (vgl. ADR-015, der nur defragmentiert).
+// Die Operation ist atomar — alle Buckets werden in einer einzigen Transaktion
+// verworfen und frisch angelegt (alles-oder-nichts). Der optionale
+// Signaturschlüssel bleibt erhalten (er lebt am Store, nicht in der DB). Liefert
+// die Anzahl der gelöschten Events zurück.
+func (s *Store) Reset() (uint64, error) {
+	var deleted uint64
+	err := s.db.Update(func(tx *bolt.Tx) error {
+		deleted = tx.Bucket(bucketEvents).Sequence()
+		for _, name := range [][]byte{bucketEvents, bucketSubjectIdx, bucketTypeIdx, bucketMeta, bucketTypes, bucketSchemas} {
+			if tx.Bucket(name) != nil {
+				if err := tx.DeleteBucket(name); err != nil {
+					return err
+				}
+			}
+			if _, err := tx.CreateBucket(name); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, fmt.Errorf("datenbank zurücksetzen: %w", err)
+	}
+	// Kompilierte Schemas verwerfen — die Registrierungen sind weg.
+	s.schemaMu.Lock()
+	s.schemaCache = make(map[string]*jsonschema.Schema)
+	s.schemaMu.Unlock()
+	return deleted, nil
+}
+
 // Count liefert die Anzahl gespeicherter Events (O(1) über die bbolt-Sequenz).
 func (s *Store) Count() (uint64, error) {
 	var n uint64

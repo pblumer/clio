@@ -30,6 +30,7 @@ security:
 tags:
   - name: System
   - name: Events
+  - name: Dev
 
 paths:
   /api/v1/ping:
@@ -455,6 +456,36 @@ paths:
               schema: { $ref: "#/components/schemas/EventStream" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/v1/dev/reset-database:
+    post:
+      tags: [Dev]
+      summary: Datenbank zurücksetzen (Tabula rasa) — nur im Dev-Mode
+      description: |
+        **Destruktiv und unwiderruflich.** Löscht alle Events, Indizes,
+        Typ-Zähler und Schemas; die Event-Sequenz beginnt wieder bei `#0`.
+
+        Diese Route existiert **nur**, wenn der Server im Dev-Mode läuft
+        (Umgebungsvariable `CLIO_DEV_MODE`, ADR-022). Ohne Dev-Mode ist sie
+        nicht registriert und antwortet mit `404`. Gedacht ausschließlich für
+        Entwicklungs- und Demoumgebungen — im Produktivbetrieb widerspricht das
+        Löschen der Unveränderlichkeit (vgl. ADR-015).
+      responses:
+        "200":
+          description: Datenbank zurückgesetzt
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: "tabula-rasa" }
+                  deletedEvents: { type: integer, format: int64, example: 42 }
+                  resetAt: { type: string, format: date-time }
+                  message: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404":
+          description: Dev-Mode nicht aktiv — Route nicht verfügbar
         "500": { $ref: "#/components/responses/InternalError" }
 
 components:

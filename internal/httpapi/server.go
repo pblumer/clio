@@ -43,6 +43,7 @@ type Server struct {
 	mux       *http.ServeMux
 	version   string
 	startedAt time.Time
+	devMode   bool
 }
 
 // Option konfiguriert optionale Server-Metadaten.
@@ -82,6 +83,7 @@ func New(cfg config.Config, st *store.Store, logger *slog.Logger, opts ...Option
 		mux:       http.NewServeMux(),
 		version:   "dev",
 		startedAt: time.Now().UTC(),
+		devMode:   cfg.DevMode,
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -193,6 +195,13 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/register-event-schema", s.requireAuth(s.handleRegisterEventSchema))
 	s.mux.HandleFunc("GET /api/v1/read-event-schema", s.requireAuth(s.handleReadEventSchema))
 
+	// Dev-Mode-only (ADR-022): destruktives Zurücksetzen der gesamten Datenbank.
+	// Die Route wird im Produktivbetrieb gar nicht erst registriert — ohne
+	// CLIO_DEV_MODE liefert sie damit 404 statt nur 401. Bearer-Token-geschützt.
+	if s.devMode {
+		s.mux.HandleFunc("POST /api/v1/dev/reset-database", s.requireAuth(s.handleDevReset))
+	}
+
 	// Prometheus-Metriken (ohne Auth, üblich für Scraping im internen Netz).
 	s.mux.HandleFunc("GET /metrics", s.handleMetrics)
 
@@ -254,6 +263,39 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 		"syncMode":         s.cfg.Sync,
 		"httpListenAddr":   s.cfg.Addr,
 		"databaseFilePath": s.cfg.DBPath,
+		"devMode":          s.devMode,
+	})
+}
+
+// handleDevReset setzt die gesamte Datenbank zurück (Tabula rasa) und meldet, wie
+// viele Events dabei „verglüht" sind. Diese Route existiert NUR im Dev-Mode
+// (CLIO_DEV_MODE, ADR-022); im Produktivbetrieb ist sie nicht registriert. Sie
+// ist trotzdem zusätzlich Bearer-Token-geschützt (Defense in Depth).
+//
+// Hinweis: Bereits laufende Observer-Streams werden nicht aktiv getrennt; da die
+// Sequenz wieder bei 1 beginnt, liegen neue IDs unter ihrem zuletzt gesehenen
+// Stand und sie liefern erst nach einem Reconnect wieder. Für ein Dev-Werkzeug
+// ist das akzeptabel — das Dashboard verbindet seinen Stream beim nächsten
+// „Verbinden" ohnehin neu.
+func (s *Server) handleDevReset(w http.ResponseWriter, r *http.Request) {
+	deleted, err := s.store.Reset()
+	if err != nil {
+		s.logger.Error("dev-reset fehlgeschlagen", "err", err)
+		writeError(w, http.StatusInternalServerError, "interner fehler beim zurücksetzen")
+		return
+	}
+
+	now := time.Now().UTC()
+	// Eventstrom-Histogramm zurücksetzen, damit der Chart ebenfalls bei null
+	// startet (origin = jetzt).
+	s.events.Reset(now)
+	s.logger.Warn("datenbank zurückgesetzt (dev-mode)", "deletedEvents", deleted)
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":        "tabula-rasa",
+		"deletedEvents": deleted,
+		"resetAt":       now.Format(time.RFC3339Nano),
+		"message":       "Supernova! Die Historie ist zu Sternenstaub zerfallen.",
 	})
 }
 
