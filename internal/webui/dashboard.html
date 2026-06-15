@@ -151,14 +151,19 @@
   .badge.pending { border-color: var(--accent); color: var(--accent); cursor: pointer; }
   #events { display: flex; flex-direction: column; gap: 6px; }
   .ev { background: var(--panel); border: 1px solid var(--border); border-radius: 9px; padding: 9px 12px; }
-  .ev-head { display: flex; gap: 10px; align-items: baseline; cursor: pointer; font-family: var(--mono); font-size: 13px; }
+  .ev-head { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; cursor: pointer; font-family: var(--mono); font-size: 13px; }
   .ev-id { color: var(--muted); min-width: 52px; }
   .ev-type { color: #0b1020; background: var(--accent); border-radius: 5px; padding: 1px 7px; font-weight: 600; font-size: 12px; }
-  .ev-subject { color: var(--fg); flex: 1; word-break: break-all; }
+  .ev-subject { color: var(--fg); flex: 1; min-width: 0; overflow-wrap: anywhere; }
   .ev-time { color: var(--muted); font-size: 12px; white-space: nowrap; }
   .ev-data { margin: 8px 0 0; padding: 9px 11px; background: var(--bg); border: 1px solid var(--border); border-radius: 7px;
              font-family: var(--mono); font-size: 12px; white-space: pre-wrap; word-break: break-word; display: none; }
   .ev.open .ev-data { display: block; }
+  /* Schmale Screens: Subject auf eine eigene volle Zeile, statt es zwischen
+     ID/Typ/Zeit auf ~1 Zeichen zu quetschen (sonst senkrechter Zeichen-Umbruch). */
+  @media (max-width: 600px) {
+    .ev-subject { flex-basis: 100%; order: 3; }
+  }
   .empty { color: var(--muted); text-align: center; padding: 40px; }
   /* Explorer */
   .explorer-grid { display: grid; gap: 14px; grid-template-columns: minmax(220px, 340px) 1fr; align-items: start; }
