@@ -201,6 +201,20 @@ Statt EventQL syntaxgetreu nachzubauen (kein offener Parser verfügbar, eigener 
 
 **Gesamteinschätzung:** Funktional brauchbarer Klon (Stufen 0–3) ist erreicht. Die Abfrage-Schicht (Etappen 1–3) ist das „brauchbare 80 %" und besteht aus wenigen normalen PRs statt eines Monatsbrockens.
 
+### Stufe 5 — Betriebs-Dashboard / Web-UI (`/ui`) `🟡`
+*Ein optionaler, zusätzlicher Reifegrad über dem Kern: eine eingebettete Oberfläche (`go:embed`, Vanilla JS, **kein** Build-Step/CDN, keine neuen Fremd-Abhängigkeiten — ADR-020). Reine View-Schicht auf bestehende Endpunkte, gleiche Bearer-Token-Auth. Ausführlicher Scope, Sicherheitsbetrachtung und der schrittweise Verlauf: [`docs/web-ui-scope.md`](./docs/web-ui-scope.md).*
+
+Unter `GET /ui`, sechs Tabs — jeder für sich nutzbar:
+
+- [x] **Dashboard** — Health/Monitoring aus `/api/v1/info` + `/metrics`; **Live-Telemetrie** (CPU/Heap/Event-Durchsatz/Request-Rate, gespeist aus zusätzlichen Laufzeit-Metriken: `runtime/metrics` + plattformabhängig `getrusage`); ein **Eventstrom-Diagramm über die Zeit** über den neuen Endpunkt **`GET /api/v1/event-stats`** (serverseitiges Zeit-Histogramm, beim Start aus der Historie aufgebaut) mit **Maus-Box-Zoom**; dazu ein einklappbares Live-Events-Fenster.
+- [x] **Live-Events** — `observe`-Stream auf `/` (nur neue Events ab Verbinden, Subject-/Typ-Filter, Pause).
+- [x] **Explorer** — read-only: Subject-Baum (`read-subjects?tree=true`), Event-Typen & Schemas (`read-event-types`/`read-event-schema`), Integrität (`verify`/`public-key`).
+- [x] **Query** & **Hilfe** — `run-query`-Konsole mit CEL-Editor (Highlighting, Autovervollständigung), Verlauf/Favoriten und NDJSON/CSV-Export; CEL-Referenz mit Beispielen.
+- [x] **Erzeugen** — Onboarding: Events schreiben (`write-events`, Vorlagen, Beispiel-Szenarien) und Schemas registrieren (`register-event-schema`). Bewusst die **einzige schreibende** UI-Fläche — normale, token-gebundene Daten-Writes ohne neuen Endpunkt/Privileg.
+- [ ] **Maintenance-Konsole** (Kompaktierung u. ä. anstoßen) — **bewusst zurückgestellt**, bis ein eigenes Auth-/Audit-Konzept für betriebskritische Schreibaktionen steht.
+
+> **Server-Erweiterungen** für die UI bleiben minimal: zusätzliche Laufzeit-Metriken in `/metrics` und der read-only-Endpunkt `event-stats`. Alles andere ist Wiederverwendung bestehender Endpunkte. Die UI ist **optional** — der Kern (Stufen 0–4) funktioniert ohne sie.
+
 ---
 
 ## 7. Architecture Decision Records (ADRs)
