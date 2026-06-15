@@ -1030,6 +1030,8 @@ func TestMetricsEndpoint(t *testing.T) {
 	for _, want := range []string{
 		"clio_events_written_total 2",
 		"clio_events_total 2",
+		"clio_disk_free_bytes ",
+		"clio_disk_total_bytes ",
 		`clio_http_requests_total{method="POST",route="POST /api/v1/write-events",status="200"}`,
 	} {
 		if !strings.Contains(body, want) {
@@ -1575,6 +1577,9 @@ func TestDevResetClearsDatabase(t *testing.T) {
 	if got, _ := body["deletedEvents"].(float64); got != 2 {
 		t.Fatalf("deletedEvents = %v, want 2", body["deletedEvents"])
 	}
+	if body["bulkImportOpen"] != true {
+		t.Fatalf("bulkImportOpen = %v, want true", body["bulkImportOpen"])
+	}
 
 	// Danach ist der Store leer.
 	rec = do(t, srv, http.MethodGet, "/api/v1/info", "secret-token", "")
@@ -1583,5 +1588,56 @@ func TestDevResetClearsDatabase(t *testing.T) {
 	}
 	if got, _ := info["eventsTotal"].(float64); got != 0 {
 		t.Fatalf("eventsTotal nach reset = %v, want 0", info["eventsTotal"])
+	}
+}
+
+func TestDevBulkImportWindowLifecycle(t *testing.T) {
+	srv := newDevServer(t)
+
+	bulkBody := `{"events":[{"source":"bulk","subject":"/import/a","type":"migrated"}]}`
+
+	// Direkt nach Start offen.
+	rec := do(t, srv, http.MethodPost, "/api/v1/dev/bulk-import-events", "secret-token", bulkBody)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("bulk import initial status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+
+	// Fenster schließen.
+	rec = do(t, srv, http.MethodPost, "/api/v1/dev/close-bulk-import", "secret-token", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("close bulk window status = %d, want 200", rec.Code)
+	}
+
+	// Danach blockiert.
+	rec = do(t, srv, http.MethodPost, "/api/v1/dev/bulk-import-events", "secret-token", bulkBody)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("bulk import after close status = %d, want 409", rec.Code)
+	}
+
+	// Reset öffnet Fenster wieder.
+	rec = do(t, srv, http.MethodPost, "/api/v1/dev/reset-database", "secret-token", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("reset status = %d, want 200", rec.Code)
+	}
+
+	rec = do(t, srv, http.MethodPost, "/api/v1/dev/bulk-import-events", "secret-token", bulkBody)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("bulk import after reset status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestDevBulkImportNotRegisteredWithoutDevMode(t *testing.T) {
+	srv := newTestServer(t)
+	rec := do(t, srv, http.MethodPost, "/api/v1/dev/bulk-import-events", "secret-token", `{"events":[{"source":"s","subject":"/x","type":"t"}]}`)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 ohne dev-mode", rec.Code)
+	}
+}
+
+func TestDevCloseBulkImportNotRegisteredWithoutDevMode(t *testing.T) {
+	srv := newTestServer(t)
+	rec := do(t, srv, http.MethodPost, "/api/v1/dev/close-bulk-import", "secret-token", "")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 ohne dev-mode", rec.Code)
 	}
 }

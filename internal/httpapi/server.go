@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/swaggest/swgui/v5emb"
@@ -45,6 +46,9 @@ type Server struct {
 	version   string
 	startedAt time.Time
 	devMode   bool
+
+	bulkMu         sync.RWMutex
+	bulkImportOpen bool
 }
 
 // Option konfiguriert optionale Server-Metadaten.
@@ -74,17 +78,19 @@ func New(cfg config.Config, st *store.Store, logger *slog.Logger, opts ...Option
 		logger.Error("query-compiler konnte nicht erstellt werden", "err", err)
 	}
 
+	now := time.Now().UTC()
 	s := &Server{
-		cfg:       cfg,
-		store:     st,
-		broker:    pubsub.New(),
-		metrics:   metrics.New(),
-		queryC:    qc,
-		logger:    logger,
-		mux:       http.NewServeMux(),
-		version:   "dev",
-		startedAt: time.Now().UTC(),
-		devMode:   cfg.DevMode,
+		cfg:            cfg,
+		store:          st,
+		broker:         pubsub.New(),
+		metrics:        metrics.New(),
+		queryC:         qc,
+		logger:         logger,
+		mux:            http.NewServeMux(),
+		version:        "dev",
+		startedAt:      now,
+		devMode:        cfg.DevMode,
+		bulkImportOpen: cfg.DevMode,
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -196,11 +202,14 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/register-event-schema", s.requireAuth(s.handleRegisterEventSchema))
 	s.mux.HandleFunc("GET /api/v1/read-event-schema", s.requireAuth(s.handleReadEventSchema))
 
-	// Dev-Mode-only (ADR-022): destruktives Zurücksetzen der gesamten Datenbank.
-	// Die Route wird im Produktivbetrieb gar nicht erst registriert — ohne
-	// CLIO_DEV_MODE liefert sie damit 404 statt nur 401. Bearer-Token-geschützt.
+	// Dev-Mode-only (ADR-022): destruktives Zurücksetzen der gesamten Datenbank
+	// plus Bulk-Import-Fenster direkt nach Start/Reset.
+	// Die Routen werden im Produktivbetrieb gar nicht erst registriert — ohne
+	// CLIO_DEV_MODE liefern sie damit 404 statt nur 401. Bearer-Token-geschützt.
 	if s.devMode {
 		s.mux.HandleFunc("POST /api/v1/dev/reset-database", s.requireAuth(s.handleDevReset))
+		s.mux.HandleFunc("POST /api/v1/dev/bulk-import-events", s.requireAuth(s.handleDevBulkImportEvents))
+		s.mux.HandleFunc("POST /api/v1/dev/close-bulk-import", s.requireAuth(s.handleDevCloseBulkImport))
 	}
 
 	// Prometheus-Metriken (ohne Auth, üblich für Scraping im internen Netz).
@@ -303,13 +312,87 @@ func (s *Server) handleDevReset(w http.ResponseWriter, r *http.Request) {
 	// Eventstrom-Histogramm zurücksetzen, damit der Chart ebenfalls bei null
 	// startet (origin = jetzt).
 	s.events.Reset(now)
+
+	// Nach jeder Supernova wieder Bulk-Import-Fenster öffnen.
+	s.bulkMu.Lock()
+	s.bulkImportOpen = true
+	s.bulkMu.Unlock()
+
 	s.logger.Warn("datenbank zurückgesetzt (dev-mode)", "deletedEvents", deleted)
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status":        "tabula-rasa",
-		"deletedEvents": deleted,
-		"resetAt":       now.Format(time.RFC3339Nano),
-		"message":       "Supernova! Die Historie ist zu Sternenstaub zerfallen.",
+		"status":         "tabula-rasa",
+		"deletedEvents":  deleted,
+		"resetAt":        now.Format(time.RFC3339Nano),
+		"bulkImportOpen": true,
+		"message":        "Supernova! Die Historie ist zu Sternenstaub zerfallen.",
+	})
+}
+
+// handleDevBulkImportEvents erlaubt Bulk-Import nur im expliziten Startfenster
+// direkt nach Server-Start oder nach /api/v1/dev/reset-database.
+// Sobald das Fenster geschlossen wurde, liefert diese Route 409.
+func (s *Server) handleDevBulkImportEvents(w http.ResponseWriter, r *http.Request) {
+	s.bulkMu.RLock()
+	open := s.bulkImportOpen
+	s.bulkMu.RUnlock()
+	if !open {
+		writeError(w, http.StatusConflict, "bulk-import-fenster ist geschlossen; führe erst dev/reset-database aus")
+		return
+	}
+
+	// gleiche Semantik wie write-events, nur im dev-startfenster erlaubt.
+	var req writeEventsRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if len(req.Events) == 0 {
+		writeError(w, http.StatusBadRequest, "events darf nicht leer sein")
+		return
+	}
+	for i, c := range req.Events {
+		if err := c.Validate(); err != nil {
+			writeError(w, http.StatusBadRequest, "events["+strconv.Itoa(i)+"]: "+err.Error())
+			return
+		}
+	}
+	preconditions, err := s.parsePreconditions(req.Preconditions)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	written, err := s.store.Append(req.Events, preconditions)
+	if err != nil {
+		if errors.Is(err, store.ErrPreconditionFailed) {
+			s.metrics.IncPreconditionFailure()
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+		if errors.Is(err, store.ErrSchemaValidation) {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		s.logger.Error("dev bulk-import fehlgeschlagen", "err", err)
+		writeError(w, http.StatusInternalServerError, "interner fehler beim schreiben")
+		return
+	}
+
+	s.metrics.AddEventsWritten(len(written))
+	s.events.Add(len(written), time.Now().UTC())
+	s.broker.Publish(written)
+	writeNDJSON(w, s.logger, written)
+}
+
+// handleDevCloseBulkImport schließt das Startfenster explizit.
+func (s *Server) handleDevCloseBulkImport(w http.ResponseWriter, r *http.Request) {
+	s.bulkMu.Lock()
+	s.bulkImportOpen = false
+	s.bulkMu.Unlock()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":         "closed",
+		"bulkImportOpen": false,
+		"closedAt":       time.Now().UTC().Format(time.RFC3339Nano),
 	})
 }
 
@@ -527,6 +610,12 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	} else {
 		size, used, free = st.FileBytes, st.UsedBytes, st.FreeBytes
 	}
+	diskFree, diskTotal, err := s.store.DiskUsage()
+	if err != nil {
+		s.logger.Error("disk-usage ermitteln fehlgeschlagen", "err", err)
+		diskFree = -1
+		diskTotal = -1
+	}
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	s.metrics.Write(w, metrics.Gauges{
 		ActiveObservers: s.broker.SubscriberCount(),
@@ -534,6 +623,8 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		DBSizeBytes:     size,
 		DBUsedBytes:     used,
 		DBFreeBytes:     free,
+		DiskFreeBytes:   diskFree,
+		DiskTotalBytes:  diskTotal,
 	})
 }
 
