@@ -1,7 +1,12 @@
 # Web-UI — Machbarkeits- & Scope-Skizze
 
-> Status: **Stufen 1 (Dashboard) + 2 (Live-Event-Viewer) + 3 (Subject-Browser) + 5 (Query-Konsole &amp; Hilfe) + 6 (Sci-Fi-Theme &amp; Telemetrie) + 7 (Event-/Schema-Generator) + 8 (Eventstrom-Dashboard) umgesetzt** · Stufe 4 skizziert.
+> Status: **Stufen 1 (Dashboard) + 2 (Live-Event-Viewer) + 3 (Subject-Browser) + 5 (Query-Konsole &amp; Hilfe) + 6 (Sci-Fi-Theme &amp; Telemetrie) + 7 (Event-/Schema-Generator) + 8 (Eventstrom-Dashboard) umgesetzt** · Stufe 4 (Maintenance-Konsole) zurückgestellt.
 > Zugehörige Entscheidung: **ADR-020** in [`ARCHITECTURE.md`](../ARCHITECTURE.md).
+>
+> **Einordnung:** Dieses Dokument ist die Detail-Sicht zur Roadmap-Stufe
+> **„Stufe 5 — Betriebs-Dashboard / Web-UI"** in [`ARCHITECTURE.md` §6](../ARCHITECTURE.md#6-roadmap--reifegrade-stufenplan).
+> Die hier durchnummerierten „Stufen 1–8" sind die **UI-internen Ausbaustufen**
+> (Reihenfolge der Umsetzung) — nicht zu verwechseln mit den Kern-Reifegraden 0–4.
 
 Ein schlankes Web-UI für **Maintenance, Observing, Monitoring** — ohne Clios
 Kernprinzip („ein abhängigkeitsfreies Single-Binary, alles eingebettet, kein
