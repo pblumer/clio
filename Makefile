@@ -11,7 +11,7 @@ DIST    := dist
 # Zielplattformen für die Cross-Builds (Single-Binary, statisch gelinkt).
 PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64
 
-.PHONY: all build run test race bench cover vet fmt fmt-check lint dist docker clean smoke postman-gen
+.PHONY: all build run test race bench cover vet fmt fmt-check lint dist package docker clean smoke postman-gen
 
 all: lint test build
 
@@ -79,6 +79,30 @@ dist: clean-dist
 			go build -trimpath -ldflags "$(LDFLAGS)" -o $$out $(PKG) || exit 1; \
 	done
 	@echo "fertig: $(DIST)/"
+
+## package: Release-Archive (.tar.gz/.zip) + checksums.txt aus den dist-Binaries
+package: dist
+	@cd $(DIST) && rm -f checksums.txt; \
+	for platform in $(PLATFORMS); do \
+		os=$${platform%/*}; arch=$${platform#*/}; \
+		ext=; [ "$$os" = "windows" ] && ext=.exe; \
+		stage=$(BIN)_$(VERSION)_$${os}_$${arch}; \
+		mkdir -p $$stage; \
+		cp $(BIN)_$${os}_$${arch}$$ext $$stage/$(BIN)$$ext; \
+		cp ../LICENSE ../README.md $$stage/; \
+		if [ "$$os" = "windows" ]; then \
+			zip -qr $$stage.zip $$stage; \
+		else \
+			tar -czf $$stage.tar.gz $$stage; \
+		fi; \
+		rm -rf $$stage $(BIN)_$${os}_$${arch}$$ext; \
+	done; \
+	if command -v sha256sum >/dev/null 2>&1; then \
+		sha256sum $(BIN)_$(VERSION)_*.tar.gz $(BIN)_$(VERSION)_*.zip > checksums.txt; \
+	else \
+		shasum -a 256 $(BIN)_$(VERSION)_*.tar.gz $(BIN)_$(VERSION)_*.zip > checksums.txt; \
+	fi; \
+	echo "fertig: $(DIST)/*.tar.gz, *.zip, checksums.txt"
 
 ## docker: Image bauen
 docker:

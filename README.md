@@ -162,20 +162,42 @@ make postman-gen
 ### Single-Binaries für alle Plattformen
 
 ```bash
-make dist   # statische Binaries nach dist/ (linux/darwin/windows × amd64/arm64)
+make dist      # statische Binaries nach dist/ (linux/darwin/windows × amd64/arm64)
+make package   # zusätzlich als .tar.gz/.zip + checksums.txt verpacken
 ```
 
-Bei einem Git-Tag `vX.Y.Z` baut der Release-Workflow diese Binaries automatisch
-und hängt sie an ein GitHub-Release.
+Bei einem Git-Tag `vX.Y.Z` baut der Release-Workflow die Binaries automatisch,
+verpackt sie pro Plattform als Archiv (`.tar.gz` bzw. `.zip` für Windows, jeweils
+inkl. `LICENSE`/`README.md`), erzeugt eine `checksums.txt` (SHA-256) und hängt
+alles an ein GitHub-Release.
+
+Aus einem Release installieren (Beispiel Linux/amd64):
+
+```bash
+VERSION=v0.1.0
+curl -sSL -O https://github.com/pblumer/clio/releases/download/$VERSION/cliostore_${VERSION}_linux_amd64.tar.gz
+curl -sSL -O https://github.com/pblumer/clio/releases/download/$VERSION/checksums.txt
+sha256sum --check --ignore-missing checksums.txt   # Integrität prüfen
+tar -xzf cliostore_${VERSION}_linux_amd64.tar.gz
+./cliostore_${VERSION}_linux_amd64/cliostore -version
+```
 
 ### Docker
 
+Fertige Multi-Arch-Images (linux/amd64 + arm64) liegen bei jedem Release in der
+GitHub Container Registry:
+
 ```bash
-make docker                       # Image cliostore:<version> bauen
 docker run --rm -p 3000:3000 \
   -e CLIO_API_TOKEN=dein-token \
   -v clio-data:/data \
-  cliostore:latest
+  ghcr.io/pblumer/clio:latest      # oder :v0.1.0
+```
+
+Lokal bauen:
+
+```bash
+make docker                       # Image cliostore:<version> bauen
 ```
 
 Das Image basiert auf `distroless/static` (kein Shell, nonroot-User, statisches
