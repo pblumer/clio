@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -253,7 +254,7 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 		uptime = 0
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	body := map[string]any{
 		"name":             "cliostore",
 		"version":          s.version,
 		"startedAt":        s.startedAt.Format(time.RFC3339Nano),
@@ -264,7 +265,20 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 		"httpListenAddr":   s.cfg.Addr,
 		"databaseFilePath": s.cfg.DBPath,
 		"devMode":          s.devMode,
-	})
+	}
+
+	// Speicherbelegung der DB-Datei inkl. Füllgrad (Datei vs. wiederverwendbarer
+	// freier Platz). Informativ — schlägt das fehl, bleibt /info trotzdem nutzbar.
+	if st, err := s.store.Stats(); err != nil {
+		s.logger.Error("info: db-statistik fehlgeschlagen", "err", err)
+	} else {
+		body["databaseFileBytes"] = st.FileBytes
+		body["databaseUsedBytes"] = st.UsedBytes
+		body["databaseFreeBytes"] = st.FreeBytes
+		body["databaseFillPercent"] = math.Round(st.FillPercent*10) / 10
+	}
+
+	writeJSON(w, http.StatusOK, body)
 }
 
 // handleDevReset setzt die gesamte Datenbank zurück (Tabula rasa) und meldet, wie
@@ -507,16 +521,19 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.logger.Error("events zählen fehlgeschlagen", "err", err)
 	}
-	size, err := s.store.Size()
-	if err != nil {
+	size, used, free := int64(-1), int64(-1), int64(-1)
+	if st, err := s.store.Stats(); err != nil {
 		s.logger.Error("db-größe ermitteln fehlgeschlagen", "err", err)
-		size = -1
+	} else {
+		size, used, free = st.FileBytes, st.UsedBytes, st.FreeBytes
 	}
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	s.metrics.Write(w, metrics.Gauges{
 		ActiveObservers: s.broker.SubscriberCount(),
 		EventsTotal:     count,
 		DBSizeBytes:     size,
+		DBUsedBytes:     used,
+		DBFreeBytes:     free,
 	})
 }
 

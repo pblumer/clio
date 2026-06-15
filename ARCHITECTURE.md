@@ -5,7 +5,7 @@
 >
 > **Status des Gesamtprojekts:** `IN ENTWICKLUNG` — **Stufe 0–3 abgeschlossen** plus **Ed25519-Signaturen** (Authentizität). Write/Read/Observe, Optimistic Concurrency, Hash-Kette + Signaturen (`/verify`, `/public-key`), Event-Typen + JSON-Schemas, Group Commit (`CLIO_SYNC`), Observability (`/metrics`), Distribution (Cross-Builds/Docker/Release), Kompaktierung (`cliostore compact`), OpenAPI/Swagger UI, **CEL-Abfragen (`run-query`, ADR-017) mit Typ-Index (ADR-021)** und ein **eingebettetes Betriebs-Dashboard (`/ui`, ADR-020)**. Offen (Stufe 4): Aggregation/Grouping und Snapshots.
 > **Letzte Aktualisierung:** 2026-06-15
-> **Dokumentversion:** 1.30
+> **Dokumentversion:** 1.31
 
 ---
 
@@ -311,6 +311,7 @@ Unter `GET /ui`, sechs Tabs — jeder für sich nutzbar:
 - **Kontext:** Die Datenbank wächst monoton (Events sind unveränderlich und werden nie gelöscht); zugleich fragmentiert bbolt intern. „Kompaktierung/Rotation" im klassischen Sinn (alte Daten löschen, Retention, Log-Compaction nach Key) widerspricht dem Kernprinzip und würde die Hash-Kette (ADR-012) brechen.
 - **Entscheidung:** Kompaktierung bedeutet ausschließlich **bbolt-Defragmentierung** über `cliostore compact`: die Datei wird offline neu geschrieben (temp-Datei + atomarer Rename) und damit verkleinert/entfragmentiert — **ohne** Events zu löschen oder zu verändern. Der Befehl scheitert bewusst, wenn eine Instanz die Datei hält (Datei-Lock). Die DB-Größe ist als `clio_db_size_bytes` beobachtbar.
 - **Konsequenzen:** Wiedergewinnung von Speicher-Overhead bei voller Erhaltung der Historie (verify bleibt grün). Echte Archivierung/Segmentierung alter Events (Cold Storage, Kette über Segmente) bleibt ein separater, größerer Architektur-Schritt gegen das Single-File-Design — bewusst zurückgestellt.
+- **Nachtrag (Füllgrad-Sichtbarkeit):** `clio_db_size_bytes` ist die **Dateigröße auf der Platte** (`os.Stat`), nicht das Datenvolumen — bbolt vergrößert die Datei, gibt sie aber nie von selbst frei (freie Seiten werden zuerst wiederverwendet; ein Reset, ADR-022, lässt die Größe stehen). Damit der Anteil echter Nutzung sichtbar ist, liefert `store.Stats()` aus der bbolt-Freelist zusätzlich **belegt/frei/Füllgrad**, ausgelagert über `/api/v1/info` (`databaseFileBytes`/`databaseUsedBytes`/`databaseFreeBytes`/`databaseFillPercent`) und die Gauges `clio_db_used_bytes`/`clio_db_free_bytes`. Das Dashboard (ADR-020) zeigt einen Füllbalken; die echte Wachstumsgrenze bleibt der Plattenplatz, freier Anteil ist per `compact` rückgewinnbar.
 
 ### ADR-016: Ed25519-Signaturen für Authentizität
 - **Status:** Akzeptiert

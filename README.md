@@ -98,7 +98,8 @@ Build-Step/CDN:
     ab der zuletzt gesehenen ID) — gleiches gilt für den Live-Events-Tab.
     Dazu **Live-Telemetrie-Charts**
     (CPU-Last, Heap-Speicher, Event-Durchsatz, Request-Rate als glühende
-    Sparklines) sowie Events total, DB-Größe, aktive Observer, Uptime und
+    Sparklines) sowie Events total, DB-Größe (mit **Füllgrad-Balken**: belegt
+    vs. wiederverwendbarer freier Platz), aktive Observer, Uptime und
     Latenz (p50/p99) mit wählbarem Auto-Refresh; liest `/api/v1/info` und
     `/metrics` derselben Instanz.
   - **Live-Events** — streamt `GET /api/v1/events/<subject>?watch=true`
@@ -485,15 +486,29 @@ curl http://127.0.0.1:3000/metrics
 Enthalten u. a.: `clio_http_requests_total{method,route,status}`,
 `clio_http_request_duration_seconds` (Histogramm), `clio_events_written_total`,
 `clio_precondition_failures_total`, `clio_active_observers`, `clio_events_total`,
-`clio_db_size_bytes`. Laufzeit-Metriken: `clio_memory_heap_bytes`,
+`clio_db_size_bytes` (Dateigröße) samt `clio_db_used_bytes`/`clio_db_free_bytes`
+(belegt/wiederverwendbar). Laufzeit-Metriken: `clio_memory_heap_bytes`,
 `clio_memory_sys_bytes`, `clio_goroutines`, `clio_num_cpu` und —
 plattformabhängig (Linux/macOS via getrusage) — `clio_process_cpu_seconds_total`.
 
-### Wartung: Kompaktierung
+### Wartung: Kompaktierung & DB-Füllgrad
 
-Die Datenbank wächst monoton (Events sind unveränderlich). `compact`
-defragmentiert die bbolt-Datei **offline** (atomarer Swap), ohne Events zu
-löschen oder zu verändern — die Hash-Kette bleibt gültig:
+Die angezeigte **DB-Größe** ist die **Dateigröße auf der Platte** (`os.Stat`),
+nicht das Datenvolumen. bbolt vergrößert die Datei bei Bedarf, gibt sie aber
+**nie von selbst frei** — freie Seiten (etwa nach einem Dev-Reset) werden zuerst
+wiederverwendet, die Datei wächst also erst wieder, wenn die Nutzdaten die
+bisherige Größe übersteigen. Deshalb „bleibt" die Größe nach einem Reset stehen,
+obwohl kaum Events vorhanden sind.
+
+Wie viel der Datei tatsächlich belegt ist, zeigt der **Füllgrad**: `/api/v1/info`
+liefert `databaseFileBytes` / `databaseUsedBytes` / `databaseFreeBytes` /
+`databaseFillPercent`, als Prometheus-Gauges `clio_db_used_bytes` /
+`clio_db_free_bytes`. Im **Dashboard** stellt die Karte „DB-Größe" das als
+Füllbalken dar (belegt vs. wiederverwendbar). Die echte Wachstumsgrenze ist der
+**Plattenplatz**; freien Anteil gewinnst du mit `compact` zurück.
+
+`compact` defragmentiert die bbolt-Datei **offline** (atomarer Swap), ohne
+Events zu löschen oder zu verändern — die Hash-Kette bleibt gültig:
 
 ```bash
 # Server vorher stoppen (der Befehl scheitert sonst am Datei-Lock)

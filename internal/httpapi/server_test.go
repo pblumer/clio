@@ -108,6 +108,21 @@ func TestInfoEndpoint(t *testing.T) {
 	if _, ok := body["eventsTotal"]; !ok {
 		t.Fatalf("eventsTotal fehlt")
 	}
+
+	// DB-Speicherbelegung inkl. Füllgrad ist enthalten und plausibel.
+	file, ok := body["databaseFileBytes"].(float64)
+	if !ok || file <= 0 {
+		t.Fatalf("databaseFileBytes fehlt/unplausibel: %v", body["databaseFileBytes"])
+	}
+	used, _ := body["databaseUsedBytes"].(float64)
+	free, _ := body["databaseFreeBytes"].(float64)
+	if used+free != file {
+		t.Fatalf("used(%v)+free(%v) != file(%v)", used, free, file)
+	}
+	fill, ok := body["databaseFillPercent"].(float64)
+	if !ok || fill < 0 || fill > 100 {
+		t.Fatalf("databaseFillPercent fehlt/außerhalb [0,100]: %v", body["databaseFillPercent"])
+	}
 }
 
 func TestWriteEventsAuth(t *testing.T) {
