@@ -338,6 +338,8 @@
           <button id="ev-reset" class="evs-mode" style="display:none" title="Zoom zurücksetzen (Esc / Doppelklick)">⤢ Reset</button>
           <button id="ev-mode-rate" class="evs-mode active" title="Events je Zeitabschnitt">Rate</button>
           <button id="ev-mode-cum" class="evs-mode" title="Kumuliert über die Zeit">Kumuliert</button>
+          <button id="ev-scale-lin" class="evs-mode active" title="Lineare y-Achse">Lin</button>
+          <button id="ev-scale-log" class="evs-mode" title="Logarithmische y-Achse — macht stetige kleine Raten neben Spitzen sichtbar">Log</button>
         </span>
       </div>
       <canvas id="evchart"></canvas>
@@ -912,6 +914,7 @@ const estream = {
   retry: 0, reconnectT: null,    // Backoff-Zähler und Reconnect-Timer
   count: 0,                      // neue Events seit Verbinden (für die Live-Liste)
   mode: "rate",                  // "rate" = Events/Abschnitt, "cum" = kumuliert
+  yscale: "lin",                 // "lin" oder "log" (y-Achse)
   cv: null, ctx: null, w: 0, h: 0, dpr: 1,
   stats: null,                   // Histogramm aus /api/v1/event-stats
   statsAt: 0,                    // letzter Abruf (ms) — drosselt Live-Refetch
@@ -974,6 +977,10 @@ function drawEvChart() {
     times[i] = startMs + (i + 0.5) * bucketMs;
   }
 
+  // y-Transform: bei Log werden Werte als log10(v+1) abgebildet (0 bleibt 0),
+  // damit ein stetiger kleiner Strom neben hohen Spitzen sichtbar wird. Die
+  // y-Domäne (yd0/yd1) und der Zoom leben durchgehend in DIESEM transformierten
+  // Raum; Achsenbeschriftung/Peak rechnen per evInv in echte Werte zurück.
   // Domänen: x = Zeit, y = Wert. Ohne Zoom volle Zeit und y von 0 bis zum
   // sichtbaren Maximum; mit Zoom der gewählte Ausschnitt.
   const z = estream.zoom;
@@ -981,10 +988,14 @@ function drawEvChart() {
   const xd1 = z ? z.x1 : fullEndMs;
   let yd0, yd1;
   if (z) { yd0 = z.y0; yd1 = z.y1; }
-  else { yd0 = 0; yd1 = 1; for (let i = 0; i < N; i++) if (times[i] >= xd0 && times[i] <= xd1 && vals[i] > yd1) yd1 = vals[i]; }
+  else {
+    let maxV = 0;
+    for (let i = 0; i < N; i++) if (times[i] >= xd0 && times[i] <= xd1 && vals[i] > maxV) maxV = vals[i];
+    yd0 = 0; yd1 = evTf(Math.max(1, maxV));
+  }
   const xSpan = Math.max(1, xd1 - xd0), ySpan = Math.max(1e-9, yd1 - yd0);
   const X = (t) => padL + (t - xd0) / xSpan * plotW;
-  const Y = (v) => padT + plotH - (v - yd0) / ySpan * plotH;
+  const Y = (v) => padT + plotH - (evTf(v) - yd0) / ySpan * plotH;
 
   // Linie + Fläche, auf den Plotbereich geclippt (gezoomte Werte liegen außerhalb).
   ctx.save();
@@ -999,7 +1010,7 @@ function drawEvChart() {
   // Achsenbeschriftung
   ctx.fillStyle = "#8b93a7"; ctx.font = "10px ui-monospace, Menlo, monospace";
   ctx.textAlign = "right"; ctx.textBaseline = "middle";
-  ctx.fillText(fmtInt(Math.round(yd1)), padL - 6, padT + 6); ctx.fillText(fmtInt(Math.round(yd0)), padL - 6, padT + plotH);
+  ctx.fillText(fmtInt(Math.round(evInv(yd1))), padL - 6, padT + 6); ctx.fillText(fmtInt(Math.round(evInv(yd0))), padL - 6, padT + plotH);
   ctx.textBaseline = "alphabetic";
   ctx.textAlign = "left"; ctx.fillText(evClock(xd0), padL, H - 6);
   ctx.textAlign = "right"; ctx.fillText(evClock(xd1), padL + plotW, H - 6);
@@ -1014,8 +1025,8 @@ function drawEvChart() {
 
   estream.geom = { padL, padT, plotW, plotH, xd0, xd1, yd0, yd1 };
   if (peak) {
-    const base = estream.mode === "cum" ? "kumuliert" : "max " + fmtInt(Math.round(yd1)) + " / Abschnitt · " + Math.round(bucketMs / 1000) + "s";
-    peak.textContent = base + (z ? " · 🔍 gezoomt (Esc)" : " · ziehen zum Zoomen");
+    const base = estream.mode === "cum" ? "kumuliert" : "max " + fmtInt(Math.round(evInv(yd1))) + " / Abschnitt · " + Math.round(bucketMs / 1000) + "s";
+    peak.textContent = base + (estream.yscale === "log" ? " · log" : "") + (z ? " · 🔍 gezoomt (Esc)" : " · ziehen zum Zoomen");
   }
 }
 
@@ -1133,11 +1144,23 @@ function scheduleEventReconnect(token) {
   estream.reconnectT = setTimeout(() => { if (estream.active) runEventStream(token); }, delay);
 }
 
+// evTf/evInv transformieren Werte für die y-Achse (Identität bei "lin",
+// log10(v+1) bei "log" — 0 bleibt 0, große Spitzen werden gestaucht).
+function evTf(v) { return estream.yscale === "log" ? Math.log10(v + 1) : v; }
+function evInv(u) { return estream.yscale === "log" ? Math.pow(10, u) - 1 : u; }
+
 function setEvMode(mode) {
   estream.mode = mode;
   estream.zoom = null; // Rate/kumuliert haben andere y-Skalen -> Zoom verwerfen
   $("ev-mode-rate").classList.toggle("active", mode === "rate");
   $("ev-mode-cum").classList.toggle("active", mode === "cum");
+  drawEvChart();
+}
+function setEvScale(scale) {
+  estream.yscale = scale;
+  estream.zoom = null; // y-Domäne wechselt den Raum -> Zoom verwerfen
+  $("ev-scale-lin").classList.toggle("active", scale === "lin");
+  $("ev-scale-log").classList.toggle("active", scale === "log");
   drawEvChart();
 }
 function resetEvZoom() { if (!estream.zoom && !estream.sel) return; estream.zoom = null; estream.sel = null; drawEvChart(); }
@@ -1188,6 +1211,8 @@ function initEventStream() {
   evResize();
   $("ev-mode-rate").addEventListener("click", () => setEvMode("rate"));
   $("ev-mode-cum").addEventListener("click", () => setEvMode("cum"));
+  $("ev-scale-lin").addEventListener("click", () => setEvScale("lin"));
+  $("ev-scale-log").addEventListener("click", () => setEvScale("log"));
   const toggle = () => setDashLiveCollapsed(!$("dash-live").classList.contains("collapsed"));
   $("ev-collapse").addEventListener("click", toggle);
   $("ev-collapse").addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } });
