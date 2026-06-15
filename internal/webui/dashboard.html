@@ -1088,13 +1088,18 @@ async function startEventStream() {
 // höchste gesehene ID + 1 setzt lückenlos und ohne Dubletten fort — genau der
 // im Broker dokumentierte Reconnect, den das Dashboard bisher nicht umsetzte.
 async function runEventStream(token) {
-  estream.ctrl = new AbortController();
+  // Vorherige Verbindung sicher schließen, bevor eine neue geöffnet wird —
+  // sonst leakt bei einem erneuten Aufruf (z. B. visibilitychange) die alte
+  // Observe-Verbindung und belegt einen der ~6 Browser-Connection-Slots.
+  if (estream.ctrl) estream.ctrl.abort();
+  const ctrl = new AbortController(); estream.ctrl = ctrl;
   const lower = estream.lastId != null ? estream.lastId + 1 : null;
   try {
     const url = "/api/v1/events?watch=true&recursive=true" + (lower != null ? "&lowerBound=" + lower : "");
     const res = await fetch(url, {
-      headers: { Authorization: "Bearer " + token }, signal: estream.ctrl.signal, cache: "no-store",
+      headers: { Authorization: "Bearer " + token }, signal: ctrl.signal, cache: "no-store",
     });
+    if (ctrl.signal.aborted) return; // zwischenzeitlich durch einen neueren Lauf ersetzt
     if (res.status === 401) { stopEventStream(); $("dash-events").innerHTML = '<div class="empty">Token ungültig (401).</div>'; return; }
     if (!res.ok || !res.body) throw new Error("HTTP " + res.status);
     estream.connected = true; estream.retry = 0; // erfolgreiche Verbindung -> Backoff zurücksetzen
@@ -1110,11 +1115,12 @@ async function runEventStream(token) {
       }
     }
   } catch (e) {
-    if (e.name === "AbortError" || !estream.active) return; // manuell gestoppt
+    if (e.name === "AbortError" || !estream.active) return; // manuell gestoppt/ersetzt
   } finally {
-    estream.connected = false;
+    if (estream.ctrl === ctrl) estream.connected = false;
   }
-  if (estream.active) scheduleEventReconnect(token); // Abriss -> erneut verbinden
+  // Nur der jeweils aktuelle Lauf plant einen Reconnect (kein Timer-Stapeln).
+  if (estream.active && estream.ctrl === ctrl) scheduleEventReconnect(token);
 }
 
 function scheduleEventReconnect(token) {
@@ -1473,13 +1479,17 @@ function startLive() {
 // automatisch neu. Erstverbindung ohne lowerBound (zeigt zuerst die History);
 // jeder Reconnect setzt ab der höchsten gesehenen ID + 1 fort (keine Dubletten).
 async function runLive(token) {
-  live.ctrl = new AbortController();
+  // Wie beim Dashboard-Ticker: alte Verbindung schließen, bevor eine neue
+  // geöffnet wird — sonst leakt sie und belegt einen Browser-Connection-Slot.
+  if (live.ctrl) live.ctrl.abort();
+  const ctrl = new AbortController(); live.ctrl = ctrl;
   let url = buildPath();
   if (live.lastId != null) url += "&lowerBound=" + (live.lastId + 1);
   try {
     const res = await fetch(url, {
-      headers: { Authorization: "Bearer " + token }, signal: live.ctrl.signal, cache: "no-store",
+      headers: { Authorization: "Bearer " + token }, signal: ctrl.signal, cache: "no-store",
     });
+    if (ctrl.signal.aborted) return; // durch einen neueren Lauf ersetzt
     if (res.status === 401) { liveStatus("err", "Token ungültig (401)"); stopLive(); return; }
     if (!res.ok || !res.body) throw new Error("HTTP " + res.status);
     live.connected = true; live.retry = 0;
@@ -1498,11 +1508,11 @@ async function runLive(token) {
       }
     }
   } catch (e) {
-    if (e.name === "AbortError" || !live.active) return; // manuell gestoppt
+    if (e.name === "AbortError" || !live.active) return; // manuell gestoppt/ersetzt
   } finally {
-    live.connected = false;
+    if (live.ctrl === ctrl) live.connected = false;
   }
-  if (live.active) scheduleLiveReconnect(token); // Abriss -> erneut verbinden
+  if (live.active && live.ctrl === ctrl) scheduleLiveReconnect(token); // Abriss -> erneut verbinden
 }
 
 function scheduleLiveReconnect(token) {
