@@ -377,7 +377,10 @@ Events gilt als „kein Treffer".
 > `run-query` einen **Typ-Index** und lädt nur die passenden Events statt den
 > ganzen Scope zu scannen — schnell auch über Hunderttausende Events (ADR-021).
 > Lässt sich der Typ nicht sicher eingrenzen (z. B. `!=` oder ein `||` mit
-> unbeschränkter Seite), wird vollständig gescannt.
+> unbeschränkter Seite), wird vollständig gescannt. Bei engem `subject` plus
+> Typ-Filter wählt `run-query` zudem **kostenbasiert** den selektiveren von
+> Subject- und Typ-Index (ADR-023) — ein enger Stream wird also nicht durch
+> einen DB-weiten Typ-Scan ausgebremst.
 
 #### Projektion (`select`)
 

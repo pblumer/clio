@@ -997,12 +997,32 @@ func (s *Server) handleRunQuery(w http.ResponseWriter, r *http.Request) {
 	case typeBounded && len(reqTypes) == 0:
 		// Kein Typ kann das Prädikat erfüllen → leeres Ergebnis (kein Scan).
 	case typeBounded:
-		scanErr = s.store.ReadByTypesFunc(reqTypes, opts, func(ev event.Event) bool {
-			if !store.MatchSubject(ev.Subject, req.Subject, req.Recursive) {
-				return true
+		// Kostenbasierte Index-Wahl (ADR-023): den selektiveren von Typ- und
+		// Subject-Index wählen. Beide Pfade liefern dasselbe Ergebnis; nur die
+		// Kosten (Anzahl angefasster Events) unterscheiden sich.
+		typeCost, errT := s.store.CountByTypes(reqTypes)
+		subjCost, errS := s.store.CountSubject(req.Subject, req.Recursive)
+		if errT == nil && errS == nil && subjCost < typeCost {
+			// Subject-Index günstiger: Teilbaum scannen, Typ-Filter einschieben.
+			optsT := opts
+			optsT.Types = reqTypes
+			var events []event.Event
+			events, scanErr = s.store.Read(req.Subject, req.Recursive, optsT)
+			for _, ev := range events {
+				if !collect(ev) {
+					break
+				}
 			}
-			return collect(ev)
-		})
+		} else {
+			// Typ-Index günstiger (oder Kostenschätzung fehlgeschlagen → sicherer
+			// Default): nur die geforderten Typen laden, Subject nachfiltern.
+			scanErr = s.store.ReadByTypesFunc(reqTypes, opts, func(ev event.Event) bool {
+				if !store.MatchSubject(ev.Subject, req.Subject, req.Recursive) {
+					return true
+				}
+				return collect(ev)
+			})
+		}
 	default:
 		// Kein sicherer Typ-Filter → vollständiger Scan des Scopes.
 		var events []event.Event

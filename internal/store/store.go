@@ -35,6 +35,7 @@ var (
 	bucketTypeIdx    = []byte("type_idx")
 	bucketMeta       = []byte("meta")
 	bucketTypes      = []byte("types")
+	bucketSubjCount  = []byte("subj_count")
 	bucketSchemas    = []byte("schemas")
 )
 
@@ -164,7 +165,7 @@ func OpenWithOptions(path string, opts Options) (*Store, error) {
 	}
 
 	err = db.Update(func(tx *bolt.Tx) error {
-		for _, name := range [][]byte{bucketEvents, bucketSubjectIdx, bucketTypeIdx, bucketMeta, bucketTypes, bucketSchemas} {
+		for _, name := range [][]byte{bucketEvents, bucketSubjectIdx, bucketTypeIdx, bucketMeta, bucketTypes, bucketSubjCount, bucketSchemas} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return err
 			}
@@ -180,7 +181,12 @@ func OpenWithOptions(path string, opts Options) (*Store, error) {
 		// Ebenso den Typ-Index (Typ → Event-Sequenzen) einmalig nachbauen, wenn
 		// er leer ist, aber Events existieren (für Stores aus der Zeit vor dem
 		// Index). Beschleunigt Typ-Filter in run-query auf Index-Geschwindigkeit.
-		return backfillTypeIdx(tx)
+		if err := backfillTypeIdx(tx); err != nil {
+			return err
+		}
+		// Und die Subject-Zähler (Subject → Anzahl) für die kostenbasierte
+		// Index-Wahl in run-query (ADR-023) — ebenfalls idempotenter Backfill.
+		return backfillSubjCount(tx)
 	})
 	if err != nil {
 		_ = db.Close()
@@ -268,6 +274,57 @@ func (s *Store) Count() (uint64, error) {
 		return nil
 	})
 	return n, err
+}
+
+// CountByTypes liefert die Gesamtzahl der Events über die angegebenen Typen
+// (Summe der Typ-Zähler, O(len(types))). Grundlage der kostenbasierten
+// Index-Wahl in run-query (ADR-023): die Kosten eines Typ-Index-Scans.
+func (s *Store) CountByTypes(types []string) (uint64, error) {
+	var total uint64
+	err := s.db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket(bucketTypes)
+		for _, t := range types {
+			if v := b.Get([]byte(t)); len(v) == 8 {
+				total += binary.BigEndian.Uint64(v)
+			}
+		}
+		return nil
+	})
+	return total, err
+}
+
+// CountSubject liefert die Anzahl der Events im Subject-Scope (exakt) — die
+// Kosten eines Subject-Index-Scans für die Index-Wahl (ADR-023). Über den
+// subj_count-Bucket ist das günstig: Wurzel = O(1) (Gesamtzahl), nicht-rekursiv
+// = ein Lookup, rekursiv = O(distinkte Subjects im Teilbaum) statt O(Events).
+// Prefix-Geschwister (z. B. /booksstore zu /books) werden via MatchSubject
+// ausgeschlossen.
+func (s *Store) CountSubject(subject string, recursive bool) (uint64, error) {
+	if subject == "/" {
+		return s.Count() // Wurzel = alle Events
+	}
+	var total uint64
+	err := s.db.View(func(tx *bolt.Tx) error {
+		subjc := tx.Bucket(bucketSubjCount)
+		if !recursive {
+			if v := subjc.Get([]byte(subject)); len(v) == 8 {
+				total = binary.BigEndian.Uint64(v)
+			}
+			return nil
+		}
+		prefix := []byte(subject)
+		c := subjc.Cursor()
+		for k, v := c.Seek(prefix); k != nil && hasPrefix(k, prefix); k, v = c.Next() {
+			if !MatchSubject(string(k), subject, true) {
+				continue
+			}
+			if len(v) == 8 {
+				total += binary.BigEndian.Uint64(v)
+			}
+		}
+		return nil
+	})
+	return total, err
 }
 
 // ForEachEventTime ruft fn für jedes gespeicherte Event mit dessen Zeitstempel
@@ -530,6 +587,40 @@ func incrTypeCount(types *bolt.Bucket, t string) error {
 	return types.Put([]byte(t), buf[:])
 }
 
+// incrSubjectCount erhöht den Event-Zähler eines Subjects im subj_count-Bucket
+// (für die kostenbasierte Index-Wahl in run-query, ADR-023).
+func incrSubjectCount(subjc *bolt.Bucket, subject string) error {
+	var cnt uint64
+	if v := subjc.Get([]byte(subject)); len(v) == 8 {
+		cnt = binary.BigEndian.Uint64(v)
+	}
+	var buf [8]byte
+	binary.BigEndian.PutUint64(buf[:], cnt+1)
+	return subjc.Put([]byte(subject), buf[:])
+}
+
+// backfillSubjCount rekonstruiert die Subject-Zähler aus den vorhandenen Events,
+// falls der subj_count-Bucket leer ist, aber bereits Events existieren (Stores
+// aus der Zeit vor dem Zähler). Idempotent — sonst passiert nichts.
+func backfillSubjCount(tx *bolt.Tx) error {
+	subjc := tx.Bucket(bucketSubjCount)
+	if k, _ := subjc.Cursor().First(); k != nil {
+		return nil // bereits gepflegt
+	}
+	evts := tx.Bucket(bucketEvents)
+	c := evts.Cursor()
+	for k, v := c.First(); k != nil; k, v = c.Next() {
+		var ev event.Event
+		if err := json.Unmarshal(v, &ev); err != nil {
+			return fmt.Errorf("event für subj-count-backfill dekodieren: %w", err)
+		}
+		if err := incrSubjectCount(subjc, ev.Subject); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // Append prüft die Preconditions und speichert anschließend eine oder mehrere
 // Candidates atomar (alles-oder-nichts). Schlägt eine Precondition fehl, wird
 // nichts geschrieben und ein in ErrPreconditionFailed gehüllter Fehler
@@ -556,6 +647,7 @@ func (s *Store) Append(candidates []event.Candidate, preconditions []Preconditio
 		tidx := tx.Bucket(bucketTypeIdx)
 		meta := tx.Bucket(bucketMeta)
 		types := tx.Bucket(bucketTypes)
+		subjc := tx.Bucket(bucketSubjCount)
 
 		// Kopf der Hash-Kette lesen (Genesis, falls leer). Innerhalb einer
 		// (Group-Commit-)Transaktion sehen Folgeschreiber den aktualisierten
@@ -621,6 +713,9 @@ func (s *Store) Append(candidates []event.Candidate, preconditions []Preconditio
 				return err
 			}
 			if err := incrTypeCount(types, c.Type); err != nil {
+				return err
+			}
+			if err := incrSubjectCount(subjc, c.Subject); err != nil {
 				return err
 			}
 
