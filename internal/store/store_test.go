@@ -591,6 +591,99 @@ func openTemp(t *testing.T) *Store {
 	return st
 }
 
+func TestCountByTypes(t *testing.T) {
+	st := openTemp(t)
+	appendAll(t, st,
+		event.Candidate{Source: "s", Subject: "/a", Type: "placed"},
+		event.Candidate{Source: "s", Subject: "/b", Type: "placed"},
+		event.Candidate{Source: "s", Subject: "/c", Type: "cancelled"},
+	)
+	if n, err := st.CountByTypes([]string{"placed"}); err != nil || n != 2 {
+		t.Fatalf("CountByTypes(placed) = %d, %v; want 2", n, err)
+	}
+	if n, _ := st.CountByTypes([]string{"placed", "cancelled"}); n != 3 {
+		t.Fatalf("CountByTypes(placed,cancelled) = %d, want 3", n)
+	}
+	if n, _ := st.CountByTypes([]string{"unbekannt"}); n != 0 {
+		t.Fatalf("CountByTypes(unbekannt) = %d, want 0", n)
+	}
+	if n, _ := st.CountByTypes(nil); n != 0 {
+		t.Fatalf("CountByTypes(nil) = %d, want 0", n)
+	}
+}
+
+func TestCountSubject(t *testing.T) {
+	st := openTemp(t)
+	appendAll(t, st,
+		event.Candidate{Source: "s", Subject: "/books/42", Type: "a"},
+		event.Candidate{Source: "s", Subject: "/books/42", Type: "b"},
+		event.Candidate{Source: "s", Subject: "/books/99", Type: "a"},
+		event.Candidate{Source: "s", Subject: "/booksstore", Type: "x"}, // Prefix-Geschwister
+		event.Candidate{Source: "s", Subject: "/movies/7", Type: "y"},
+	)
+	tests := []struct {
+		subject   string
+		recursive bool
+		want      uint64
+	}{
+		{"/", true, 5},            // Wurzel = alle Events
+		{"/books", true, 3},       // /books/42 (2) + /books/99 (1), ohne /booksstore
+		{"/books/42", false, 2},   // exaktes Subject
+		{"/books/42", true, 2},    // Blatt, rekursiv = gleich
+		{"/booksstore", false, 1}, // Geschwister selbst
+		{"/movies", true, 1},      // /movies/7
+		{"/nope", true, 0},        // kein Treffer
+	}
+	for _, tt := range tests {
+		got, err := st.CountSubject(tt.subject, tt.recursive)
+		if err != nil {
+			t.Fatalf("CountSubject(%q,%v): %v", tt.subject, tt.recursive, err)
+		}
+		if got != tt.want {
+			t.Fatalf("CountSubject(%q,%v) = %d, want %d", tt.subject, tt.recursive, got, tt.want)
+		}
+	}
+}
+
+func TestSubjCountBackfill(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	st, err := Open(path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	appendAll(t, st,
+		event.Candidate{Source: "s", Subject: "/books/42", Type: "a"},
+		event.Candidate{Source: "s", Subject: "/books/42", Type: "b"},
+		event.Candidate{Source: "s", Subject: "/movies/7", Type: "y"},
+	)
+	// Alt-DB simulieren: subj_count-Bucket leeren (als gäbe es ihn noch nicht).
+	if err := st.db.Update(func(tx *bolt.Tx) error {
+		if err := tx.DeleteBucket(bucketSubjCount); err != nil {
+			return err
+		}
+		_, err := tx.CreateBucketIfNotExists(bucketSubjCount)
+		return err
+	}); err != nil {
+		t.Fatalf("subj_count leeren: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	// Reopen -> backfillSubjCount rekonstruiert die Zähler aus der Historie.
+	st2, err := Open(path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	t.Cleanup(func() { _ = st2.Close() })
+	if n, _ := st2.CountSubject("/books", true); n != 2 {
+		t.Fatalf("nach Backfill CountSubject(/books) = %d, want 2", n)
+	}
+	if n, _ := st2.CountSubject("/movies/7", false); n != 1 {
+		t.Fatalf("nach Backfill CountSubject(/movies/7) = %d, want 1", n)
+	}
+}
+
 func errorsIsPrecondition(err error) bool {
 	return errors.Is(err, ErrPreconditionFailed)
 }

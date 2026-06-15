@@ -206,6 +206,45 @@ func TestWriteThenReadRoundTrip(t *testing.T) {
 	}
 }
 
+// TestRunQueryIndexChoice prüft, dass die kostenbasierte Index-Wahl (ADR-023)
+// in beiden Konstellationen — enges Subject (Subject-Index günstiger) und
+// breiter Scope (Typ-Index günstiger) — dasselbe korrekte Ergebnis liefert.
+func TestRunQueryIndexChoice(t *testing.T) {
+	srv := newTestServer(t)
+	// Viele 'placed' verteilt über die DB, plus ein enges Subject mit gemischten
+	// Typen. Bei subject=/orders/42 ist der Subject-Index klar selektiver als der
+	// (DB-weite) Typ-Index für 'placed'.
+	events := `{"events":[`
+	for i := 0; i < 30; i++ {
+		events += `{"source":"s","subject":"/bulk/` + strconv.Itoa(i) + `","type":"placed"},`
+	}
+	events += `
+		{"source":"s","subject":"/orders/42","type":"placed","data":{"amount":250}},
+		{"source":"s","subject":"/orders/42","type":"cancelled"},
+		{"source":"s","subject":"/orders/42","type":"placed","data":{"amount":10}}
+	]}`
+	do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token", events)
+
+	// Enges Subject + Typ-Constraint -> Subject-Index-Pfad. Genau die zwei
+	// 'placed' unter /orders/42.
+	rec := do(t, srv, http.MethodPost, "/api/v1/run-query", "secret-token",
+		`{"subject":"/orders/42","recursive":true,"where":"event.type == 'placed'"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; %s", rec.Code, rec.Body.String())
+	}
+	got := idsOfEvents(decodeNDJSON(t, rec.Body.String()))
+	if len(got) != 2 || got[0] != "31" || got[1] != "33" {
+		t.Fatalf("enges subject: ids = %v, want [31 33]", got)
+	}
+
+	// Breiter Scope (Wurzel) + Typ-Constraint -> Typ-Index-Pfad. Alle 'placed'.
+	rec = do(t, srv, http.MethodPost, "/api/v1/run-query", "secret-token",
+		`{"subject":"/","recursive":true,"where":"event.type == 'placed'"}`)
+	if n := len(decodeNDJSON(t, rec.Body.String())); n != 32 {
+		t.Fatalf("breiter scope: %d treffer, want 32", n)
+	}
+}
+
 func TestRunQuery(t *testing.T) {
 	srv := newTestServer(t)
 	do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token",
