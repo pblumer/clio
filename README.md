@@ -186,6 +186,7 @@ persistieren).
 | `CLIO_DB_PATH`    | nein    | `clio.db`  | Pfad zur bbolt-Datenbankdatei      |
 | `CLIO_SYNC`       | nein    | `group`    | Schreibstrategie: `group`/`always`/`off` (siehe Performance) |
 | `CLIO_SIGNING_KEY`| nein    | —          | base64-Ed25519-Schlüssel; aktiviert Event-Signaturen        |
+| `CLIO_DEV_MODE`   | nein    | `false`    | Dev-Mode (truthy, z. B. `1`/`true`): schaltet den destruktiven DB-Reset `POST /api/v1/dev/reset-database` und die „Dev-Zone" im Dashboard frei. **Nicht in Produktion** (siehe ADR-022). |
 
 ### Fehlerformat
 

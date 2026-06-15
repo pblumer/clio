@@ -82,3 +82,44 @@ func TestFromEnvSyncInvalid(t *testing.T) {
 		t.Fatal("erwartete fehler bei ungültigem CLIO_SYNC, bekam nil")
 	}
 }
+
+func TestFromEnvDevModeDefaultsOff(t *testing.T) {
+	t.Setenv(envToken, "tok")
+	t.Setenv(envDevMode, "")
+
+	cfg, err := FromEnv()
+	if err != nil {
+		t.Fatalf("unerwarteter fehler: %v", err)
+	}
+	if cfg.DevMode {
+		t.Error("DevMode = true, want false ohne CLIO_DEV_MODE")
+	}
+}
+
+func TestFromEnvDevMode(t *testing.T) {
+	on := []string{"1", "t", "true", "TRUE"}
+	for _, v := range on {
+		t.Setenv(envToken, "tok")
+		t.Setenv(envDevMode, v)
+		cfg, err := FromEnv()
+		if err != nil {
+			t.Fatalf("dev-mode %q: unerwarteter fehler: %v", v, err)
+		}
+		if !cfg.DevMode {
+			t.Errorf("DevMode = false für CLIO_DEV_MODE=%q, want true", v)
+		}
+	}
+
+	// Unlesbare Werte bleiben sicherheitshalber aus (kein Reset versehentlich frei).
+	for _, v := range []string{"0", "false", "nope"} {
+		t.Setenv(envToken, "tok")
+		t.Setenv(envDevMode, v)
+		cfg, err := FromEnv()
+		if err != nil {
+			t.Fatalf("dev-mode %q: unerwarteter fehler: %v", v, err)
+		}
+		if cfg.DevMode {
+			t.Errorf("DevMode = true für CLIO_DEV_MODE=%q, want false", v)
+		}
+	}
+}
