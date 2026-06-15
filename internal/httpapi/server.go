@@ -33,6 +33,13 @@ import (
 // ndjsonContentType ist der Content-Type für Newline-Delimited JSON.
 const ndjsonContentType = "application/x-ndjson"
 
+// observeHeartbeat ist das Intervall, in dem ein offener observe-Stream eine
+// Leerzeile sendet. Das hält die Verbindung gegen Idle-Timeouts offen und
+// zwingt puffernde Reverse-Proxies (Firmennetze), Daten durchzureichen, statt
+// die nie endende Antwort zurückzuhalten. Der Client ignoriert Leerzeilen.
+// Variable (nicht const), damit Tests das Intervall verkürzen können.
+var observeHeartbeat = 15 * time.Second
+
 // Server kapselt Konfiguration, Storage und Router des HTTP-API-Layers.
 type Server struct {
 	cfg       config.Config
@@ -965,6 +972,9 @@ func (s *Server) doObserve(w http.ResponseWriter, r *http.Request, subject strin
 	}
 
 	w.Header().Set("Content-Type", ndjsonContentType)
+	// Reverse-Proxies (z. B. nginx) nicht puffern lassen — sonst hält der Proxy
+	// den nie endenden Stream zurück und der Client sieht nie Header/Bytes.
+	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
 	enc := json.NewEncoder(w)
 
@@ -984,6 +994,10 @@ func (s *Server) doObserve(w http.ResponseWriter, r *http.Request, subject strin
 	}
 	flusher.Flush()
 
+	// Heartbeat: hält die Verbindung offen und stupst puffernde Proxies an.
+	beat := time.NewTicker(observeHeartbeat)
+	defer beat.Stop()
+
 	ctx := r.Context()
 	for {
 		select {
@@ -991,6 +1005,11 @@ func (s *Server) doObserve(w http.ResponseWriter, r *http.Request, subject strin
 			return
 		case <-sub.Lost:
 			return
+		case <-beat.C:
+			if _, err := w.Write([]byte("\n")); err != nil {
+				return
+			}
+			flusher.Flush()
 		case ev := <-sub.Events:
 			id, perr := strconv.ParseUint(ev.ID, 10, 64)
 			if perr != nil || id <= lastID {

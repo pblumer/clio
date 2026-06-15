@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pblumer/clio/internal/config"
 	"github.com/pblumer/clio/internal/event"
@@ -1342,6 +1343,55 @@ func TestObserveEventsHistoryAndLive(t *testing.T) {
 	}
 	if live.ID != "4" {
 		t.Fatalf("live id = %q, want 4", live.ID)
+	}
+}
+
+// TestObserveSendsHeartbeat: ein offener observe-Stream ohne neue Events sendet
+// periodisch eine Heartbeat-Leerzeile und setzt den Anti-Buffering-Header — das
+// hält die Verbindung hinter puffernden/idle-killenden Proxies am Leben.
+func TestObserveSendsHeartbeat(t *testing.T) {
+	old := observeHeartbeat
+	observeHeartbeat = 20 * time.Millisecond
+	defer func() { observeHeartbeat = old }()
+
+	srv := newTestServer(t)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, ts.URL+"/api/v1/observe-events",
+		strings.NewReader(`{"subject":"/hb"}`))
+	req.Header.Set("Authorization", "Bearer secret-token")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("observe-request: %v", err)
+	}
+	defer resp.Body.Close()
+	if got := resp.Header.Get("X-Accel-Buffering"); got != "no" {
+		t.Fatalf("X-Accel-Buffering = %q, want no", got)
+	}
+
+	// Ohne neue Events muss zeitnah eine Heartbeat-Leerzeile eintreffen.
+	type result struct {
+		line []byte
+		err  error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		line, err := bufio.NewReader(resp.Body).ReadBytes('\n')
+		ch <- result{line, err}
+	}()
+	select {
+	case got := <-ch:
+		if got.err != nil {
+			t.Fatalf("heartbeat lesen: %v", got.err)
+		}
+		if strings.TrimSpace(string(got.line)) != "" {
+			t.Fatalf("erwartete Heartbeat-Leerzeile, bekam %q", got.line)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("kein Heartbeat innerhalb 2 s")
 	}
 }
 
