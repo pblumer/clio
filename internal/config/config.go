@@ -28,6 +28,11 @@ type Config struct {
 	// gesetzt, werden Events signiert (Authentizität).
 	SigningKey string
 
+	// Compress aktiviert die transparente DEFLATE-Kompression der gespeicherten
+	// Event-Werte (ADR-024). Default aus; per CLIO_COMPRESS einschaltbar. Wirkt nur
+	// auf neu geschriebene Events — bestehende bleiben lesbar.
+	Compress bool
+
 	// DevMode schaltet Entwickler-Komfort frei, der im Produktivbetrieb nichts zu
 	// suchen hat — allen voran das destruktive Zurücksetzen der Datenbank über
 	// POST /api/v1/dev/reset-database und den dazugehörigen Button im Dashboard
@@ -37,12 +42,13 @@ type Config struct {
 
 // Environment-Variablen, aus denen die Konfiguration gelesen wird.
 const (
-	envAddr    = "CLIO_ADDR"
-	envToken   = "CLIO_API_TOKEN"
-	envDBPath  = "CLIO_DB_PATH"
-	envSync    = "CLIO_SYNC"
-	envSignKey = "CLIO_SIGNING_KEY"
-	envDevMode = "CLIO_DEV_MODE"
+	envAddr     = "CLIO_ADDR"
+	envToken    = "CLIO_API_TOKEN"
+	envDBPath   = "CLIO_DB_PATH"
+	envSync     = "CLIO_SYNC"
+	envSignKey  = "CLIO_SIGNING_KEY"
+	envDevMode  = "CLIO_DEV_MODE"
+	envCompress = "CLIO_COMPRESS"
 
 	defaultAddr   = ":3000"
 	defaultDBPath = "clio.db"
@@ -62,6 +68,7 @@ func FromEnv() (Config, error) {
 		Sync:       getenvDefault(envSync, defaultSync),
 		SigningKey: os.Getenv(envSignKey),
 		DevMode:    parseBoolDefault(envDevMode, false),
+		Compress:   parseBoolDefault(envCompress, false),
 	}
 
 	if cfg.APIToken == "" {
