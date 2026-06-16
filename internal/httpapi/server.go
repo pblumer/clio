@@ -1016,6 +1016,19 @@ func (s *Server) doObserve(w http.ResponseWriter, r *http.Request, subject strin
 	w.WriteHeader(http.StatusOK)
 	enc := json.NewEncoder(w)
 
+	// Sofort ein Body-Byte senden (Blankzeile) und flushen, damit der Client die
+	// offene Verbindung umgehend sieht — auch ohne History und ohne neue Events.
+	// Ohne diesen Anstoß hält ein puffernder Reverse-Proxy die reine Header-Antwort
+	// zurück, bis das erste Body-Byte kommt (sonst erst der Heartbeat nach
+	// observeHeartbeat); ein „nur neue Events"-Observer (lowerBound jenseits der
+	// höchsten ID) bliebe dann bis zum ersten neuen Event in „verbinde …" hängen.
+	// Blankzeilen sind im NDJSON-Stream ohnehin Protokoll (Heartbeat) und werden
+	// klientseitig ignoriert.
+	if _, err := w.Write([]byte("\n")); err != nil {
+		return
+	}
+	flusher.Flush()
+
 	// lastID = höchste bereits ausgelieferte ID. Initial untere Grenze − 1,
 	// damit Live-Events ab lowerBound und nur neuer als die History kommen.
 	var lastID uint64

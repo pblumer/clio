@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -1395,6 +1396,54 @@ func TestObserveEventsHistoryAndLive(t *testing.T) {
 	}
 }
 
+// TestObserveFlushesImmediately: ein observe-Stream ohne History und ohne neue
+// Events quittiert die offene Verbindung SOFORT mit einer Blankzeile — lange
+// bevor der (hier weit entfernte) Heartbeat feuert. Das ist genau der Anstoß, der
+// einen puffernden Reverse-Proxy die Header sofort durchreichen lässt; sonst hängt
+// ein „nur neue Events"-Observer (hohes lowerBound) bis zum ersten Event.
+func TestObserveFlushesImmediately(t *testing.T) {
+	old := observeHeartbeat
+	observeHeartbeat = 30 * time.Second // soll im Test NICHT feuern
+	defer func() { observeHeartbeat = old }()
+
+	srv := newTestServer(t)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// lowerBound jenseits aller (hier: null) Events => keine History, keine Live-Events.
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, ts.URL+"/api/v1/observe-events",
+		strings.NewReader(`{"subject":"/none","lowerBound":"999999"}`))
+	req.Header.Set("Authorization", "Bearer secret-token")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("observe-request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	type result struct {
+		line []byte
+		err  error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		line, err := bufio.NewReader(resp.Body).ReadBytes('\n')
+		ch <- result{line, err}
+	}()
+	select {
+	case got := <-ch:
+		if got.err != nil {
+			t.Fatalf("initiale Zeile lesen: %v", got.err)
+		}
+		if strings.TrimSpace(string(got.line)) != "" {
+			t.Fatalf("erwartete initiale Blankzeile, bekam %q", got.line)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("keine sofortige Verbindungs-Quittung (ohne den initialen Flush hinge der Client bis zum Heartbeat)")
+	}
+}
+
 // TestObserveSendsHeartbeat: ein offener observe-Stream ohne neue Events sendet
 // periodisch eine Heartbeat-Leerzeile und setzt den Anti-Buffering-Header — das
 // hält die Verbindung hinter puffernden/idle-killenden Proxies am Leben.
@@ -1492,15 +1541,23 @@ func writeViaHTTP(t *testing.T, baseURL, body string) {
 
 func readStreamEvent(t *testing.T, r *bufio.Reader) event.Event {
 	t.Helper()
-	line, err := r.ReadBytes('\n')
-	if err != nil {
-		t.Fatalf("stream-zeile lesen: %v", err)
+	// Blankzeilen überspringen: der Stream beginnt mit einer Verbindungs-Quittung
+	// und sendet periodische Heartbeat-Leerzeilen (beides Protokoll, vom Client
+	// ignoriert).
+	for {
+		line, err := r.ReadBytes('\n')
+		if err != nil {
+			t.Fatalf("stream-zeile lesen: %v", err)
+		}
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
+		}
+		var ev event.Event
+		if err := json.Unmarshal(line, &ev); err != nil {
+			t.Fatalf("stream-zeile dekodieren: %v (%q)", err, line)
+		}
+		return ev
 	}
-	var ev event.Event
-	if err := json.Unmarshal(line, &ev); err != nil {
-		t.Fatalf("stream-zeile dekodieren: %v (%q)", err, line)
-	}
-	return ev
 }
 
 // Geschlossener Store: Lese-/Schreibrouten antworten mit 500.
