@@ -389,6 +389,18 @@ paths:
         sich die Eventmenge über die Zeitachse darstellen, ohne die Historie zu
         streamen. Die Bucket-Breite ist adaptiv (verdoppelt sich bei langer
         Zeitspanne), die Anzahl der Buckets ist beschränkt.
+
+        Mit `by=source` wird zusätzlich nach CloudEvents-`source` aufgeschlüsselt:
+        die Antwort enthält dann `sources` (eine zu `counts` ausgerichtete Bucket-
+        Reihe je Source). Die Zahl getrennt geführter Sources ist beschränkt;
+        weitere werden in der Serie `andere` zusammengefasst.
+      parameters:
+        - name: by
+          in: query
+          required: false
+          description: "`source` schlüsselt das Histogramm zusätzlich nach CloudEvents-`source` auf."
+          schema: { type: string, enum: [source] }
+          example: source
       responses:
         "200":
           description: Histogramm der Eventmengen
@@ -403,6 +415,12 @@ paths:
                     type: array
                     items: { type: integer, format: int64 }
                     description: Events je Bucket, ab `start` in Schritten von `bucketSeconds`
+                  sources:
+                    type: object
+                    description: Nur bei `by=source` — Bucket-Reihe je Source (zu `counts` ausgerichtet); Überlauf in `andere`.
+                    additionalProperties:
+                      type: array
+                      items: { type: integer, format: int64 }
                   total: { type: integer, format: int64 }
                   serverTime: { type: string, format: date-time }
               example:

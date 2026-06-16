@@ -336,17 +336,20 @@ func (s *Store) CountSubject(subject string, recursive bool) (uint64, error) {
 	return total, err
 }
 
-// ForEachEventTime ruft fn für jedes gespeicherte Event mit dessen Zeitstempel
-// auf, in globaler Reihenfolge (= Schreibreihenfolge). Es wird nur das `time`-
-// Feld dekodiert (günstig), damit Aufrufer z. B. ein Zeit-Histogramm der gesamten
-// Historie aufbauen können, ohne die Events vollständig zu laden. Events mit
-// fehlendem/ungültigem Zeitstempel werden übersprungen.
-func (s *Store) ForEachEventTime(fn func(time.Time)) error {
+// ForEachEventTimeSource ruft fn für jedes gespeicherte Event mit dessen
+// Zeitstempel und CloudEvents-`source` auf, in globaler Reihenfolge (=
+// Schreibreihenfolge). Es werden nur die Felder `time` und `source` dekodiert
+// (günstig), damit Aufrufer z. B. ein Zeit-Histogramm der gesamten Historie —
+// optional nach Source aufgeschlüsselt — aufbauen können, ohne die Events
+// vollständig zu laden. Events mit fehlendem/ungültigem Zeitstempel werden
+// übersprungen.
+func (s *Store) ForEachEventTimeSource(fn func(time.Time, string)) error {
 	return s.db.View(func(tx *bolt.Tx) error {
 		c := tx.Bucket(bucketEvents).Cursor()
 		for k, v := c.First(); k != nil; k, v = c.Next() {
 			var rec struct {
-				Time string `json:"time"`
+				Time   string `json:"time"`
+				Source string `json:"source"`
 			}
 			if err := unmarshalStored(v, &rec); err != nil {
 				continue
@@ -355,7 +358,7 @@ func (s *Store) ForEachEventTime(fn func(time.Time)) error {
 			if err != nil {
 				continue
 			}
-			fn(t.UTC())
+			fn(t.UTC(), rec.Source)
 		}
 		return nil
 	})
