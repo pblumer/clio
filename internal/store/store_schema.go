@@ -46,7 +46,7 @@ func (s *Store) RegisterSchema(typ string, schema json.RawMessage) error {
 		c := tx.Bucket(bucketEvents).Cursor()
 		for k, v := c.First(); k != nil; k, v = c.Next() {
 			var ev event.Event
-			if err := json.Unmarshal(v, &ev); err != nil {
+			if err := unmarshalStored(v, &ev); err != nil {
 				return fmt.Errorf("event dekodieren: %w", err)
 			}
 			if ev.Type != typ {

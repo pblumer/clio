@@ -243,6 +243,7 @@ Build lokal mit `make package` proben.
 | `CLIO_DB_PATH`    | nein    | `clio.db`  | Pfad zur bbolt-Datenbankdatei      |
 | `CLIO_SYNC`       | nein    | `group`    | Schreibstrategie: `group`/`always`/`off` (siehe Performance) |
 | `CLIO_SIGNING_KEY`| nein    | —          | base64-Ed25519-Schlüssel; aktiviert Event-Signaturen        |
+| `CLIO_COMPRESS`   | nein    | `false`    | Transparente DEFLATE-Kompression der gespeicherten Event-Werte (truthy, z. B. `1`/`true`). Spart ~45–50 % Ablage je Event; wirkt nur auf neu geschriebene Events, bestehende bleiben lesbar (ADR-024). |
 | `CLIO_DEV_MODE`   | nein    | `false`    | Dev-Mode (truthy, z. B. `1`/`true`): schaltet die destruktiven Dev-Routen (`POST /api/v1/dev/reset-database`, `POST /api/v1/dev/bulk-import-events`, `POST /api/v1/dev/close-bulk-import`) und die „Dev-Zone" im Dashboard frei. **Nicht in Produktion** (siehe ADR-022). |
 
 ### Dev-Mode: Reset & Bulk-Import-Fenster

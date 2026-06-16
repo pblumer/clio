@@ -126,6 +126,11 @@ type Options struct {
 	// SigningKey aktiviert (falls gesetzt) die Ed25519-Signatur jedes Events
 	// über seinen Hash. nil = nicht signieren.
 	SigningKey ed25519.PrivateKey
+	// Compress aktiviert die transparente DEFLATE-Kompression der gespeicherten
+	// Event-Werte (ADR-024). Aus = Werte werden roh als JSON abgelegt (Default,
+	// byte-identisch zum bisherigen Verhalten). An = neue Werte werden komprimiert;
+	// das Lesen erkennt beide Formen, sodass gemischte Datenbanken funktionieren.
+	Compress bool
 }
 
 // Store kapselt die bbolt-Datenbank.
@@ -143,6 +148,9 @@ type Store struct {
 	// signKey signiert Events (optional); verifyKey prüft Signaturen.
 	signKey   ed25519.PrivateKey
 	verifyKey ed25519.PublicKey
+
+	// compress legt fest, ob neue Event-Werte komprimiert abgelegt werden (ADR-024).
+	compress bool
 }
 
 // Open öffnet (oder erstellt) die Datenbank unter path mit Standardoptionen
@@ -203,6 +211,7 @@ func OpenWithOptions(path string, opts Options) (*Store, error) {
 		s.signKey = opts.SigningKey
 		s.verifyKey = opts.SigningKey.Public().(ed25519.PublicKey)
 	}
+	s.compress = opts.Compress
 	return s, nil
 }
 
@@ -339,7 +348,7 @@ func (s *Store) ForEachEventTime(fn func(time.Time)) error {
 			var rec struct {
 				Time string `json:"time"`
 			}
-			if err := json.Unmarshal(v, &rec); err != nil {
+			if err := unmarshalStored(v, &rec); err != nil {
 				continue
 			}
 			t, err := time.Parse(time.RFC3339Nano, rec.Time)
@@ -458,7 +467,7 @@ func backfillTypeCounts(tx *bolt.Tx) error {
 	c := evts.Cursor()
 	for k, v := c.First(); k != nil; k, v = c.Next() {
 		var ev event.Event
-		if err := json.Unmarshal(v, &ev); err != nil {
+		if err := unmarshalStored(v, &ev); err != nil {
 			return fmt.Errorf("event für types-backfill dekodieren: %w", err)
 		}
 		if err := incrTypeCount(types, ev.Type); err != nil {
@@ -480,7 +489,7 @@ func backfillTypeIdx(tx *bolt.Tx) error {
 	c := evts.Cursor()
 	for k, v := c.First(); k != nil; k, v = c.Next() {
 		var ev event.Event
-		if err := json.Unmarshal(v, &ev); err != nil {
+		if err := unmarshalStored(v, &ev); err != nil {
 			return fmt.Errorf("event für type-index-backfill dekodieren: %w", err)
 		}
 		seq := binary.BigEndian.Uint64(k)
@@ -513,7 +522,7 @@ func (s *Store) ReadByTypesFunc(types []string, opts ReadOptions, fn func(event.
 				return event.Event{}, false, fmt.Errorf("inkonsistenter type-index: event %d fehlt", seq)
 			}
 			var ev event.Event
-			if err := json.Unmarshal(raw, &ev); err != nil {
+			if err := unmarshalStored(raw, &ev); err != nil {
 				return event.Event{}, false, fmt.Errorf("event dekodieren: %w", err)
 			}
 			return ev, true, nil
@@ -611,7 +620,7 @@ func backfillSubjCount(tx *bolt.Tx) error {
 	c := evts.Cursor()
 	for k, v := c.First(); k != nil; k, v = c.Next() {
 		var ev event.Event
-		if err := json.Unmarshal(v, &ev); err != nil {
+		if err := unmarshalStored(v, &ev); err != nil {
 			return fmt.Errorf("event für subj-count-backfill dekodieren: %w", err)
 		}
 		if err := incrSubjectCount(subjc, ev.Subject); err != nil {
@@ -701,9 +710,13 @@ func (s *Store) Append(candidates []event.Candidate, preconditions []Preconditio
 			if err != nil {
 				return err
 			}
+			stored, err := encodeStored(payload, s.compress)
+			if err != nil {
+				return err
+			}
 
 			key := seqKey(seq)
-			if err := evts.Put(key, payload); err != nil {
+			if err := evts.Put(key, stored); err != nil {
 				return err
 			}
 			if err := idx.Put(subjectKey(c.Subject, seq), key); err != nil {
@@ -768,7 +781,7 @@ func (s *Store) Verify() (VerifyResult, error) {
 		c := tx.Bucket(bucketEvents).Cursor()
 		for k, v := c.First(); k != nil; k, v = c.Next() {
 			var ev event.Event
-			if err := json.Unmarshal(v, &ev); err != nil {
+			if err := unmarshalStored(v, &ev); err != nil {
 				return fmt.Errorf("event dekodieren: %w", err)
 			}
 			res.Count++
@@ -875,7 +888,7 @@ func anyMatch(tx *bolt.Tx, subject string, recursive bool, pred *query.Predicate
 			cur := tx.Bucket(bucketEvents).Cursor()
 			for k, v := cur.First(); k != nil; k, v = cur.Next() {
 				var ev event.Event
-				if err := json.Unmarshal(v, &ev); err != nil {
+				if err := unmarshalStored(v, &ev); err != nil {
 					return false, fmt.Errorf("event dekodieren: %w", err)
 				}
 				if check(ev) {
@@ -898,7 +911,7 @@ func anyMatch(tx *bolt.Tx, subject string, recursive bool, pred *query.Predicate
 				return false, fmt.Errorf("inkonsistenter index: event %x fehlt", evKey)
 			}
 			var ev event.Event
-			if err := json.Unmarshal(raw, &ev); err != nil {
+			if err := unmarshalStored(raw, &ev); err != nil {
 				return false, fmt.Errorf("event dekodieren: %w", err)
 			}
 			if check(ev) {
@@ -917,7 +930,7 @@ func anyMatch(tx *bolt.Tx, subject string, recursive bool, pred *query.Predicate
 			return false, fmt.Errorf("inkonsistenter index: event %x fehlt", evKey)
 		}
 		var ev event.Event
-		if err := json.Unmarshal(raw, &ev); err != nil {
+		if err := unmarshalStored(raw, &ev); err != nil {
 			return false, fmt.Errorf("event dekodieren: %w", err)
 		}
 		if check(ev) {
@@ -1005,7 +1018,7 @@ func readSubjectIndex(tx *bolt.Tx, subject string, opts ReadOptions, out *[]even
 			return fmt.Errorf("inkonsistenter index: event %x fehlt", evKey)
 		}
 		var ev event.Event
-		if err := json.Unmarshal(raw, &ev); err != nil {
+		if err := unmarshalStored(raw, &ev); err != nil {
 			return fmt.Errorf("event dekodieren: %w", err)
 		}
 		if !matchType(ev.Type, types) {
@@ -1052,7 +1065,7 @@ func readRecursive(tx *bolt.Tx, query string, opts ReadOptions, out *[]event.Eve
 			return fmt.Errorf("inkonsistenter index: event %x fehlt", seqKey(seq))
 		}
 		var ev event.Event
-		if err := json.Unmarshal(raw, &ev); err != nil {
+		if err := unmarshalStored(raw, &ev); err != nil {
 			return fmt.Errorf("event dekodieren: %w", err)
 		}
 		if matchType(ev.Type, types) {
@@ -1081,7 +1094,7 @@ func scanEventsRecursive(tx *bolt.Tx, query string, opts ReadOptions, out *[]eve
 			break
 		}
 		var ev event.Event
-		if err := json.Unmarshal(v, &ev); err != nil {
+		if err := unmarshalStored(v, &ev); err != nil {
 			return fmt.Errorf("event dekodieren: %w", err)
 		}
 		if MatchSubject(ev.Subject, query, true) && matchType(ev.Type, types) {
