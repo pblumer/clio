@@ -96,7 +96,11 @@ Build-Step/CDN:
     Event-Zeit — beim Start aus der **gesamten Historie** aufgebaut, danach live
     fortgeschrieben; **ohne** die Historie zu streamen), umschaltbar **Rate** je
     Zeitabschnitt bzw. **kumuliert** sowie **Lin/Log**-y-Achse (Log macht einen
-    stetigen kleinen Strom neben hohen Spitzen sichtbar). Mit der Maus lässt sich ein **Bereich
+    stetigen kleinen Strom neben hohen Spitzen sichtbar). Zudem umschaltbar
+    **Gesamt** vs. **Pro Source** — letzteres schlüsselt den Strom nach
+    CloudEvents-`source` auf (Top-Sources + „andere"), wahlweise **gestapelt**
+    (Anteil am Strom) oder als **überlagerte Linien** (Vergleich), mit Farb-Legende
+    (gespeist aus `GET /api/v1/event-stats?by=source`). Mit der Maus lässt sich ein **Bereich
     aufziehen** (zoomt auf Zeit- **und** Wertausschnitt — so wird auch ein
     wenige-aber-stetig-Fluss neben einer Spitze sichtbar); **Esc**, Doppelklick
     oder **Reset** stellt die Standardskala wieder her. Darunter ein **einklappbares

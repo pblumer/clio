@@ -975,6 +975,55 @@ func TestEventStatsEndpoint(t *testing.T) {
 	}
 }
 
+func TestEventStatsBySource(t *testing.T) {
+	srv := newTestServer(t)
+
+	// Events von zwei verschiedenen Sources schreiben.
+	do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token",
+		`{"events":[{"source":"svc-a","subject":"/a","type":"t1"},{"source":"svc-b","subject":"/b","type":"t2"},{"source":"svc-a","subject":"/a","type":"t3"}]}`)
+
+	rec := do(t, srv, http.MethodGet, "/api/v1/event-stats?by=source", "secret-token", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; %s", rec.Code, rec.Body.String())
+	}
+	var got struct {
+		Counts  []uint64            `json:"counts"`
+		Total   uint64              `json:"total"`
+		Sources map[string][]uint64 `json:"sources"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("dekodieren: %v", err)
+	}
+	if got.Total != 3 {
+		t.Fatalf("total = %d, want 3", got.Total)
+	}
+	if got.Sources == nil {
+		t.Fatal("sources fehlt")
+	}
+	sum := func(s []uint64) uint64 {
+		var n uint64
+		for _, c := range s {
+			n += c
+		}
+		return n
+	}
+	if sum(got.Sources["svc-a"]) != 2 || sum(got.Sources["svc-b"]) != 1 {
+		t.Fatalf("source-summen falsch: a=%d b=%d, want 2/1", sum(got.Sources["svc-a"]), sum(got.Sources["svc-b"]))
+	}
+	// Bucketweise muss die Summe der Source-Serien dem Gesamthistogramm entsprechen.
+	perBucket := make([]uint64, len(got.Counts))
+	for _, series := range got.Sources {
+		for i, c := range series {
+			perBucket[i] += c
+		}
+	}
+	for i := range got.Counts {
+		if perBucket[i] != got.Counts[i] {
+			t.Fatalf("bucket %d: serien-summe %d != counts %d", i, perBucket[i], got.Counts[i])
+		}
+	}
+}
+
 func TestEventStatsSeededFromHistory(t *testing.T) {
 	// Erst Events über einen Server schreiben …
 	st, err := store.Open(filepath.Join(t.TempDir(), "seed.db"))

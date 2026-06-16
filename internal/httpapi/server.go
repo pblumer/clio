@@ -108,11 +108,11 @@ func New(cfg config.Config, st *store.Store, logger *slog.Logger, opts ...Option
 	// Event-Zeit), damit das Dashboard auch ohne neue Writes zeigt, wann wie
 	// viele Events gesendet wurden. origin = früheste (erste) Eventzeit.
 	var hist *eventstats.Histogram
-	if err := st.ForEachEventTime(func(t time.Time) {
+	if err := st.ForEachEventTimeSource(func(t time.Time, source string) {
 		if hist == nil {
 			hist = eventstats.New(t)
 		}
-		hist.Add(1, t)
+		hist.AddSource(1, t, source)
 	}); err != nil {
 		s.logger.Error("event-stats: seeding aus der historie fehlgeschlagen", "err", err)
 	}
@@ -386,9 +386,26 @@ func (s *Server) handleDevBulkImportEvents(w http.ResponseWriter, r *http.Reques
 	}
 
 	s.metrics.AddEventsWritten(len(written))
-	s.events.Add(len(written), time.Now().UTC())
+	s.recordEventStats(written)
 	s.broker.Publish(written)
 	writeNDJSON(w, s.logger, written)
+}
+
+// recordEventStats schreibt die geschriebenen Events ins Eventstrom-Histogramm
+// fort — nach Server-Zeit, aufgeschlüsselt nach `source`. Pro Source wird nur
+// einmal gebucht (gebündelt), um Lock-Wechsel gering zu halten.
+func (s *Server) recordEventStats(written []event.Event) {
+	if len(written) == 0 {
+		return
+	}
+	now := time.Now().UTC()
+	bySource := make(map[string]int, 4)
+	for _, ev := range written {
+		bySource[ev.Source]++
+	}
+	for source, n := range bySource {
+		s.events.AddSource(n, now, source)
+	}
 }
 
 // handleDevCloseBulkImport schließt das Startfenster explizit.
@@ -408,6 +425,27 @@ func (s *Server) handleDevCloseBulkImport(w http.ResponseWriter, r *http.Request
 // Bucket-Breite (Sekunden) und die Bucket-Zähler. So kann das /ui-Dashboard die
 // Eventmengen über die Zeitachse zeichnen, ohne die gesamte Historie zu streamen.
 func (s *Server) handleEventStats(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Get("by") == "source" {
+		snap := s.events.SnapshotBySource()
+		// Sentinel-Schlüssel der Overflow-Serie auf ein lesbares Label abbilden.
+		sources := make(map[string][]uint64, len(snap.Sources))
+		for k, v := range snap.Sources {
+			if k == eventstats.OverflowSource {
+				k = "andere"
+			}
+			sources[k] = v
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"start":         snap.Origin.Format(time.RFC3339Nano),
+			"bucketSeconds": snap.Width.Seconds(),
+			"counts":        snap.Counts,
+			"sources":       sources,
+			"total":         snap.Total,
+			"serverTime":    time.Now().UTC().Format(time.RFC3339Nano),
+		})
+		return
+	}
+
 	snap := s.events.Snapshot()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"start":         snap.Origin.Format(time.RFC3339Nano),
@@ -707,7 +745,7 @@ func (s *Server) handleWriteEvents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.metrics.AddEventsWritten(len(written))
-	s.events.Add(len(written), time.Now().UTC())
+	s.recordEventStats(written)
 
 	// Live-Observer benachrichtigen (nach erfolgreichem, committetem Write).
 	s.broker.Publish(written)
