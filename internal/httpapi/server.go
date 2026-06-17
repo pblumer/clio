@@ -1307,23 +1307,29 @@ func (s *Server) requireScope(scope auth.Scope, next http.HandlerFunc) http.Hand
 		}
 		secretOK := subtle.ConstantTimeCompare([]byte(auth.HashSecret(secret)), []byte(expectedHash)) == 1
 
-		// 401: kein gültiger Bearer, unbekannter kid oder falsches Geheimnis.
-		// (Widerrufene Schlüssel ergeben ebenfalls 401 — siehe nächster Check.)
-		if !parsed || !found || !secretOK {
-			writeError(w, http.StatusUnauthorized, "unauthorized")
-			return
+		// auditKID ist der (nicht-geheime) übermittelte kid, sofern der Header
+		// überhaupt zerlegbar war — auch bei Ablehnung nützlich fürs Audit.
+		auditKID := ""
+		if parsed {
+			auditKID = kid
 		}
-		if !key.Active() {
+
+		// 401: kein gültiger Bearer, unbekannter kid, falsches Geheimnis oder
+		// widerrufener Schlüssel. Bewusst kein Name im Log (uniformes 401).
+		if !parsed || !found || !secretOK || !key.Active() {
+			s.auditDecision(r, scope, "deny", http.StatusUnauthorized, auditKID, "")
 			writeError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
 		// 403: gültig authentifiziert, aber der Schlüssel trägt den nötigen Scope
 		// nicht. Bewusst von 401 getrennt (ADR-025).
 		if !key.HasScope(scope) {
+			s.auditDecision(r, scope, "deny", http.StatusForbidden, key.KID, key.Name)
 			writeError(w, http.StatusForbidden, "forbidden: scope "+string(scope)+" erforderlich")
 			return
 		}
 
+		s.auditDecision(r, scope, "allow", http.StatusOK, key.KID, key.Name)
 		ident := auth.Identity{KID: key.KID, Name: key.Name, Scopes: key.Scopes}
 		next(w, r.WithContext(withIdentity(r.Context(), ident)))
 	}
