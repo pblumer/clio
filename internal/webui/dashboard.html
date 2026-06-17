@@ -472,6 +472,7 @@
     <div class="controls">
       <input id="live-subject" placeholder="Subject (z. B. /books/42)" value="/" spellcheck="false">
       <label class="inline"><input id="live-recursive" type="checkbox" checked> rekursiv</label>
+      <label class="inline"><input id="live-only-new" type="checkbox" title="Nur Events ab Klick auf Beobachten — ohne die History zu laden"> nur neue</label>
       <input id="live-types" class="short" placeholder="Typen (Komma)" spellcheck="false" style="min-width:160px">
       <button id="live-start" class="primary">Beobachten</button>
       <button id="live-pause" disabled>Pause</button>
@@ -482,8 +483,10 @@
     </div>
     <div id="live-notice" class="notice">
       Beobachtet <code>GET /api/v1/events/&lt;subject&gt;?watch=true</code>: zuerst die
-      passende History, dann live nachgeliefert. Zeile anklicken zeigt die
-      <code>data</code>. Neueste oben, max. 500 angezeigt.
+      passende History, dann live nachgeliefert. Mit <strong>nur neue</strong> wird
+      die History übersprungen — es erscheinen nur Events ab dem Klick auf
+      Beobachten (die höchste ID wird dafür im Hintergrund ermittelt). Zeile
+      anklicken zeigt die <code>data</code>. Neueste oben, max. 500 angezeigt.
     </div>
     <div id="events"><div class="empty">Noch nichts beobachtet.</div></div>
   </div>
@@ -1633,7 +1636,7 @@ async function fireSupernova() {
 
 // ---------- Live-Event-Viewer ----------
 const MAX_ROWS = 500;
-const live = { active: false, ctrl: null, paused: false, pending: [], count: 0, lastId: null, retry: 0, reconnectT: null, connected: false };
+const live = { active: false, ctrl: null, paused: false, pending: [], count: 0, lastId: null, retry: 0, reconnectT: null, connected: false, onlyNew: false };
 const eventsEl = $("events");
 
 function liveStatus(state, text) {
@@ -1705,16 +1708,33 @@ function flushPending() {
   $("live-pending").style.display = "none";
 }
 
-function startLive() {
+// liveBeobachteText: Statuszeile „live: beobachte <subject>" inkl. Hinweis, wenn
+// nur neue Events angezeigt werden.
+function liveBeobachteText() {
+  return "live: beobachte " + ($("live-subject").value.trim() || "/") + (live.onlyNew ? " (nur neue)" : "");
+}
+
+async function startLive() {
   const token = tokenInput.value.trim();
   if (!token) { liveStatus("err", "Token fehlt"); return; }
   sessionStorage.setItem("clioToken", token);
   live.active = true;
   live.count = 0; live.lastId = null; live.retry = 0;
+  live.onlyNew = $("live-only-new").checked;
   $("live-start").textContent = "Stoppen";
   $("live-pause").disabled = false;
-  $("live-subject").disabled = $("live-recursive").disabled = $("live-types").disabled = true;
-  liveStatus("live", "live: beobachte " + ($("live-subject").value.trim() || "/"));
+  $("live-subject").disabled = $("live-recursive").disabled = $("live-types").disabled = $("live-only-new").disabled = true;
+  liveStatus("live", liveBeobachteText());
+  // „nur neue": höchste Event-ID im Hintergrund holen (eventsTotal aus
+  // /api/v1/info) und lowerBound dahinter setzen. So streamt der Server keine
+  // History und die UI lädt nichts nach — es erscheinen nur Events ab jetzt.
+  if (live.onlyNew) {
+    try {
+      const r = await fetch("/api/v1/info", { headers: { Authorization: "Bearer " + token }, cache: "no-store" });
+      if (r.ok) { const j = await r.json(); const tot = Number(j.eventsTotal); if (Number.isFinite(tot)) live.lastId = tot; }
+    } catch (_) {}
+    if (!live.active) return; // zwischenzeitlich gestoppt
+  }
   runLive(token);
 }
 
@@ -1736,7 +1756,7 @@ async function runLive(token) {
     if (res.status === 401) { liveStatus("err", "Token ungültig (401)"); stopLive(); return; }
     if (!res.ok || !res.body) throw new Error("HTTP " + res.status);
     live.connected = true; live.retry = 0;
-    if (live.lastId != null) liveStatus("live", "live: beobachte " + ($("live-subject").value.trim() || "/"));
+    if (live.lastId != null) liveStatus("live", liveBeobachteText());
     const reader = res.body.getReader();
     const dec = new TextDecoder();
     let buf = "";
@@ -1775,7 +1795,7 @@ function finishLive() {
   $("live-start").textContent = "Beobachten";
   $("live-pause").disabled = true; $("live-pause").textContent = "Pause"; live.paused = false;
   flushPending();
-  $("live-subject").disabled = $("live-recursive").disabled = $("live-types").disabled = false;
+  $("live-subject").disabled = $("live-recursive").disabled = $("live-types").disabled = $("live-only-new").disabled = false;
   if ($("dot").classList.contains("live")) setStatus(tokenInput.value ? "ok" : "", tokenInput.value ? "verbunden" : "getrennt");
 }
 
