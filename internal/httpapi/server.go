@@ -212,6 +212,11 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/register-event-schema", s.requireScope(auth.ScopeWrite, s.handleRegisterEventSchema))
 	s.mux.HandleFunc("GET /api/v1/read-event-schema", s.requireScope(auth.ScopeRead, s.handleReadEventSchema))
 
+	// Schlüsselverwaltung zur Laufzeit (ADR-025) — ausschließlich Scope admin.
+	s.mux.HandleFunc("POST /api/v1/keys", s.requireScope(auth.ScopeAdmin, s.handleCreateKey))
+	s.mux.HandleFunc("GET /api/v1/keys", s.requireScope(auth.ScopeAdmin, s.handleListKeys))
+	s.mux.HandleFunc("POST /api/v1/keys/{kid}/revoke", s.requireScope(auth.ScopeAdmin, s.handleRevokeKey))
+
 	// Dev-Mode-only (ADR-022): destruktives Zurücksetzen der gesamten Datenbank
 	// plus Bulk-Import-Fenster direkt nach Start/Reset.
 	// Die Routen werden im Produktivbetrieb gar nicht erst registriert — ohne
