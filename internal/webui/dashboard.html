@@ -429,7 +429,7 @@
 
     <div class="grid">
       <div class="card"><div class="label">Events gesamt</div><div id="m-events" class="value">–</div><div id="m-events-sub" class="sub">gespeichert</div></div>
-      <div class="card" title="Dateigröße der bbolt-Datenbank auf der Platte. bbolt vergrößert die Datei bei Bedarf, gibt sie aber nie von selbst frei — freie Seiten (z. B. nach einem Reset) werden zuerst wiederverwendet. Die Datei wächst erst, wenn die Nutzdaten die bisherige Größe übersteigen; echte Grenze ist der Plattenplatz. Freien Platz zurückgewinnen: cliostore compact (offline).">
+      <div class="card" title="Dateigröße der bbolt-Datenbank auf der Platte. bbolt reserviert keinen festen Platz, sondern vergrößert die Datei bei Bedarf bis an die Grenze des Plattenplatzes (gibt sie aber nie von selbst frei; freien Platz zurückgewinnen: cliostore compact, offline). Der Balken zeigt daher die DISK-Belegung (echte Wachstumsreserve), nicht den internen Füllgrad — letzterer steht bei append-only fast immer ~100 % und sagt nichts über die Reserve. Die Event-Schätzung rechnet die freie Disk durch die ø-Eventgröße.">
         <div class="label">DB-Größe</div><div id="m-dbsize" class="value">–</div>
         <div class="dbbar"><div id="m-dbfill" class="dbbar-fill"></div></div>
         <div id="m-dbsub" class="sub">Datenbankdatei</div></div>
@@ -840,6 +840,14 @@ function setStatus(state, text) {
   $("statusText").textContent = text;
 }
 function fmtInt(n) { return (n == null || isNaN(n)) ? "–" : Number(n).toLocaleString("de-CH"); }
+// fmtCompact kürzt große Zahlen lesbar (k / Mio / Mrd) — für Schätzungen.
+function fmtCompact(n) {
+  if (n == null || isNaN(n)) return "–";
+  if (n >= 1e9) return (n / 1e9).toFixed(1).replace(/\.0$/, "") + " Mrd";
+  if (n >= 1e6) return (n / 1e6).toFixed(1).replace(/\.0$/, "") + " Mio";
+  if (n >= 1e4) return (n / 1e3).toFixed(0) + "k";
+  return fmtInt(n);
+}
 function fmtBytes(b) {
   if (b == null || b < 0) return "–";
   const u = ["B", "KiB", "MiB", "GiB", "TiB"]; let i = 0;
@@ -1591,14 +1599,37 @@ function pickNum(...vals) {
   for (const v of vals) { if (v == null) continue; const n = Number(v); if (Number.isFinite(n)) return n; }
   return NaN;
 }
-// renderDbUsage zeigt die DB-Dateigröße plus Füllgrad: wie viel der Datei
-// belegt ist vs. wiederverwendbarer freier Platz (per compact rückgewinnbar).
+// renderDbUsage zeigt die DB-Dateigröße plus die echte Wachstumsreserve: der
+// Balken bildet die DISK-Belegung ab (nicht den internen bbolt-Füllgrad, der bei
+// append-only fast immer ~100 % steht und nichts über die echte Reserve sagt).
+// Unterzeile: freier/gesamter Plattenplatz und eine Schätzung, wie viele Events
+// noch passen (ø-Eventgröße = usedBytes / eventsTotal). Ohne Disk-Info (Windows)
+// fällt es auf den bisherigen internen Füllgrad zurück.
 function renderDbUsage(info, m) {
   const file = pickNum(info.databaseFileBytes, gauge(m, "clio_db_size_bytes"));
   $("m-dbsize").textContent = fmtBytes(Number.isFinite(file) ? file : null);
   const used = pickNum(info.databaseUsedBytes, gauge(m, "clio_db_used_bytes"));
   const free = pickNum(info.databaseFreeBytes, gauge(m, "clio_db_free_bytes"));
   const bar = $("m-dbfill");
+
+  const diskFree = pickNum(info.diskFreeBytes, gauge(m, "clio_disk_free_bytes"));
+  const diskTotal = pickNum(info.diskTotalBytes, gauge(m, "clio_disk_total_bytes"));
+  if (Number.isFinite(diskFree) && Number.isFinite(diskTotal) && diskTotal > 0) {
+    const pct = Math.max(0, Math.min(100, (diskTotal - diskFree) / diskTotal * 100));
+    bar.style.width = Math.max(2, pct) + "%";
+    bar.classList.toggle("warn", pct >= 80 && pct < 95);
+    bar.classList.toggle("crit", pct >= 95);
+    let sub = fmtBytes(diskFree) + " von " + fmtBytes(diskTotal) + " Disk frei";
+    const total = pickNum(info.eventsTotal, gauge(m, "clio_events_total"));
+    if (Number.isFinite(used) && used > 0 && Number.isFinite(total) && total > 0) {
+      const remain = Math.floor(diskFree / (used / total)); // ø-Eventgröße
+      if (Number.isFinite(remain)) sub += " · noch ~" + fmtCompact(remain) + " Events";
+    }
+    $("m-dbsub").textContent = sub;
+    return;
+  }
+
+  // Fallback ohne Disk-Info: bisheriger interner bbolt-Füllgrad.
   if (!Number.isFinite(file) || file <= 0 || !Number.isFinite(used)) {
     bar.style.width = "0"; bar.classList.remove("warn", "crit");
     $("m-dbsub").textContent = "Datenbankdatei"; return;
