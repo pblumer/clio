@@ -21,19 +21,26 @@
 
 | Variable | Pflicht | Default | Bedeutung |
 |---|---|---|---|
-| `CLIO_API_TOKEN` | ja | — | Bearer-Token für geschützte Routen |
+| `CLIO_BOOTSTRAP_ADMIN_KEY` | nein* | — | Geheimnis, aus dem **bei leerem Schlüsselbund** ein initialer Admin-Key gebootet wird (ADR-025). Der `kid` wird beim Start geloggt; der Leitungswert ist `kid.secret`. |
+| `CLIO_API_TOKEN` | nein* | — | **Deprecated** (ADR-008 → ADR-025): bootet bei leerem Bund einen `legacy-token`-Admin-Key. Leitungswert ist danach ebenfalls `kid.secret`. |
 | `CLIO_ADDR` | nein | `:3000` | Listen-Adresse |
 | `CLIO_DB_PATH` | nein | `clio.db` | Pfad zur bbolt-Datei |
 | `CLIO_SYNC` | nein | `group` | Schreibstrategie (`group`/`always`/`off`) |
 | `CLIO_SIGNING_KEY` | nein | — | base64-Ed25519-Seed; aktiviert Signaturen |
 
-Quelle: [README — Konfiguration](../../../README.md#konfiguration).
+\* Bei leerem Schlüsselbund (frische DB) muss **eines** von
+`CLIO_BOOTSTRAP_ADMIN_KEY` oder `CLIO_API_TOKEN` gesetzt sein, sonst verweigert
+der Server den Start. Existieren bereits Keys, ist beides optional.
+
+Quelle: [README — Konfiguration](../../../README.md#konfiguration) ·
+[README — API-Keys](../../../README.md#api-keys-scopes--widerruf).
 
 ### Deployment per Binary
 
 ```bash
 make dist   # statische Binaries nach dist/ (linux/darwin/windows × amd64/arm64)
-CLIO_API_TOKEN=<secret> CLIO_DB_PATH=/var/lib/clio/clio.db ./cliostore
+# Beim ersten Start einen initialen Admin-Key booten (Leitungswert: kid.secret).
+CLIO_BOOTSTRAP_ADMIN_KEY=<secret> CLIO_DB_PATH=/var/lib/clio/clio.db ./cliostore
 ```
 
 Verifiziere das Deployment über `/api/v1/info` (Version, Uptime, `eventsTotal`,
@@ -44,9 +51,10 @@ Verifiziere das Deployment über `/api/v1/info` (Version, Uptime, `eventsTotal`,
 ```bash
 make docker                       # Image cliostore:<version>
 docker run --rm -p 3000:3000 \
-  -e CLIO_API_TOKEN=<secret> \
+  -e CLIO_BOOTSTRAP_ADMIN_KEY=<secret> \
   -v clio-data:/data \
   cliostore:latest
+# Beim ersten Start wird der kid geloggt; der Schlüssel ist dann kid.secret.
 ```
 
 Das Image basiert auf `distroless/static` (kein Shell, nonroot, statisches

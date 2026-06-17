@@ -7,7 +7,7 @@
 
 Nach diesem Modul kannst du:
 
-- Clio bauen und mit einem API-Token starten,
+- Clio bauen und mit einem initialen Admin-Key starten,
 - die Erreichbarkeit prüfen (`ping`),
 - dein erstes Event schreiben und wieder lesen,
 - die interaktive API-Doku (Swagger UI) öffnen.
@@ -40,23 +40,46 @@ go build -o cliostore.exe ./cmd/cliostore
 
 ## Schritt 2 — Starten
 
-Clio braucht **zwingend** ein API-Token. Wähle ein beliebiges Geheimnis:
+Bei leerem Schlüsselbund (frische DB) braucht Clio **zwingend** ein Geheimnis,
+aus dem es einen initialen **Admin-Key** bootet (ADR-025). Wähle ein beliebiges
+Geheimnis und setze es als `CLIO_BOOTSTRAP_ADMIN_KEY`:
 
 **Linux/macOS:**
 ```bash
-export TOKEN=dein-geheimes-token
-CLIO_API_TOKEN=$TOKEN ./cliostore
+export SECRET=dein-geheimnis
+CLIO_BOOTSTRAP_ADMIN_KEY=$SECRET ./cliostore
 ```
 
 **Windows (PowerShell):**
 ```powershell
-$env:TOKEN = 'dein-geheimes-token'
-$env:CLIO_API_TOKEN = $env:TOKEN
+$env:SECRET = 'dein-geheimnis'
+$env:CLIO_BOOTSTRAP_ADMIN_KEY = $env:SECRET
 .\cliostore.exe
 ```
 
-Du siehst eine Log-Zeile wie `cliostore lauscht addr=:3000`. Lass diesen
-Prozess laufen und öffne ein **zweites Terminal** für die nächsten Schritte.
+Du siehst eine Log-Zeile wie `cliostore lauscht addr=:3000` und beim Bootstrap
+zusätzlich den generierten **`kid`** des Admin-Keys. Der vollständige Token auf
+der Leitung ist `kid.secret` — also der geloggte `kid` zusammen mit deinem
+Geheimnis. Setze ihn fürs zweite Terminal:
+
+**Linux/macOS:**
+```bash
+export TOKEN=<geloggter-kid>.$SECRET   # z. B. kid_ab12cd34.dein-geheimnis
+```
+**Windows (PowerShell):**
+```powershell
+$env:TOKEN = "<geloggter-kid>.$($env:SECRET)"
+```
+
+Lass den Server-Prozess laufen und öffne ein **zweites Terminal** für die
+nächsten Schritte.
+
+> **Hinweis:** `CLIO_API_TOKEN` existiert noch als **deprecated** Bootstrap-Pfad
+> (bootet einen `legacy-token`-Admin-Key). Der Leitungswert ist auch dann
+> `kid.secret`; ein altes `Bearer <token>` ohne `kid`-Präfix wird nicht mehr
+> akzeptiert. Für neue Setups `CLIO_BOOTSTRAP_ADMIN_KEY` nutzen. Weitere Keys
+> mit eigenen Scopes legst du zur Laufzeit über `POST /api/v1/keys` an — siehe
+> [README — API-Keys](../../../README.md#api-keys-scopes--widerruf).
 
 > Standardmäßig lauscht Clio auf `:3000` und legt die Datenbank als `clio.db`
 > im Arbeitsverzeichnis an. Beides ist über Env-Variablen konfigurierbar —

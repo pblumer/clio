@@ -53,12 +53,21 @@ func (p *Predicate) RequiredTypes() ([]string, bool) {
 	return p.reqTypes, true
 }
 
+// defaultCacheSize begrenzt die Anzahl der gecachten kompilierten Prädikate.
+// Der Cache spart das wiederholte Kompilieren gleicher Ausdrücke; die Grenze
+// schützt vor unbegrenztem Wachstum, wenn viele verschiedene Ad-hoc-Ausdrücke
+// (z. B. aus run-query) auflaufen. Bewusst dependency-frei (FIFO-Eviction über
+// eine Einfügereihenfolge — kein externes LRU-Paket).
+const defaultCacheSize = 256
+
 // Compiler kompiliert CEL-Prädikate gegen eine feste Umgebung und cacht das
 // Ergebnis je Ausdruck. Nebenläufig sicher.
 type Compiler struct {
-	env   *cel.Env
-	mu    sync.Mutex
-	cache map[string]*Predicate
+	env      *cel.Env
+	mu       sync.Mutex
+	cache    map[string]*Predicate
+	order    []string // Einfügereihenfolge der cache-Schlüssel (für FIFO-Eviction)
+	maxCache int      // maximale Cache-Einträge; <= 0 bedeutet unbegrenzt
 }
 
 // NewCompiler erstellt einen Compiler mit der Event-Umgebung.
@@ -69,7 +78,11 @@ func NewCompiler() (*Compiler, error) {
 	if err != nil {
 		return nil, fmt.Errorf("CEL-umgebung: %w", err)
 	}
-	return &Compiler{env: env, cache: make(map[string]*Predicate)}, nil
+	return &Compiler{
+		env:      env,
+		cache:    make(map[string]*Predicate),
+		maxCache: defaultCacheSize,
+	}, nil
 }
 
 // Compile übersetzt einen Ausdruck in ein Prädikat. Der Ausdruck muss zu bool
@@ -98,7 +111,20 @@ func (c *Compiler) Compile(expr string) (*Predicate, error) {
 		p.reqTypes = sortedKeys(set)
 		p.typeBounded = true
 	}
+
+	// FIFO-Eviction: bei erreichter Grenze die ältesten Einträge verdrängen,
+	// bevor der neue aufgenommen wird. Bereits zurückgegebene *Predicate bleiben
+	// gültig (jedes Predicate ist eigenständig) — ein verdrängter Ausdruck wird
+	// bei der nächsten Anfrage schlicht neu kompiliert.
+	if c.maxCache > 0 {
+		for len(c.cache) >= c.maxCache && len(c.order) > 0 {
+			oldest := c.order[0]
+			c.order = c.order[1:]
+			delete(c.cache, oldest)
+		}
+	}
 	c.cache[expr] = p
+	c.order = append(c.order, expr)
 	return p, nil
 }
 

@@ -26,7 +26,7 @@ die Datei kompaktieren und die Integrität verifizieren.
 
 ## Betriebs-Checkliste (Kurzfassung)
 
-- [ ] `CLIO_API_TOKEN` als Secret gesetzt (nie im Image/Repo).
+- [ ] `CLIO_BOOTSTRAP_ADMIN_KEY` als Secret gesetzt (nie im Image/Repo); weitere API-Keys mit Scopes zur Laufzeit angelegt (`CLIO_API_TOKEN` nur noch deprecated).
 - [ ] Datenverzeichnis als **persistentes Volume** gemountet (`CLIO_DB_PATH`/`/data`).
 - [ ] `CLIO_SYNC` passend zur Last gewählt (Default `group`; siehe M08).
 - [ ] `/metrics` gescrapt; Alarme auf Fehlerrate, Latenz, `clio_db_size_bytes`.

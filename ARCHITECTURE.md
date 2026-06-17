@@ -5,7 +5,7 @@
 >
 > **Status des Gesamtprojekts:** `IN ENTWICKLUNG` — **Stufe 0–3 abgeschlossen** plus **Ed25519-Signaturen** (Authentizität). Write/Read/Observe, Optimistic Concurrency, Hash-Kette + Signaturen (`/verify`, `/public-key`), Event-Typen + JSON-Schemas, Group Commit (`CLIO_SYNC`), Observability (`/metrics`), Distribution (Cross-Builds/Docker/Release), Kompaktierung (`cliostore compact`), OpenAPI/Swagger UI, **CEL-Abfragen (`run-query`, ADR-017) mit Typ-Index (ADR-021)**, ein **eingebettetes Betriebs-Dashboard (`/ui`, ADR-020)** und **optionale transparente Wert-Kompression der Ablage (`CLIO_COMPRESS`, ADR-024)**. Offen (Stufe 4): Aggregation/Grouping und Snapshots.
 > **Letzte Aktualisierung:** 2026-06-17
-> **Dokumentversion:** 1.36
+> **Dokumentversion:** 1.37
 
 ---
 
@@ -44,7 +44,7 @@ Diese Punkte sind **bewusst ausgeschlossen** (zumindest in absehbaren Stufen), g
 - **Keine Projektionen:** Die DB speichert und liefert Events. Das Ableiten von Lesemodellen (Projektionen) ist Aufgabe der Anwendung.
 - **Keine Code-Ausführung:** Keine Handler, keine Workflows, keine serverseitige Geschäftslogik.
 - **Kein Clustering / keine horizontale Skalierung (vorerst):** Das System läuft als **Single-Instance**. Dies ist eine bewusste, vereinfachende Designentscheidung (siehe ADR-002).
-- **Kein RBAC:** Authentifizierung erfolgt über ein einzelnes API-Token. Keine feingranularen Rollen.
+- **Kein RBAC:** Authentifizierung erfolgt über benannte API-Keys mit groben Scopes (`read`/`write`/`admin`, ADR-025). Keine feingranularen Rollen/Mandantentrennung. *(Historisch: anfangs ein einzelnes API-Token, ADR-008 — abgelöst durch ADR-025.)*
 - **Keine GDPR-Spezialfunktionen** auf DB-Ebene (Verantwortung der Anwendung).
 - **EventQL** (eigene Query-Sprache) ist explizit ein *spätes* Ziel und für den Kern nicht erforderlich (siehe ADR-007).
 
@@ -90,8 +90,8 @@ Damit jede KI dieselbe Sprache spricht:
         │                           │                            │
 ┌───────▼────────┐     ┌────────────▼─────────┐     ┌────────────▼─────────┐
 │ Storage         │     │ Pub/Sub (Observe)    │     │ Index                │
-│ Append-only Log │     │ Channels/Goroutinen  │     │ subject → []offset   │
-│ (Datei / bbolt) │     │ pro Verbindung       │     │ In-Memory + Rebuild  │
+│ Append-only Log │     │ Channels/Goroutinen  │     │ subject → seq        │
+│ (bbolt)         │     │ pro Verbindung       │     │ persistent (bbolt)   │
 └─────────────────┘     └──────────────────────┘     └──────────────────────┘
 ```
 
@@ -120,7 +120,7 @@ Alle Routen nutzen **POST** (außer ggf. `ping`), weil Parameter im Request-Body
 | `GET /openapi.yaml` · `GET /docs` | OpenAPI-3-Spec bzw. interaktive Swagger UI (eingebettet, ohne Auth) | 3 |
 | `GET /metrics` | Prometheus-Metriken (ohne Auth) | 3 |
 
-**Auth:** Header `Authorization: Bearer <API_TOKEN>` gegen ein konfiguriertes Einzeltoken.
+**Auth:** Header `Authorization: Bearer kid.secret` gegen den Schlüsselbund (benannte API-Keys mit Scopes `read`/`write`/`admin`, ADR-025). Fehlender/ungültiger Schlüssel → 401, gültiger Schlüssel ohne nötigen Scope → 403. *(Historisch: ein einzelnes `Bearer <API_TOKEN>`, ADR-008 — abgelöst durch ADR-025; `CLIO_API_TOKEN` lebt nur noch als deprecated Bootstrap-Pfad fort.)*
 
 ### Beispiel Event-Candidate (Request-Body Auszug)
 
