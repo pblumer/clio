@@ -24,7 +24,7 @@ Die vollständige Architektur, Roadmap und alle Entscheidungen stehen in
 > **Live-Event-Stream**, ein **Explorer**, eine **Query-Konsole** und
 > **Live-Telemetrie** — erreichbar unter `http://127.0.0.1:3000/ui`.
 >
-> Sechs Tabs, kein Build-Step, kein CDN, kein Grafana nötig. Wie das alles im
+> Sieben Tabs, kein Build-Step, kein CDN, kein Grafana nötig. Wie das alles im
 > Detail funktioniert? 👉 [**Betriebs-Dashboard (`/ui`)**](#betriebs-dashboard-ui)
 
 ## Status
@@ -93,7 +93,7 @@ Build-Step/CDN:
 ![Betriebs-Dashboard: Eventstrom-Diagramm, Live-Events und Telemetrie](docs/screenshots/dashboard.png)
 
 - **`http://127.0.0.1:3000/ui`** — Bearer-Token eingeben, **Verbinden**. Statische
-  Seite (Vanilla JS, kein Build-Step) mit sechs Tabs:
+  Seite (Vanilla JS, kein Build-Step) mit sieben Tabs:
   - **Dashboard** — ein **Eventstrom-Liniendiagramm über die Zeit**: gespeist aus
     `GET /api/v1/event-stats` (serverseitiges Histogramm der Eventmengen nach
     Event-Zeit — beim Start aus der **gesamten Historie** aufgebaut, danach live
@@ -130,6 +130,11 @@ Build-Step/CDN:
     **Ein-Klick-Beispiel-Szenarien** unter einem Prefix; optional **Schemas
     registrieren** (`register-event-schema`). Schreibt über dieselben
     token-geschützten Endpunkte wie die API — keine neue Privilegien-Ebene.
+  - **Keys** — Verwaltung der **API-Keys** (ADR-025, Scope `admin`): Übersicht
+    aller Keys (kid, Name, Scopes, Status, erstellt/widerrufen) mit Filter,
+    **Anlegen** (das einmalige `kid.secret` wird mit Copy-Knopf und Einmal-Hinweis
+    gezeigt) und **Widerruf** (mit Bestätigung und Self-Lockout-Warnung beim
+    letzten aktiven Admin). Nutzt die `admin`-geschützten `/api/v1/keys*`-Routen.
   - **Query** — `run-query`-Konsole mit CEL-Editor: Syntax-Highlighting,
     kontextsensitive Autovervollständigung (inkl. aus echten Events gelernter
     `event.data.*`-Felder), <kbd>Ctrl/Cmd</kbd>+<kbd>Enter</kbd> zum Ausführen,
