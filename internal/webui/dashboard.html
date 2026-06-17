@@ -134,7 +134,12 @@
   .evs-legend { display: none; flex-wrap: wrap; gap: 4px 12px; padding: 6px 12px 2px;
     font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
   .evs-legend.on { display: flex; }
-  .evs-legend .lg { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; }
+  .evs-legend .lg { display: inline-flex; align-items: center; gap: 5px; max-width: 100%;
+    cursor: pointer; user-select: none; border: 0; background: none; padding: 0; font: inherit; }
+  .evs-legend .lg:hover .lg-name { color: #fff; }
+  .evs-legend .lg.off { opacity: .45; }
+  .evs-legend .lg.off .sw { box-shadow: none; background: transparent; border: 1px solid currentColor; }
+  .evs-legend .lg.off .lg-name { text-decoration: line-through; }
   .evs-legend .sw { width: 9px; height: 9px; border-radius: 2px; flex: none; box-shadow: 0 0 5px currentColor; }
   .evs-legend .lg-name { color: var(--fg); overflow-wrap: anywhere; }
   .evs-legend .lg-n { color: var(--muted); }
@@ -1022,6 +1027,7 @@ const estream = {
   cv: null, ctx: null, w: 0, h: 0, dpr: 1,
   stats: null,                   // Gesamt-Histogramm (Envelope) aus /api/v1/event-stats
   series: null,                  // [{key,color,counts,total}] im Source-Modus (Top-N + „andere")
+  hidden: new Set(),             // im Source-Modus per Legende ausgeblendete source-keys
   statsAt: 0,                    // letzter Abruf (ms) — drosselt Live-Refetch
   zoom: null,                    // {x0,x1 (ms), y0,y1 (Werte)} — gewählter Ausschnitt
   sel: null,                     // {x0,y0,x1,y1} Pixel — Auswahl-Rechteck beim Ziehen
@@ -1083,7 +1089,7 @@ function drawEvChart() {
   const srcMode = estream.split === "source" && estream.series && estream.series.length > 0;
   const stacked = !srcMode || estream.srender === "stacked";
   const seriesList = srcMode
-    ? estream.series.map((s) => ({ name: s.key, color: s.color, vals: bucketVals(s.counts, N, estream.mode) }))
+    ? estream.series.filter((s) => !estream.hidden.has(s.key)).map((s) => ({ name: s.key, color: s.color, vals: bucketVals(s.counts, N, estream.mode) }))
     : [{ name: "Gesamt", color: "#34f5c5", vals: bucketVals(buckets, N, estream.mode) }];
 
   // y-Transform: bei Log werden Werte als log10(v+1) abgebildet (0 bleibt 0),
@@ -1234,20 +1240,37 @@ function buildSourceSeries(sources) {
   return out;
 }
 
-// renderEvLegend füllt die Farb-Legende (nur im Source-Modus). Source-Werte
-// stammen aus Event-Daten → bewusst per textContent gesetzt (kein innerHTML).
+// renderEvLegend füllt die Farb-Legende (nur im Source-Modus). Jeder Eintrag ist
+// ein Button: Klick blendet die Source im Diagramm aus/ein (estream.hidden).
+// Source-Werte stammen aus Event-Daten → bewusst per textContent gesetzt.
 function renderEvLegend() {
   const el = $("ev-legend"); if (!el) return;
   el.textContent = "";
   if (estream.split !== "source" || !estream.series || !estream.series.length) { el.classList.remove("on"); return; }
   el.classList.add("on");
+  // Ausgeblendete Keys aufräumen, die es nicht mehr gibt (z. B. nach Top-N-Wechsel).
+  const live = new Set(estream.series.map((s) => s.key));
+  for (const k of [...estream.hidden]) if (!live.has(k)) estream.hidden.delete(k);
   for (const s of estream.series) {
-    const item = document.createElement("span"); item.className = "lg"; item.style.color = s.color;
+    const off = estream.hidden.has(s.key);
+    const item = document.createElement("button"); item.type = "button";
+    item.className = "lg" + (off ? " off" : ""); item.style.color = s.color;
+    item.setAttribute("aria-pressed", off ? "false" : "true");
+    item.title = (off ? "einblenden: " : "ausblenden: ") + s.key;
     const sw = document.createElement("span"); sw.className = "sw"; item.appendChild(sw);
     const name = document.createElement("span"); name.className = "lg-name"; name.textContent = s.key; item.appendChild(name);
     const n = document.createElement("span"); n.className = "lg-n"; n.textContent = fmtInt(s.total); item.appendChild(n);
+    item.addEventListener("click", () => { toggleSourceHidden(s.key); });
     el.appendChild(item);
   }
+}
+
+// toggleSourceHidden blendet eine Source im Diagramm aus/ein und zeichnet neu.
+function toggleSourceHidden(key) {
+  if (estream.hidden.has(key)) estream.hidden.delete(key); else estream.hidden.add(key);
+  estream.zoom = null;   // Wertebereich neu autoskalieren, sonst „springt" die y-Achse
+  renderEvLegend();
+  drawEvChart();
 }
 // Bei Live-Events das Diagramm gedrosselt nachziehen (auch ohne Auto-Refresh).
 function maybeFetchStats() { if (Date.now() - estream.statsAt > 1500) fetchEventStats(); }
