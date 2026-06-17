@@ -365,14 +365,19 @@
           <button id="ev-reset" class="evs-mode" style="display:none" title="Zoom zurücksetzen (Esc / Doppelklick)">⤢ Reset</button>
           <button id="ev-split-total" class="evs-mode active" title="Gesamter Eventstrom als eine Linie">Gesamt</button>
           <button id="ev-split-source" class="evs-mode" title="Nach CloudEvents-source aufgeschlüsselt">Pro Source</button>
-          <span class="evs-sep" id="ev-srender-sep" style="display:none"></span>
+          <span class="evs-sep"></span>
+          <button id="ev-trender-area" class="evs-mode active" title="Gesamtstrom als gefüllte Fläche">Fläche</button>
+          <button id="ev-trender-line" class="evs-mode" title="Gesamtstrom als reine Linie">Linie</button>
           <button id="ev-srender-stacked" class="evs-mode active" title="Sources gestapelt (Anteil am Strom)" style="display:none">Gestapelt</button>
+          <button id="ev-srender-area" class="evs-mode" title="Eine überlagerte, halbtransparente Fläche je Source (Vergleich)" style="display:none">Fläche</button>
           <button id="ev-srender-lines" class="evs-mode" title="Eine Linie je Source (Vergleich)" style="display:none">Linien</button>
           <span class="evs-sep"></span>
           <button id="ev-mode-rate" class="evs-mode active" title="Events je Zeitabschnitt">Rate</button>
           <button id="ev-mode-cum" class="evs-mode" title="Kumuliert über die Zeit">Kumuliert</button>
           <button id="ev-scale-lin" class="evs-mode active" title="Lineare y-Achse">Lin</button>
           <button id="ev-scale-log" class="evs-mode" title="Logarithmische y-Achse — macht stetige kleine Raten neben Spitzen sichtbar">Log</button>
+          <span class="evs-sep"></span>
+          <button id="ev-smooth" class="evs-mode" title="Gleitender Mittelwert — glättet das Rate-Zappeln zu Trends (nur im Rate-Modus)">Glätten</button>
         </span>
       </div>
       <canvas id="evchart"></canvas>
@@ -1023,7 +1028,9 @@ const estream = {
   mode: "rate",                  // "rate" = Events/Abschnitt, "cum" = kumuliert
   yscale: "lin",                 // "lin" oder "log" (y-Achse)
   split: "total",                // "total" = eine Linie, "source" = nach source aufgeschlüsselt
-  srender: "stacked",            // im Source-Modus: "stacked" (gestapelt) oder "lines"
+  srender: "stacked",            // Source-Modus: "stacked" | "area" (überlagert) | "lines"
+  trender: "area",               // Gesamt-Modus: "area" (gefüllt) | "line"
+  smooth: false,                 // gleitender Mittelwert (glättet das Rate-Zappeln)
   cv: null, ctx: null, w: 0, h: 0, dpr: 1,
   stats: null,                   // Gesamt-Histogramm (Envelope) aus /api/v1/event-stats
   series: null,                  // [{key,color,counts,total}] im Source-Modus (Top-N + „andere")
@@ -1084,10 +1091,12 @@ function drawEvChart() {
   for (let i = 0; i < N; i++) times[i] = startMs + (i + 0.5) * bucketMs;
 
   // Serien bauen: im Source-Modus die vorbereiteten Top-N + „andere", sonst der
-  // Gesamtstrom als eine Serie. `stacked` = gestapelte Fläche (auch der Gesamt-
-  // Modus ist eine einzelne Fläche); sonst überlagerte Linien.
+  // Gesamtstrom als eine Serie. Rendering: Source-Modus "stacked"|"area"|"lines",
+  // Gesamt-Modus "area" (gefüllt) | "lines" (reine Linie). Nur "stacked" summiert
+  // die Serien für die y-Skala; "area"/"lines" überlagern → Einzel-Maximum.
   const srcMode = estream.split === "source" && estream.series && estream.series.length > 0;
-  const stacked = !srcMode || estream.srender === "stacked";
+  const render = srcMode ? estream.srender : (estream.trender === "line" ? "lines" : "area");
+  const stackedScale = render === "stacked";
   const seriesList = srcMode
     ? estream.series.filter((s) => !estream.hidden.has(s.key)).map((s) => ({ name: s.key, color: s.color, vals: bucketVals(s.counts, N, estream.mode) }))
     : [{ name: "Gesamt", color: "#34f5c5", vals: bucketVals(buckets, N, estream.mode) }];
@@ -1107,7 +1116,7 @@ function drawEvChart() {
     let maxV = 0;
     for (let i = 0; i < N; i++) {
       if (times[i] < xd0 || times[i] > xd1) continue;
-      if (stacked) { let sum = 0; for (const s of seriesList) sum += s.vals[i]; if (sum > maxV) maxV = sum; }
+      if (stackedScale) { let sum = 0; for (const s of seriesList) sum += s.vals[i]; if (sum > maxV) maxV = sum; }
       else { for (const s of seriesList) if (s.vals[i] > maxV) maxV = s.vals[i]; }
     }
     yd0 = 0; yd1 = evTf(Math.max(1, maxV));
@@ -1119,7 +1128,7 @@ function drawEvChart() {
   // Auf den Plotbereich clippen (gezoomte Werte liegen außerhalb).
   ctx.save();
   ctx.beginPath(); ctx.rect(padL, padT, plotW, plotH); ctx.clip();
-  if (stacked) {
+  if (render === "stacked") {
     // Gestapelte Flächen: je Serie das Band zwischen laufender Unter- und
     // Oberkante. Größte Serie zuerst (= unten). Im Gesamt-Modus genau eine Fläche.
     const single = seriesList.length === 1;
@@ -1134,6 +1143,21 @@ function drawEvChart() {
       for (let i = 0; i < N; i++) { const x = X(times[i]), y = Y(bottom[i] + s.vals[i]); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }
       ctx.lineWidth = single ? 2 : 1.2; ctx.strokeStyle = s.color; ctx.shadowColor = s.color; ctx.shadowBlur = single ? 8 : 4; ctx.lineJoin = "round"; ctx.stroke(); ctx.shadowBlur = 0;
       for (let i = 0; i < N; i++) bottom[i] += s.vals[i];
+    }
+  } else if (render === "area") {
+    // Überlagerte Flächen: je Serie eine bis zur Grundlinie gefüllte, halb-
+    // transparente Fläche (nicht gestapelt). Größte zuerst → kleinere liegen
+    // sichtbar darüber. Im Gesamt-Modus genau eine (kräftiger gefüllte) Fläche.
+    const single = seriesList.length === 1;
+    const y0px = Y(0);
+    for (const s of seriesList) {
+      ctx.beginPath();
+      for (let i = 0; i < N; i++) { const x = X(times[i]), y = Y(s.vals[i]); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }
+      ctx.lineTo(X(times[N - 1]), y0px); ctx.lineTo(X(times[0]), y0px); ctx.closePath();
+      ctx.fillStyle = hexA(s.color, single ? 0.10 : 0.18); ctx.fill();
+      ctx.beginPath();
+      for (let i = 0; i < N; i++) { const x = X(times[i]), y = Y(s.vals[i]); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }
+      ctx.lineWidth = single ? 2 : 1.4; ctx.strokeStyle = s.color; ctx.shadowColor = s.color; ctx.shadowBlur = single ? 8 : 4; ctx.lineJoin = "round"; ctx.stroke(); ctx.shadowBlur = 0;
     }
   } else {
     // Überlagerte Linien: je Serie eine Linie (Vergleich absoluter Raten).
@@ -1164,7 +1188,7 @@ function drawEvChart() {
   estream.geom = { padL, padT, plotW, plotH, xd0, xd1, yd0, yd1 };
   if (peak) {
     const base = estream.mode === "cum" ? "kumuliert" : "max " + fmtInt(Math.round(evInv(yd1))) + " / Abschnitt · " + Math.round(bucketMs / 1000) + "s";
-    peak.textContent = base + (estream.yscale === "log" ? " · log" : "") + (z ? " · 🔍 gezoomt (Esc)" : " · ziehen zum Zoomen");
+    peak.textContent = base + (estream.yscale === "log" ? " · log" : "") + (estream.smooth && estream.mode !== "cum" ? " · geglättet" : "") + (z ? " · 🔍 gezoomt (Esc)" : " · ziehen zum Zoomen");
   }
 }
 
@@ -1201,7 +1225,22 @@ const EV_TOPN = 8;
 function bucketVals(counts, N, mode) {
   const v = new Array(N); let cum = 0;
   for (let i = 0; i < N; i++) { const c = (counts && counts[i]) || 0; cum += c; v[i] = mode === "cum" ? cum : c; }
-  return v;
+  return maybeSmooth(v);
+}
+
+// maybeSmooth legt bei aktiver Glättung einen zentrierten gleitenden Mittelwert
+// (Fensterbreite EV_SMOOTH_W) über die Werte — macht aus dem Rate-Zappeln einen
+// lesbaren Trend. Im kumulierten Modus sinnlos (bereits monoton) → unverändert.
+const EV_SMOOTH_W = 5;
+function maybeSmooth(v) {
+  if (!estream.smooth || estream.mode === "cum") return v;
+  const n = v.length, out = new Array(n), half = (EV_SMOOTH_W - 1) / 2;
+  for (let i = 0; i < n; i++) {
+    let sum = 0, cnt = 0;
+    for (let j = Math.max(0, i - half); j <= Math.min(n - 1, i + half); j++) { sum += v[j]; cnt++; }
+    out[i] = sum / cnt;
+  }
+  return out;
 }
 
 // hexA wandelt "#rrggbb" + Alpha in eine rgba()-Farbe.
@@ -1391,16 +1430,31 @@ function setEvSplit(split) {
   estream.zoom = null; // andere Daten/y-Skala -> Zoom verwerfen
   $("ev-split-total").classList.toggle("active", split === "total");
   $("ev-split-source").classList.toggle("active", split === "source");
-  const show = split === "source";
-  for (const id of ["ev-srender-sep", "ev-srender-stacked", "ev-srender-lines"]) $(id).style.display = show ? "" : "none";
+  const src = split === "source";
+  // Render-Umschalter je nach Modus: Source -> gestapelt/Fläche/Linien, Gesamt -> Fläche/Linie.
+  for (const id of ["ev-srender-stacked", "ev-srender-area", "ev-srender-lines"]) $(id).style.display = src ? "" : "none";
+  for (const id of ["ev-trender-area", "ev-trender-line"]) $(id).style.display = src ? "none" : "";
   renderEvLegend();
   fetchEventStats(); // anderes Endpoint (?by=source) -> neu laden, zeichnet neu
 }
 function setEvSrender(r) {
   estream.srender = r;
-  estream.zoom = null; // gestapelt vs. Linien haben andere y-Skalen
+  estream.zoom = null; // gestapelt vs. Fläche/Linien haben andere y-Skalen
   $("ev-srender-stacked").classList.toggle("active", r === "stacked");
+  $("ev-srender-area").classList.toggle("active", r === "area");
   $("ev-srender-lines").classList.toggle("active", r === "lines");
+  drawEvChart();
+}
+function setEvTrender(r) {
+  estream.trender = r;
+  $("ev-trender-area").classList.toggle("active", r === "area");
+  $("ev-trender-line").classList.toggle("active", r === "line");
+  drawEvChart();
+}
+function setEvSmooth(on) {
+  estream.smooth = on;
+  estream.zoom = null; // geglättete Werte haben andere Maxima -> Zoom verwerfen
+  $("ev-smooth").classList.toggle("active", on);
   drawEvChart();
 }
 function resetEvZoom() { if (!estream.zoom && !estream.sel) return; estream.zoom = null; estream.sel = null; drawEvChart(); }
@@ -1456,7 +1510,11 @@ function initEventStream() {
   $("ev-split-total").addEventListener("click", () => setEvSplit("total"));
   $("ev-split-source").addEventListener("click", () => setEvSplit("source"));
   $("ev-srender-stacked").addEventListener("click", () => setEvSrender("stacked"));
+  $("ev-srender-area").addEventListener("click", () => setEvSrender("area"));
   $("ev-srender-lines").addEventListener("click", () => setEvSrender("lines"));
+  $("ev-trender-area").addEventListener("click", () => setEvTrender("area"));
+  $("ev-trender-line").addEventListener("click", () => setEvTrender("line"));
+  $("ev-smooth").addEventListener("click", () => setEvSmooth(!estream.smooth));
   const toggle = () => setDashLiveCollapsed(!$("dash-live").classList.contains("collapsed"));
   $("ev-collapse").addEventListener("click", toggle);
   $("ev-collapse").addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } });
