@@ -2559,6 +2559,7 @@ $("gen-scenario-carshare").addEventListener("click", (e) => genScenario("carshar
 // ---------- Keys (API-Key-Verwaltung, ADR-025) ----------
 let keysLoaded = false;
 let keysData = null;
+let secretHideTimer = null;
 
 function activeAdminCount(keys) {
   return (keys || []).filter((k) => k.status === "active" && (k.scopes || []).includes("admin")).length;
@@ -2642,6 +2643,7 @@ function keyCreateResult(ok, msg) {
 
 function showNewSecret(j) {
   const el = $("key-create-result");
+  if (secretHideTimer) { clearInterval(secretHideTimer); secretHideTimer = null; }
   el.className = "gen-result ok";
   el.innerHTML = "";
   const head = document.createElement("div");
@@ -2660,8 +2662,34 @@ function showNewSecret(j) {
     try { await navigator.clipboard.writeText(j.secret); copy.textContent = "kopiert ✓"; }
     catch (_) { copy.textContent = "(Strg+C)"; }
   });
-  row.append(code, copy);
+  const timer = document.createElement("span");
+  timer.className = "hint"; timer.style.marginLeft = "8px";
+  const hideNow = document.createElement("button");
+  hideNow.className = "link-btn"; hideNow.textContent = "ausblenden";
+  row.append(code, copy, timer, hideNow);
   el.append(head, warnEl, row);
+
+  // Sicherheits-Auto-Ausblendung: der Klartext verschwindet nach einem Countdown
+  // (oder per Klick) aus dem DOM — er ist serverseitig ohnehin nicht erneut
+  // abrufbar, soll aber nicht dauerhaft sichtbar herumstehen (Shoulder-Surfing).
+  const hide = () => {
+    if (secretHideTimer) { clearInterval(secretHideTimer); secretHideTimer = null; }
+    el.className = "gen-result";
+    el.innerHTML = "";
+    const done = document.createElement("div");
+    done.innerHTML = "<strong>Key angelegt:</strong> " + escHtml(j.kid) +
+      " — Geheimnis ausgeblendet. Falls du es nicht gespeichert hast: neuen Key anlegen und diesen widerrufen.";
+    el.append(done);
+  };
+  let left = 60;
+  const tick = () => {
+    if (left <= 0) { hide(); return; }
+    timer.textContent = "(verschwindet in " + left + " s)";
+    left--;
+  };
+  tick();
+  secretHideTimer = setInterval(tick, 1000);
+  hideNow.addEventListener("click", hide);
 }
 
 async function createKey() {
