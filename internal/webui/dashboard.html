@@ -501,6 +501,10 @@
       die History übersprungen — es erscheinen nur Events ab dem Klick auf
       Beobachten (die höchste ID wird dafür im Hintergrund ermittelt). Zeile
       anklicken zeigt die <code>data</code>. Neueste oben, max. 500 angezeigt.
+      Hält ein Proxy/Gateway den Stream zurück (kein Byte binnen einiger Sekunden),
+      wird automatisch auf <strong>Polling</strong> umgeschaltet (Status zeigt dann
+      „· Polling") — kurze, abgeschlossene Abfragen, die auch durch puffernde
+      Firmennetze kommen.
     </div>
     <div id="events"><div class="empty">Noch nichts beobachtet.</div></div>
   </div>
@@ -1044,6 +1048,8 @@ const estream = {
   sel: null,                     // {x0,y0,x1,y1} Pixel — Auswahl-Rechteck beim Ziehen
   geom: null,                    // zuletzt gezeichnete Geometrie (für Maus-Inversion)
   redrawPending: false,
+  mode: "stream",                // "stream" (observe) oder "poll" (Fallback bei puffernden Proxies)
+  probeT: null,                  // Timer der Proxy-Puffer-Erkennung
 };
 const DASH_MAX_ROWS = 200;
 
@@ -1334,7 +1340,8 @@ function estreamHandle(ev) {
 }
 
 function stopEventStream() {
-  estream.active = false; estream.connected = false;
+  estream.active = false; estream.connected = false; estream.mode = "stream";
+  if (estream.probeT) { clearTimeout(estream.probeT); estream.probeT = null; }
   if (estream.reconnectT) { clearTimeout(estream.reconnectT); estream.reconnectT = null; }
   if (estream.ctrl) { estream.ctrl.abort(); estream.ctrl = null; }
 }
@@ -1360,6 +1367,15 @@ async function startEventStream() {
   runEventStream(token);
 }
 
+// STREAM_PROBE_MS: Kommt nach dem Öffnen eines observe-Streams binnen dieser Zeit
+// kein einziges Byte (auch nicht die sofortige Verbindungs-Quittung), puffert ein
+// Proxy/Gateway den Stream — dann automatisch auf Polling umschalten. LIVE_POLL_MS
+// ist das Poll-Intervall im Fallback (kurze, abgeschlossene read-Requests, die auch
+// hinter puffernden Gateways durchkommen).
+const STREAM_PROBE_MS = 6000;
+const LIVE_POLL_MS = 3000;
+const evSleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
 // runEventStream hält die Observe-Verbindung und baut sie nach Abriss (EOF wegen
 // Broker-Drop, oder Netzwerkfehler) automatisch wieder auf. lowerBound =
 // höchste gesehene ID + 1 setzt lückenlos und ohne Dubletten fort — genau der
@@ -1371,19 +1387,28 @@ async function runEventStream(token) {
   if (estream.ctrl) estream.ctrl.abort();
   const ctrl = new AbortController(); estream.ctrl = ctrl;
   const lower = estream.lastId != null ? estream.lastId + 1 : null;
+  // Proxy-Puffer-Erkennung: bleibt das erste Byte aus, auf Polling umschalten.
+  let gotData = false;
+  clearTimeout(estream.probeT);
+  estream.probeT = setTimeout(() => {
+    if (gotData || !estream.active || estream.ctrl !== ctrl) return;
+    ctrl.abort();
+    fallbackEventPolling(token);
+  }, STREAM_PROBE_MS);
   try {
     const url = "/api/v1/events?watch=true&recursive=true" + (lower != null ? "&lowerBound=" + lower : "");
     const res = await fetch(url, {
       headers: { Authorization: "Bearer " + token }, signal: ctrl.signal, cache: "no-store",
     });
     if (ctrl.signal.aborted) return; // zwischenzeitlich durch einen neueren Lauf ersetzt
-    if (res.status === 401) { stopEventStream(); $("dash-events").innerHTML = '<div class="empty">Token ungültig (401).</div>'; return; }
+    if (res.status === 401) { clearTimeout(estream.probeT); stopEventStream(); $("dash-events").innerHTML = '<div class="empty">Token ungültig (401).</div>'; return; }
     if (!res.ok || !res.body) throw new Error("HTTP " + res.status);
     estream.connected = true; estream.retry = 0; // erfolgreiche Verbindung -> Backoff zurücksetzen
     if (estream.count === 0) $("dash-events").innerHTML = '<div class="empty">wartet auf neue Events …</div>';
     const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = "";
     for (;;) {
       const { done, value } = await reader.read(); if (done) break;
+      if (!gotData) { gotData = true; clearTimeout(estream.probeT); } // Stream liefert -> Erkennung bestanden
       buf += dec.decode(value, { stream: true });
       let nl;
       while ((nl = buf.indexOf("\n")) >= 0) {
@@ -1394,10 +1419,40 @@ async function runEventStream(token) {
   } catch (e) {
     if (e.name === "AbortError" || !estream.active) return; // manuell gestoppt/ersetzt
   } finally {
+    clearTimeout(estream.probeT);
     if (estream.ctrl === ctrl) estream.connected = false;
   }
-  // Nur der jeweils aktuelle Lauf plant einen Reconnect (kein Timer-Stapeln).
-  if (estream.active && estream.ctrl === ctrl) scheduleEventReconnect(token);
+  // Nur der jeweils aktuelle Lauf plant einen Reconnect (kein Timer-Stapeln);
+  // im Polling-Modus übernimmt die Poll-Schleife selbst.
+  if (estream.active && estream.ctrl === ctrl && estream.mode === "stream") scheduleEventReconnect(token);
+}
+
+// fallbackEventPolling schaltet den Dashboard-Ticker dauerhaft (bis Stop/Neustart)
+// auf Polling um — für Umgebungen, in denen ein Gateway den Stream puffert.
+function fallbackEventPolling(token) {
+  if (estream.mode === "poll" || !estream.active) return;
+  estream.mode = "poll"; estream.connected = false;
+  if (estream.count === 0) $("dash-events").innerHTML = '<div class="empty">Live-Stream wird geblockt — Polling aktiv, warte auf Events …</div>';
+  pollEventStream(token);
+}
+
+// pollEventStream fragt periodisch nur die Events ab lastId+1 ab (endlicher
+// read-Request, ohne watch) und verarbeitet sie wie der Stream.
+async function pollEventStream(token) {
+  while (estream.active && estream.mode === "poll") {
+    try {
+      const lower = estream.lastId != null ? estream.lastId + 1 : null;
+      const url = "/api/v1/events?recursive=true" + (lower != null ? "&lowerBound=" + lower : "");
+      const res = await fetch(url, { headers: { Authorization: "Bearer " + token }, cache: "no-store" });
+      if (res.status === 401) { stopEventStream(); $("dash-events").innerHTML = '<div class="empty">Token ungültig (401).</div>'; return; }
+      if (res.ok) {
+        estream.connected = true; estream.retry = 0;
+        const text = await res.text();
+        for (const line of text.split("\n")) if (line.trim()) { try { estreamHandle(JSON.parse(line)); } catch (_) {} }
+      }
+    } catch (_) { estream.connected = false; }
+    await evSleep(LIVE_POLL_MS);
+  }
 }
 
 function scheduleEventReconnect(token) {
@@ -1619,11 +1674,11 @@ intervalSel.addEventListener("change", schedule);
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState !== "visible") return;
   const token = tokenInput.value.trim(); if (!token) return;
-  if (estream.active && !estream.connected) {
+  if (estream.active && !estream.connected && estream.mode === "stream") {
     if (estream.reconnectT) { clearTimeout(estream.reconnectT); estream.reconnectT = null; }
     estream.retry = 0; runEventStream(token);
   }
-  if (live.active && !live.connected) {
+  if (live.active && !live.connected && live.mode === "stream") {
     if (live.reconnectT) { clearTimeout(live.reconnectT); live.reconnectT = null; }
     live.retry = 0; runLive(token);
   }
@@ -1721,7 +1776,7 @@ async function fireSupernova() {
 
 // ---------- Live-Event-Viewer ----------
 const MAX_ROWS = 500;
-const live = { active: false, ctrl: null, paused: false, pending: [], count: 0, lastId: null, retry: 0, reconnectT: null, connected: false, onlyNew: false };
+const live = { active: false, ctrl: null, paused: false, pending: [], count: 0, lastId: null, retry: 0, reconnectT: null, connected: false, onlyNew: false, mode: "stream", probeT: null };
 const eventsEl = $("events");
 
 function liveStatus(state, text) {
@@ -1738,10 +1793,10 @@ function eventsPath(subj) {
   }
   return path;
 }
-function buildPath() {
+function buildPath(watch = true) {
   let path = eventsPath($("live-subject").value.trim());
   const p = new URLSearchParams();
-  p.set("watch", "true");
+  if (watch) p.set("watch", "true");
   p.set("recursive", $("live-recursive").checked ? "true" : "false");
   for (const t of $("live-types").value.split(",").map((s) => s.trim()).filter(Boolean)) p.append("type", t);
   return path + "?" + p.toString();
@@ -1803,7 +1858,7 @@ async function startLive() {
   const token = tokenInput.value.trim();
   if (!token) { liveStatus("err", "Token fehlt"); return; }
   sessionStorage.setItem("clioToken", token);
-  live.active = true;
+  live.active = true; live.mode = "stream";
   live.count = 0; live.lastId = null; live.retry = 0;
   live.onlyNew = $("live-only-new").checked;
   $("live-start").textContent = "Stoppen";
@@ -1833,12 +1888,20 @@ async function runLive(token) {
   const ctrl = new AbortController(); live.ctrl = ctrl;
   let url = buildPath();
   if (live.lastId != null) url += "&lowerBound=" + (live.lastId + 1);
+  // Proxy-Puffer-Erkennung: bleibt das erste Byte aus, auf Polling umschalten.
+  let gotData = false;
+  clearTimeout(live.probeT);
+  live.probeT = setTimeout(() => {
+    if (gotData || !live.active || live.ctrl !== ctrl) return;
+    ctrl.abort();
+    fallbackLivePolling(token);
+  }, STREAM_PROBE_MS);
   try {
     const res = await fetch(url, {
       headers: { Authorization: "Bearer " + token }, signal: ctrl.signal, cache: "no-store",
     });
     if (ctrl.signal.aborted) return; // durch einen neueren Lauf ersetzt
-    if (res.status === 401) { liveStatus("err", "Token ungültig (401)"); stopLive(); return; }
+    if (res.status === 401) { clearTimeout(live.probeT); liveStatus("err", "Token ungültig (401)"); stopLive(); return; }
     if (!res.ok || !res.body) throw new Error("HTTP " + res.status);
     live.connected = true; live.retry = 0;
     if (live.lastId != null) liveStatus("live", liveBeobachteText());
@@ -1848,6 +1911,7 @@ async function runLive(token) {
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
+      if (!gotData) { gotData = true; clearTimeout(live.probeT); } // Stream liefert -> Erkennung bestanden
       buf += dec.decode(value, { stream: true });
       let nl;
       while ((nl = buf.indexOf("\n")) >= 0) {
@@ -1858,9 +1922,40 @@ async function runLive(token) {
   } catch (e) {
     if (e.name === "AbortError" || !live.active) return; // manuell gestoppt/ersetzt
   } finally {
+    clearTimeout(live.probeT);
     if (live.ctrl === ctrl) live.connected = false;
   }
-  if (live.active && live.ctrl === ctrl) scheduleLiveReconnect(token); // Abriss -> erneut verbinden
+  if (live.active && live.ctrl === ctrl && live.mode === "stream") scheduleLiveReconnect(token); // Abriss -> erneut verbinden
+}
+
+// fallbackLivePolling schaltet den Live-Tab dauerhaft (bis Stop/Neustart) auf
+// Polling um — für Umgebungen, in denen ein Gateway den Stream puffert.
+function fallbackLivePolling(token) {
+  if (live.mode === "poll" || !live.active) return;
+  live.mode = "poll"; live.connected = false;
+  liveStatus("live", liveBeobachteText() + " · Polling");
+  pollLive(token);
+}
+
+// pollLive fragt periodisch nur die Events ab lastId+1 ab (endlicher read-Request
+// ohne watch) und verarbeitet sie wie der Stream. Beim ersten Poll ohne lowerBound
+// (Modus „nicht nur neue") kommt zunächst die History — wie im Stream.
+async function pollLive(token) {
+  while (live.active && live.mode === "poll") {
+    try {
+      let url = buildPath(false);
+      if (live.lastId != null) url += "&lowerBound=" + (live.lastId + 1);
+      const res = await fetch(url, { headers: { Authorization: "Bearer " + token }, cache: "no-store" });
+      if (res.status === 401) { liveStatus("err", "Token ungültig (401)"); stopLive(); return; }
+      if (res.ok) {
+        live.connected = true; live.retry = 0;
+        liveStatus("live", liveBeobachteText() + " · Polling");
+        const text = await res.text();
+        for (const line of text.split("\n")) if (line.trim()) { try { handleEvent(JSON.parse(line)); } catch (_) {} }
+      }
+    } catch (_) { live.connected = false; }
+    await evSleep(LIVE_POLL_MS);
+  }
 }
 
 function scheduleLiveReconnect(token) {
@@ -1871,12 +1966,13 @@ function scheduleLiveReconnect(token) {
   live.reconnectT = setTimeout(() => { if (live.active) runLive(token); }, delay);
 }
 function stopLive() {
+  if (live.probeT) { clearTimeout(live.probeT); live.probeT = null; }
   if (live.reconnectT) { clearTimeout(live.reconnectT); live.reconnectT = null; }
   if (live.ctrl) live.ctrl.abort();
   finishLive();
 }
 function finishLive() {
-  live.active = false; live.connected = false;
+  live.active = false; live.connected = false; live.mode = "stream";
   $("live-start").textContent = "Beobachten";
   $("live-pause").disabled = true; $("live-pause").textContent = "Pause"; live.paused = false;
   flushPending();
