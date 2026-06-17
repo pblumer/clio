@@ -15,12 +15,12 @@ Jedes Skript gibt es als **`.sh`** (Linux/macOS, Bash+curl) und **`.ps1`**
 
 **Linux/macOS (Bash):**
 ```bash
-export TOKEN=dein-geheimes-token        # = CLIO_API_TOKEN des Servers
+export TOKEN=kid_xxxx.demo-secret       # API-Key kid.secret (ADR-025), vom Start-Helfer ausgegeben
 export CLIO_BASE=http://127.0.0.1:3000  # optional
 ```
 **Windows (PowerShell):**
 ```powershell
-$env:TOKEN = 'dein-geheimes-token'         # = CLIO_API_TOKEN des Servers
+$env:TOKEN = 'kid_xxxx.demo-secret'        # API-Key kid.secret (ADR-025), vom Start-Helfer ausgegeben
 $env:CLIO_BASE = 'http://127.0.0.1:3000'   # optional
 ```
 

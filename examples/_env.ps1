@@ -4,7 +4,10 @@
 #   . "$PSScriptRoot\..\_env.ps1"
 #
 # Erwartet:
-#   $env:TOKEN      (Pflicht)  - Bearer-Token, identisch zu CLIO_API_TOKEN des Servers
+#   $env:TOKEN      (Pflicht)  - API-Key im Format kid.secret (ADR-025), z. B.
+#                                kid_ci01.W8xq... — der vollständige Wert, den
+#                                `POST /api/v1/keys` einmalig ausliefert. Der Scope
+#                                (read/write/admin) muss zur jeweiligen Route passen.
 #   $env:CLIO_BASE  (optional) - Basis-URL, Default http://127.0.0.1:3000
 #
 # Kompatibel mit Windows PowerShell 5.1 und PowerShell 7+.
@@ -16,7 +19,7 @@ if (-not $env:CLIO_BASE) { $env:CLIO_BASE = 'http://127.0.0.1:3000' }
 $script:ClioBase = $env:CLIO_BASE
 
 if (-not $env:TOKEN) {
-    Write-Error "Bitte TOKEN setzen, z. B.:  `$env:TOKEN = 'dein-geheimes-token'  (muss CLIO_API_TOKEN des Servers entsprechen)"
+    Write-Error "Bitte TOKEN setzen, z. B.:  `$env:TOKEN = 'kid_ci01.dein-geheimnis'  (API-Key im Format kid.secret; Scope muss zur Route passen)"
 }
 $script:ClioHeaders = @{ Authorization = "Bearer $($env:TOKEN)" }
 

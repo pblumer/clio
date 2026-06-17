@@ -15,16 +15,19 @@ Es gibt jedes Skript in **zwei Varianten** — wähle die deiner Plattform:
 
 1. Clio läuft lokal (siehe
    [Quickstart](../../docs/learning-path/00-grundlagen/02-clio-quickstart.md)
-   oder `00-start-server.sh` / `00-start-server.ps1`).
-2. Token gesetzt — **identisch** zum `CLIO_API_TOKEN` des Servers:
+   oder `00-start-server.sh` / `00-start-server.ps1`). Der Start-Helfer bootet
+   beim ersten Lauf einen Admin-Key (ADR-025) und gibt den vollständigen API-Key
+   im Format `kid.secret` aus.
+2. `TOKEN` auf den vom Start-Helfer ausgegebenen Wert setzen (Format
+   `kid.secret`, der `kid` wird vom Server erzeugt):
 
    **Linux/macOS (Bash):**
    ```bash
-   export TOKEN=dein-geheimes-token
+   export TOKEN=kid_xxxx.demo-secret   # exakt die vom Start-Helfer ausgegebene Zeile
    ```
    **Windows (PowerShell):**
    ```powershell
-   $env:TOKEN = 'dein-geheimes-token'
+   $env:TOKEN = 'kid_xxxx.demo-secret'
    ```
 3. Optional eine andere Basis-URL: `CLIO_BASE` (Default `http://127.0.0.1:3000`).
 
@@ -32,7 +35,7 @@ Es gibt jedes Skript in **zwei Varianten** — wähle die deiner Plattform:
 
 | Skript (`.sh` / `.ps1`) | Modul | Zeigt |
 |---|---|---|
-| `00-start-server` | Quickstart | Baut & startet Clio mit Token |
+| `00-start-server` | Quickstart | Baut & startet Clio, bootet einen Admin-Key, gibt `kid.secret` aus |
 | `01-events-schreiben` | [M01](../../docs/learning-path/module/M01-erstes-event.md) | Einzelnes & atomares Mehrfach-Schreiben |
 | `02-lesen-und-filtern` | [M02](../../docs/learning-path/module/M02-lesen-und-filtern.md) | recursive, Bounds, Typ-Filter, GET-Route |
 | `03-observe` | [M03](../../docs/learning-path/module/M03-live-observe.md) | Live-Streaming mit Hintergrund-Observer |
@@ -45,7 +48,7 @@ Es gibt jedes Skript in **zwei Varianten** — wähle die deiner Plattform:
 
 **Linux/macOS (Bash):**
 ```bash
-export TOKEN=dein-geheimes-token
+export TOKEN=kid_xxxx.demo-secret   # vom Start-Helfer ausgegeben
 examples/bibliothek/01-events-schreiben.sh
 examples/bibliothek/02-lesen-und-filtern.sh
 # ...
@@ -53,7 +56,7 @@ examples/bibliothek/02-lesen-und-filtern.sh
 
 **Windows (PowerShell):**
 ```powershell
-$env:TOKEN = 'dein-geheimes-token'
+$env:TOKEN = 'kid_xxxx.demo-secret'   # vom Start-Helfer ausgegeben
 .\examples\bibliothek\01-events-schreiben.ps1
 .\examples\bibliothek\02-lesen-und-filtern.ps1
 # ...

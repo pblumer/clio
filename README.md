@@ -41,7 +41,8 @@ monotone Event-IDs, `bbolt`-Storage, **Preconditions** für Optimistic
 Concurrency), `read-events` (NDJSON, optionale **`lowerBound`/`upperBound`**,
 **`recursive`**) und **`observe-events`** (Live-Streaming: erst History, dann
 offene Verbindung) — wahlweise auch bequem per **`GET /api/v1/events/<subject>`**.
-Alle Datenrouten Bearer-Token-geschützt.
+Alle Datenrouten sind durch benannte **API-Keys mit Scopes** geschützt (ADR-025,
+Format `kid.secret`) — siehe [API-Keys](#api-keys-scopes--widerruf).
 
 **Stufe 3 — abgeschlossen.** **Group Commit** als Default-Schreibstrategie (hoher
 Durchsatz bei voller Durability, umschaltbar via `CLIO_SYNC`) — siehe
@@ -62,8 +63,10 @@ make build            # -> ./cliostore
 # oder direkt
 go build -o cliostore ./cmd/cliostore
 
-# Starten (API-Token ist Pflicht)
-CLIO_API_TOKEN=dein-geheimes-token ./cliostore
+# Starten — beim ersten Start einen initialen Admin-Key booten (ADR-025).
+# Der vollständige Schlüssel ist dann kid.secret: der beim Start geloggte kid
+# zusammen mit dem hier gesetzten Geheimnis (z. B. kid_ab12cd34.dein-geheimnis).
+CLIO_BOOTSTRAP_ADMIN_KEY=dein-geheimnis ./cliostore
 
 # Erreichbarkeit prüfen
 curl http://127.0.0.1:3000/api/v1/ping
@@ -201,9 +204,10 @@ GitHub Container Registry:
 
 ```bash
 docker run --rm -p 3000:3000 \
-  -e CLIO_API_TOKEN=dein-token \
+  -e CLIO_BOOTSTRAP_ADMIN_KEY=dein-geheimnis \
   -v clio-data:/data \
   ghcr.io/pblumer/clio:latest      # oder :v0.1.0
+# Beim ersten Start wird der kid geloggt; der Schlüssel ist dann kid.secret.
 ```
 
 Lokal bauen:
@@ -242,13 +246,56 @@ Build lokal mit `make package` proben.
 
 | Variable          | Pflicht | Default    | Bedeutung                          |
 |-------------------|---------|------------|------------------------------------|
-| `CLIO_API_TOKEN`  | ja      | —          | Bearer-Token für geschützte Routen |
+| `CLIO_BOOTSTRAP_ADMIN_KEY` | nein* | —     | Klartext-Geheimnis, aus dem **bei leerem Schlüsselbund** ein initialer Admin-Key gebootet wird (ADR-025). Der generierte `kid` wird beim Start geloggt; der Leitungswert ist `kid.secret`. |
+| `CLIO_API_TOKEN`  | nein*   | —          | **Deprecated** (ADR-008 → ADR-025): bootet bei leerem Bund einen `legacy-token`-Admin-Key. Der Leitungswert ist danach `kid.secret` — das alte `Bearer <token>` ohne `kid`-Präfix wird nicht mehr akzeptiert. |
 | `CLIO_ADDR`       | nein    | `:3000`    | Listen-Adresse des HTTP-Servers    |
 | `CLIO_DB_PATH`    | nein    | `clio.db`  | Pfad zur bbolt-Datenbankdatei      |
 | `CLIO_SYNC`       | nein    | `group`    | Schreibstrategie: `group`/`always`/`off` (siehe Performance) |
 | `CLIO_SIGNING_KEY`| nein    | —          | base64-Ed25519-Schlüssel; aktiviert Event-Signaturen        |
 | `CLIO_COMPRESS`   | nein    | `false`    | Transparente DEFLATE-Kompression der gespeicherten Event-Werte (truthy, z. B. `1`/`true`). Spart ~45–50 % Ablage je Event; wirkt nur auf neu geschriebene Events, bestehende bleiben lesbar (ADR-024). |
 | `CLIO_DEV_MODE`   | nein    | `false`    | Dev-Mode (truthy, z. B. `1`/`true`): schaltet die destruktiven Dev-Routen (`POST /api/v1/dev/reset-database`, `POST /api/v1/dev/bulk-import-events`, `POST /api/v1/dev/close-bulk-import`) und die „Dev-Zone" im Dashboard frei. **Nicht in Produktion** (siehe ADR-022). |
+
+\* **Auth-Material beim Start:** Ist der Schlüsselbund leer (frische DB), muss
+**eines** von `CLIO_BOOTSTRAP_ADMIN_KEY` oder `CLIO_API_TOKEN` gesetzt sein —
+sonst verweigert der Server den Start. Existieren bereits Schlüssel, ist beides
+optional und es wird nichts gebootet.
+
+### API-Keys (Scopes & Widerruf)
+
+Der Zugriff läuft über benannte **API-Keys** (ADR-025). Auf der Leitung gilt das
+Format `kid.secret`:
+
+```
+Authorization: Bearer kid_ci01.W8xqT2vK9pL4mN6rS1dF3hJ5
+```
+
+Jeder Key trägt **Scopes**: `read` (lesende Routen), `write` (`write-events`,
+`register-event-schema`) und `admin` (Schlüsselverwaltung, Dev-Routen). Fehlt der
+Schlüssel oder ist er ungültig/widerrufen → **401**; ist er gültig, trägt aber den
+nötigen Scope nicht → **403**. Gespeichert wird nur der SHA-256-Hash des
+Geheimnisses, nie der Klartext; Widerruf setzt den Status (kein Löschen).
+
+Verwaltung zur Laufzeit (alle drei Routen verlangen Scope `admin`):
+
+```bash
+ADMIN=kid_ab12cd34.dein-admin-geheimnis   # Bootstrap-/Admin-Key
+
+# Neuen Key anlegen — die Antwort enthält EINMALIG den vollständigen kid.secret.
+curl -sS -X POST http://127.0.0.1:3000/api/v1/keys \
+  -H "Authorization: Bearer $ADMIN" -H "Content-Type: application/json" \
+  -d '{"name":"ci-writer","scopes":["read","write"]}'
+# -> {"kid":"kid_ci01","secret":"kid_ci01.W8xq…","warning":"… nur einmal sichtbar …", …}
+
+# Keys auflisten (ohne Geheimnisse/Hashes).
+curl -sS -H "Authorization: Bearer $ADMIN" http://127.0.0.1:3000/api/v1/keys
+
+# Key widerrufen.
+curl -sS -X POST -H "Authorization: Bearer $ADMIN" \
+  http://127.0.0.1:3000/api/v1/keys/kid_ci01/revoke
+```
+
+Jede Autorisierungsentscheidung (allow/deny) wird ins Audit-Log geschrieben —
+ohne jedes Geheimnis.
 
 ### Dev-Mode: Reset & Bulk-Import-Fenster
 
@@ -297,7 +344,9 @@ Guidelines (ADR-019); die übrigen Abweichungen bleiben dokumentiert (ADR-018).
 ### Events schreiben & lesen
 
 ```bash
-TOKEN=dein-geheimes-token
+# API-Key im Format kid.secret (ADR-025) — Scope muss zur Route passen
+# (write-events braucht 'write'). Anlegen via POST /api/v1/keys (siehe oben).
+TOKEN=kid_ci01.dein-geheimnis
 
 # Ein oder mehrere Events atomar schreiben (id/time/specversion ergänzt der Server)
 curl -X POST http://127.0.0.1:3000/api/v1/write-events \
