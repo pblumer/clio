@@ -39,11 +39,36 @@ func TestFromEnvOverrides(t *testing.T) {
 	}
 }
 
-func TestFromEnvMissingToken(t *testing.T) {
-	t.Setenv(envToken, "")
+// TestFromEnvAuthMaterialOptional dokumentiert, dass die Anwesenheit von
+// Auth-Material nicht mehr in FromEnv geprüft wird (das wandert in den Bootstrap,
+// WP-05, weil es den Store braucht). Alle drei Kombinationen ergeben hier kein
+// Fehler.
+func TestFromEnvAuthMaterialOptional(t *testing.T) {
+	cases := []struct {
+		name      string
+		token     string
+		bootstrap string
+	}{
+		{name: "nur token", token: "tok"},
+		{name: "nur bootstrap", bootstrap: "geheim"},
+		{name: "beides leer", token: "", bootstrap: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(envToken, tc.token)
+			t.Setenv(envBootstrap, tc.bootstrap)
 
-	if _, err := FromEnv(); err == nil {
-		t.Fatal("erwartete fehler bei fehlendem token, bekam nil")
+			cfg, err := FromEnv()
+			if err != nil {
+				t.Fatalf("FromEnv: unerwarteter fehler: %v", err)
+			}
+			if cfg.APIToken != tc.token {
+				t.Errorf("APIToken = %q, want %q", cfg.APIToken, tc.token)
+			}
+			if cfg.BootstrapAdminKey != tc.bootstrap {
+				t.Errorf("BootstrapAdminKey = %q, want %q", cfg.BootstrapAdminKey, tc.bootstrap)
+			}
+		})
 	}
 }
 
