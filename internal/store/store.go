@@ -37,6 +37,10 @@ var (
 	bucketTypes      = []byte("types")
 	bucketSubjCount  = []byte("subj_count")
 	bucketSchemas    = []byte("schemas")
+	// bucketAuthKeys hält den Schlüsselbund (kid → JSON-Key, ADR-025). Bewusst
+	// getrennt vom Event-Strom: es sind mutable Steuerungsdaten und vom Reset
+	// (ADR-022) ausgenommen — siehe Reset().
+	bucketAuthKeys = []byte("auth_keys")
 )
 
 // metaChainHead speichert im meta-Bucket den Hash des zuletzt geschriebenen
@@ -173,7 +177,7 @@ func OpenWithOptions(path string, opts Options) (*Store, error) {
 	}
 
 	err = db.Update(func(tx *bolt.Tx) error {
-		for _, name := range [][]byte{bucketEvents, bucketSubjectIdx, bucketTypeIdx, bucketMeta, bucketTypes, bucketSubjCount, bucketSchemas} {
+		for _, name := range [][]byte{bucketEvents, bucketSubjectIdx, bucketTypeIdx, bucketMeta, bucketTypes, bucketSubjCount, bucketSchemas, bucketAuthKeys} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return err
 			}
@@ -253,6 +257,9 @@ func (s *Store) Reset() (uint64, error) {
 	var deleted uint64
 	err := s.db.Update(func(tx *bolt.Tx) error {
 		deleted = tx.Bucket(bucketEvents).Sequence()
+		// Bewusst OHNE bucketAuthKeys: der Schlüsselbund (ADR-025) ist mutabler
+		// Steuerungs-State, kein Event-Strom. Würde der Dev-Reset ihn leeren,
+		// sperrte man sich beim Reset selbst aus (kein gültiger Key mehr).
 		for _, name := range [][]byte{bucketEvents, bucketSubjectIdx, bucketTypeIdx, bucketMeta, bucketTypes, bucketSchemas} {
 			if tx.Bucket(name) != nil {
 				if err := tx.DeleteBucket(name); err != nil {
