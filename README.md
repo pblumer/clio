@@ -260,6 +260,7 @@ Build lokal mit `make package` proben.
 | `CLIO_COMPRESS`   | nein    | `false`    | Transparente DEFLATE-Kompression der gespeicherten Event-Werte (truthy, z. B. `1`/`true`). Spart ~45–50 % Ablage je Event; wirkt nur auf neu geschriebene Events, bestehende bleiben lesbar (ADR-024). |
 | `CLIO_EVENT_AUTHORSHIP` | nein | `false` | Übernimmt (truthy) den `kid` des authentifizierten Schreibers als CloudEvents-Extension `clioauthkid` in jedes neu geschriebene Event (Urheberschaft, ADR-025). Append-only-konform, in Hash/Signatur gebunden; wirkt nur auf neue Events, Default aus = byte-identisch zum bisherigen Verhalten. |
 | `CLIO_DEV_MODE`   | nein    | `false`    | Dev-Mode (truthy, z. B. `1`/`true`): schaltet die destruktiven Dev-Routen (`POST /api/v1/dev/reset-database`, `POST /api/v1/dev/bulk-import-events`, `POST /api/v1/dev/close-bulk-import`) und die „Dev-Zone" im Dashboard frei. **Nicht in Produktion** (siehe ADR-022). |
+| `CLIO_OBSERVE_PREAMBLE_BYTES` | nein | `4096` | Größe des Anti-Buffering-Polsters (Whitespace), das ein `observe`-Stream beim Verbindungsaufbau einmalig sendet. Manche puffernden Reverse-Proxies/Security-Gateways geben einen Stream erst weiter, wenn genug Bytes geflossen sind. Hochdrehen (z. B. `16384`/`65536`), falls Live-Events hinter einem Firmen-Proxy nicht durchkommen; `0` schaltet es ab. Vom Client als Leerzeile ignoriert. |
 
 \* **Auth-Material beim Start:** Ist der Schlüsselbund leer (frische DB), muss
 **eines** von `CLIO_BOOTSTRAP_ADMIN_KEY` oder `CLIO_API_TOKEN` gesetzt sein —

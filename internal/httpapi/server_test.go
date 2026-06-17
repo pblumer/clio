@@ -55,13 +55,20 @@ func seedKey(t *testing.T, st *store.Store, kid, secret string, status auth.Stat
 
 func newTestServer(t *testing.T) *Server {
 	t.Helper()
+	return newTestServerCfg(t, config.Config{Addr: ":0"})
+}
+
+// newTestServerCfg baut einen Server mit der angegebenen Config (gleicher
+// Admin-Key wie newTestServer).
+func newTestServerCfg(t *testing.T, cfg config.Config) *Server {
+	t.Helper()
 	st, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
 		t.Fatalf("store öffnen: %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
 	seedKey(t, st, testAdminKID, testAdminSecret, auth.StatusActive, auth.ScopeRead, auth.ScopeWrite, auth.ScopeAdmin)
-	return New(config.Config{Addr: ":0"}, st, nil)
+	return New(cfg, st, nil)
 }
 
 // newDevServer baut einen Server im Dev-Mode (Reset-Route freigeschaltet).
@@ -1546,6 +1553,61 @@ func TestObserveFlushesImmediately(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("keine sofortige Verbindungs-Quittung (ohne den initialen Flush hinge der Client bis zum Heartbeat)")
+	}
+}
+
+// TestObservePreambleAndNoTransform: bei gesetztem ObservePreambleBytes sendet der
+// observe-Stream beim Verbindungsaufbau ein Whitespace-Polster dieser Größe (gegen
+// puffernde Gateways) und setzt Cache-Control: no-transform. Das Polster ist eine
+// vom Client ignorierte Leerzeile (TrimSpace == "").
+func TestObservePreambleAndNoTransform(t *testing.T) {
+	old := observeHeartbeat
+	observeHeartbeat = 30 * time.Second // soll im Test NICHT feuern
+	defer func() { observeHeartbeat = old }()
+
+	const preamble = 1024
+	srv := newTestServerCfg(t, config.Config{Addr: ":0", ObservePreambleBytes: preamble})
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, ts.URL+"/api/v1/observe-events",
+		strings.NewReader(`{"subject":"/none","lowerBound":"999999"}`))
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("observe-request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if got := resp.Header.Get("Cache-Control"); !strings.Contains(got, "no-transform") {
+		t.Fatalf("Cache-Control = %q, want enthält no-transform", got)
+	}
+
+	type result struct {
+		line []byte
+		err  error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		line, err := bufio.NewReader(resp.Body).ReadBytes('\n')
+		ch <- result{line, err}
+	}()
+	select {
+	case got := <-ch:
+		if got.err != nil {
+			t.Fatalf("Preamble-Zeile lesen: %v", got.err)
+		}
+		// Polster (preamble Leerzeichen) + "\n"; vom Client als Leerzeile ignoriert.
+		if strings.TrimSpace(string(got.line)) != "" {
+			t.Fatalf("erwartete Whitespace-Leerzeile, bekam %q", got.line)
+		}
+		if len(got.line) < preamble {
+			t.Fatalf("Preamble zu kurz: %d bytes, want >= %d", len(got.line), preamble)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("kein sofortiges Preamble")
 	}
 }
 
