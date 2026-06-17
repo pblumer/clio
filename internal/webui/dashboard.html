@@ -335,8 +335,8 @@
   <button id="tab-live" data-view="live">Live-Events</button>
   <button id="tab-explorer" data-view="explorer">Explorer</button>
   <button id="tab-generate" data-view="generate">Erzeugen</button>
-  <button id="tab-keys" data-view="keys">Keys</button>
   <button id="tab-query" data-view="query">Query</button>
+  <button id="tab-keys" data-view="keys">Keys</button>
   <button id="tab-help" data-view="help">Hilfe</button>
 </nav>
 
@@ -873,7 +873,7 @@ function fmtMs(sec) {
 
 // ---------- Tabs ----------
 function switchView(name) {
-  for (const v of ["dashboard", "live", "explorer", "generate", "keys", "query", "help"]) {
+  for (const v of ["dashboard", "live", "explorer", "generate", "query", "keys", "help"]) {
     $("view-" + v).classList.toggle("active", v === name);
     $("tab-" + v).classList.toggle("active", v === name);
   }
