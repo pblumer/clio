@@ -53,12 +53,16 @@
   .dot.live { background: var(--accent); box-shadow: 0 0 10px var(--accent); animation: pulse 1.4s infinite; }
   @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
   .spacer { flex: 1; }
-  input, select, button {
+  input:not([type="checkbox"]), select, button {
     font: inherit; color: var(--fg); background: var(--panel-2);
     border: 1px solid var(--border); border-radius: 7px; padding: 7px 10px;
   }
-  input { min-width: 200px; }
+  input:not([type="checkbox"]) { min-width: 200px; }
   input.short { min-width: 90px; }
+  /* Checkboxen native + getönt halten (sonst streckt die min-width-Regel oben sie
+     auf 200px und reißt Häkchen und Label weit auseinander). */
+  input[type="checkbox"] { width: 15px; height: 15px; min-width: 0; margin: 0;
+    accent-color: var(--accent); cursor: pointer; flex: none; }
   button { cursor: pointer; transition: border-color .15s, box-shadow .15s, color .15s; }
   button:hover { border-color: var(--accent); box-shadow: var(--glow); color: #fff; }
   button:disabled { opacity: .5; cursor: not-allowed; }
