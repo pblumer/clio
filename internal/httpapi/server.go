@@ -44,17 +44,18 @@ var observeHeartbeat = 15 * time.Second
 
 // Server kapselt Konfiguration, Storage und Router des HTTP-API-Layers.
 type Server struct {
-	cfg       config.Config
-	store     *store.Store
-	broker    *pubsub.Broker
-	metrics   *metrics.Metrics
-	events    *eventstats.Histogram
-	queryC    *query.Compiler
-	logger    *slog.Logger
-	mux       *http.ServeMux
-	version   string
-	startedAt time.Time
-	devMode   bool
+	cfg             config.Config
+	store           *store.Store
+	broker          *pubsub.Broker
+	metrics         *metrics.Metrics
+	events          *eventstats.Histogram
+	queryC          *query.Compiler
+	logger          *slog.Logger
+	mux             *http.ServeMux
+	version         string
+	startedAt       time.Time
+	devMode         bool
+	eventAuthorship bool
 
 	bulkMu         sync.RWMutex
 	bulkImportOpen bool
@@ -89,17 +90,18 @@ func New(cfg config.Config, st *store.Store, logger *slog.Logger, opts ...Option
 
 	now := time.Now().UTC()
 	s := &Server{
-		cfg:            cfg,
-		store:          st,
-		broker:         pubsub.New(),
-		metrics:        metrics.New(),
-		queryC:         qc,
-		logger:         logger,
-		mux:            http.NewServeMux(),
-		version:        "dev",
-		startedAt:      now,
-		devMode:        cfg.DevMode,
-		bulkImportOpen: cfg.DevMode,
+		cfg:             cfg,
+		store:           st,
+		broker:          pubsub.New(),
+		metrics:         metrics.New(),
+		queryC:          qc,
+		logger:          logger,
+		mux:             http.NewServeMux(),
+		version:         "dev",
+		startedAt:       now,
+		devMode:         cfg.DevMode,
+		eventAuthorship: cfg.EventAuthorship,
+		bulkImportOpen:  cfg.DevMode,
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -377,7 +379,7 @@ func (s *Server) handleDevBulkImportEvents(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	written, err := s.store.Append(req.Events, preconditions)
+	written, err := s.store.AppendAuthored(req.Events, preconditions, s.authorKID(r))
 	if err != nil {
 		if errors.Is(err, store.ErrPreconditionFailed) {
 			s.metrics.IncPreconditionFailure()
@@ -736,7 +738,7 @@ func (s *Server) handleWriteEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	written, err := s.store.Append(req.Events, preconditions)
+	written, err := s.store.AppendAuthored(req.Events, preconditions, s.authorKID(r))
 	if err != nil {
 		if errors.Is(err, store.ErrPreconditionFailed) {
 			s.metrics.IncPreconditionFailure()
@@ -1260,6 +1262,20 @@ func withIdentity(ctx context.Context, id auth.Identity) context.Context {
 func identityFromContext(r *http.Request) (auth.Identity, bool) {
 	id, ok := r.Context().Value(identityContextKey).(auth.Identity)
 	return id, ok
+}
+
+// authorKID liefert den kid, der als Urheberschaft auf neu geschriebene Events
+// gestempelt wird (ADR-025). Leer, wenn die Event-Urheberschaft deaktiviert ist
+// (CLIO_EVENT_AUTHORSHIP) oder keine Identität vorliegt — dann bleibt das
+// Verhalten byte-identisch zum bisherigen Schreibpfad.
+func (s *Server) authorKID(r *http.Request) string {
+	if !s.eventAuthorship {
+		return ""
+	}
+	if id, ok := identityFromContext(r); ok {
+		return id.KID
+	}
+	return ""
 }
 
 // dummyHash ist ein gültiger SHA-256-Hex-Hash, gegen den auch bei

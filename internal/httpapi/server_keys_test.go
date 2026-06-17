@@ -3,10 +3,13 @@ package httpapi
 import (
 	"encoding/json"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/pblumer/clio/internal/auth"
+	"github.com/pblumer/clio/internal/config"
+	"github.com/pblumer/clio/internal/store"
 )
 
 // createKey legt über die Admin-Route einen Key an und liefert den
@@ -25,6 +28,54 @@ func createKey(t *testing.T, srv *Server, token, body string) (kid, wire string)
 		t.Fatalf("create-key dekodieren: %v", err)
 	}
 	return resp.KID, resp.Secret
+}
+
+// newAuthorshipServer baut einen Server mit aktivierter Event-Urheberschaft und
+// gibt zusätzlich den Store zurück.
+func newAuthorshipServer(t *testing.T, on bool) *Server {
+	t.Helper()
+	st, err := store.Open(filepath.Join(t.TempDir(), "author.db"))
+	if err != nil {
+		t.Fatalf("store öffnen: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	seedKey(t, st, testAdminKID, testAdminSecret, auth.StatusActive, auth.ScopeRead, auth.ScopeWrite, auth.ScopeAdmin)
+	return New(config.Config{EventAuthorship: on}, st, nil)
+}
+
+// TestEventAuthorshipOn: mit aktivem Flag trägt ein geschriebenes Event den kid
+// des authentifizierten Schreibers als clioauthkid — auch wenn der Client das
+// Feld nicht setzen kann.
+func TestEventAuthorshipOn(t *testing.T) {
+	srv := newAuthorshipServer(t, true)
+
+	if rec := do(t, srv, http.MethodPost, "/api/v1/write-events", adminToken,
+		`{"events":[{"source":"s","subject":"/a","type":"t"}]}`); rec.Code != http.StatusOK {
+		t.Fatalf("write status = %d", rec.Code)
+	}
+
+	rec := do(t, srv, http.MethodPost, "/api/v1/read-events", adminToken, `{"subject":"/a"}`)
+	if !strings.Contains(rec.Body.String(), `"clioauthkid":"`+testAdminKID+`"`) {
+		t.Fatalf("clioauthkid des schreibers fehlt: %s", rec.Body.String())
+	}
+
+	// verify bleibt grün (Urheberschaft ist in die Hash-Kette gebunden).
+	if rec := do(t, srv, http.MethodGet, "/api/v1/verify", adminToken, ""); !strings.Contains(rec.Body.String(), `"ok":true`) {
+		t.Fatalf("verify nicht ok: %s", rec.Body.String())
+	}
+}
+
+// TestEventAuthorshipOff: ohne Flag bleibt der Schreibpfad unverändert — kein
+// clioauthkid im Event.
+func TestEventAuthorshipOff(t *testing.T) {
+	srv := newAuthorshipServer(t, false)
+
+	do(t, srv, http.MethodPost, "/api/v1/write-events", adminToken,
+		`{"events":[{"source":"s","subject":"/a","type":"t"}]}`)
+	rec := do(t, srv, http.MethodPost, "/api/v1/read-events", adminToken, `{"subject":"/a"}`)
+	if strings.Contains(rec.Body.String(), "clioauthkid") {
+		t.Fatalf("clioauthkid sollte ohne flag fehlen: %s", rec.Body.String())
+	}
 }
 
 func TestCreateListRevokeKey(t *testing.T) {

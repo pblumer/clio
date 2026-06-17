@@ -40,6 +40,13 @@ type Config struct {
 	// auf neu geschriebene Events — bestehende bleiben lesbar.
 	Compress bool
 
+	// EventAuthorship übernimmt (wenn aktiv) die authentifizierte Identität (kid)
+	// als CloudEvents-Extension `clioauthkid` in jedes geschriebene Event
+	// (Urheberschaft, ADR-025). Default aus; per CLIO_EVENT_AUTHORSHIP aktivierbar.
+	// Append-only-konform (neues Attribut auf neuen Events) und in Hash/Signatur
+	// gebunden — wirkt nur auf neu geschriebene Events.
+	EventAuthorship bool
+
 	// DevMode schaltet Entwickler-Komfort frei, der im Produktivbetrieb nichts zu
 	// suchen hat — allen voran das destruktive Zurücksetzen der Datenbank über
 	// POST /api/v1/dev/reset-database und den dazugehörigen Button im Dashboard
@@ -57,6 +64,7 @@ const (
 	envSignKey   = "CLIO_SIGNING_KEY"
 	envDevMode   = "CLIO_DEV_MODE"
 	envCompress  = "CLIO_COMPRESS"
+	envEventAuth = "CLIO_EVENT_AUTHORSHIP"
 
 	defaultAddr   = ":3000"
 	defaultDBPath = "clio.db"
@@ -82,6 +90,7 @@ func FromEnv() (Config, error) {
 		SigningKey:        os.Getenv(envSignKey),
 		DevMode:           parseBoolDefault(envDevMode, false),
 		Compress:          parseBoolDefault(envCompress, false),
+		EventAuthorship:   parseBoolDefault(envEventAuth, false),
 	}
 
 	if !validSync[cfg.Sync] {

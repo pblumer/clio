@@ -809,6 +809,13 @@ components:
         type: { type: string }
         datacontenttype: { type: string, example: "application/json" }
         data: { nullable: true }
+        clioauthkid:
+          type: string
+          description: |
+            Optionale CloudEvents-Extension: kid des authentifizierten Schlüssels,
+            der das Event geschrieben hat (Urheberschaft, ADR-025). Nur vorhanden,
+            wenn `CLIO_EVENT_AUTHORSHIP` aktiv war; geht dann in den Hash ein.
+          example: "kid_ci01"
         predecessorhash:
           type: string
           description: SHA-256-Hash des Vorgängers (Genesis = 64 Nullen)

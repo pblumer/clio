@@ -645,6 +645,15 @@ func backfillSubjCount(tx *bolt.Tx) error {
 // nichts geschrieben und ein in ErrPreconditionFailed gehüllter Fehler
 // zurückgegeben. Bei leerer Eingabe wird ein leeres Ergebnis zurückgegeben.
 func (s *Store) Append(candidates []event.Candidate, preconditions []Precondition) ([]event.Event, error) {
+	return s.AppendAuthored(candidates, preconditions, "")
+}
+
+// AppendAuthored schreibt wie Append, stempelt aber zusätzlich die Urheberschaft
+// (kid des authentifizierten Schlüssels, ADR-025) auf jedes Event. authKID == ""
+// verhält sich byte-identisch zu Append (keine Urheberschaft, kein Hash-Einfluss).
+// Der Wert stammt serverseitig aus der authentifizierten Identität — ein Client
+// kann ihn nicht selbst setzen.
+func (s *Store) AppendAuthored(candidates []event.Candidate, preconditions []Precondition, authKID string) ([]event.Event, error) {
 	if len(candidates) == 0 {
 		return nil, nil
 	}
@@ -702,6 +711,7 @@ func (s *Store) Append(candidates []event.Candidate, preconditions []Preconditio
 				Type:            c.Type,
 				DataContentType: dct,
 				Data:            data,
+				AuthKID:         authKID,
 				PredecessorHash: head,
 			}
 			ev.Hash = event.ComputeHash(ev)
