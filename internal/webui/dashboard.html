@@ -157,6 +157,14 @@
   .controls { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
   .badge { background: var(--panel-2); border: 1px solid var(--border); border-radius: 20px; padding: 3px 10px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
   .badge.pending { border-color: var(--accent); color: var(--accent); cursor: pointer; }
+  .badge.scope { padding: 2px 8px; border-radius: 5px; margin-right: 3px; color: var(--fg); }
+  .badge.ok { border-color: #2e7d51; color: #6ee7a8; }
+  .badge.warn { border-color: #b5852a; color: #f2c879; }
+  table.keys-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table.keys-table th, table.keys-table td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  table.keys-table th { color: var(--muted); font-weight: 600; font-size: 12px; }
+  table.keys-table td.kid { font-family: var(--mono); }
+  table.keys-table tr.revoked td { color: var(--muted); }
   #events { display: flex; flex-direction: column; gap: 6px; }
   .ev { background: var(--panel); border: 1px solid var(--border); border-radius: 9px; padding: 9px 12px; }
   .ev-head { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; cursor: pointer; font-family: var(--mono); font-size: 13px; }
@@ -318,6 +326,7 @@
   <button id="tab-live" data-view="live">Live-Events</button>
   <button id="tab-explorer" data-view="explorer">Explorer</button>
   <button id="tab-generate" data-view="generate">Erzeugen</button>
+  <button id="tab-keys" data-view="keys">Keys</button>
   <button id="tab-query" data-view="query">Query</button>
   <button id="tab-help" data-view="help">Hilfe</button>
 </nav>
@@ -608,6 +617,74 @@
     </div>
   </div>
 
+  <!-- ============ Keys ============ -->
+  <div id="view-keys" class="view">
+    <div class="notice">
+      Verwaltung der <strong>API-Keys</strong> (ADR-025) über <code>/api/v1/keys</code>.
+      Erfordert ein Token mit Scope <strong>admin</strong>. Geheimnisse werden nur
+      <strong>einmalig</strong> beim Anlegen angezeigt — danach nur noch Hash (nie abrufbar).
+    </div>
+
+    <div class="gen-grid">
+      <!-- Key anlegen -->
+      <div class="card gen-card">
+        <div class="label">Key anlegen</div>
+        <div class="gen-form">
+          <label>Name
+            <input id="key-name" spellcheck="false" placeholder="ci-writer">
+          </label>
+          <label>Scopes</label>
+          <div class="gen-row">
+            <label class="inline"><input type="checkbox" id="key-scope-read" checked> read</label>
+            <label class="inline"><input type="checkbox" id="key-scope-write"> write</label>
+            <label class="inline"><input type="checkbox" id="key-scope-admin"> admin</label>
+          </div>
+          <div class="gen-actions">
+            <button id="key-create" class="primary">Key anlegen</button>
+          </div>
+        </div>
+        <div id="key-create-result" class="gen-result"></div>
+      </div>
+
+      <!-- Hinweise -->
+      <div class="card gen-card">
+        <div class="label">Hinweise</div>
+        <div class="hint" style="line-height:1.6">
+          <p style="margin:2px 0">• <strong>read</strong> = lesende Routen, <strong>write</strong> = schreiben/Schema, <strong>admin</strong> = Schlüsselverwaltung &amp; Dev-Routen.</p>
+          <p style="margin:2px 0">• <strong>Widerruf</strong> setzt nur den Status (kein Löschen) — die <code>kid</code>-Zuordnung bleibt fürs Audit erhalten.</p>
+          <p style="margin:2px 0">• Wird der <em>letzte aktive Admin-Key</em> widerrufen, ist keine Verwaltung mehr möglich (Self-Lockout) — die Übersicht warnt davor.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Übersicht -->
+    <div class="card gen-card">
+      <div class="gen-row" style="justify-content:space-between">
+        <span class="label" style="margin:0">Vergebene Keys</span>
+        <span>
+          <label class="inline">Filter
+            <select id="key-filter">
+              <option value="all">alle</option>
+              <option value="active">nur aktiv</option>
+              <option value="revoked">nur widerrufen</option>
+            </select>
+          </label>
+          <button id="key-refresh" class="link-btn">aktualisieren</button>
+        </span>
+      </div>
+      <div id="key-warning" class="gen-result" style="display:none"></div>
+      <div id="key-list-status" class="hint" style="margin:6px 0">Token eingeben und <strong>Verbinden</strong>, dann <em>aktualisieren</em>.</div>
+      <div style="overflow-x:auto">
+        <table id="key-table" class="keys-table" style="display:none">
+          <thead><tr>
+            <th>kid</th><th>Name</th><th>Scopes</th><th>Status</th><th>erstellt</th><th>widerrufen</th><th></th>
+          </tr></thead>
+          <tbody id="key-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
   <!-- ============ Query ============ -->
   <div id="view-query" class="view">
     <div class="controls">
@@ -767,10 +844,12 @@ function fmtMs(sec) {
 
 // ---------- Tabs ----------
 function switchView(name) {
-  for (const v of ["dashboard", "live", "explorer", "generate", "query", "help"]) {
+  for (const v of ["dashboard", "live", "explorer", "generate", "keys", "query", "help"]) {
     $("view-" + v).classList.toggle("active", v === name);
     $("tab-" + v).classList.toggle("active", v === name);
   }
+  // Keys: beim ersten Öffnen die Liste laden, sofern ein Token vorliegt.
+  if (name === "keys" && !keysLoaded && tokenInput.value.trim()) loadKeys();
   // Explorer beim ersten Öffnen automatisch laden, sofern ein Token vorliegt.
   if (name === "explorer" && !explorerLoaded && tokenInput.value.trim()) loadExplorer();
   // Erzeugen: Vorschlagslisten beim ersten Öffnen befüllen.
@@ -2476,6 +2555,137 @@ document.querySelectorAll(".gen-templates .tpl").forEach((b) =>
   b.addEventListener("click", () => applyTemplate(b.dataset.tpl)));
 $("gen-scenario-library").addEventListener("click", (e) => genScenario("library", e.currentTarget));
 $("gen-scenario-carshare").addEventListener("click", (e) => genScenario("carshare", e.currentTarget));
+
+// ---------- Keys (API-Key-Verwaltung, ADR-025) ----------
+let keysLoaded = false;
+let keysData = null;
+
+function activeAdminCount(keys) {
+  return (keys || []).filter((k) => k.status === "active" && (k.scopes || []).includes("admin")).length;
+}
+function hideKeyTable() { $("key-table").style.display = "none"; }
+
+async function loadKeys() {
+  const token = tokenInput.value.trim();
+  const status = $("key-list-status");
+  if (!token) { status.textContent = "Token fehlt — oben eingeben und Verbinden."; return; }
+  status.textContent = "lade …";
+  try {
+    const r = await fetch("/api/v1/keys", { headers: { Authorization: "Bearer " + token }, cache: "no-store" });
+    if (r.status === 401) { status.textContent = "Token ungültig (401)."; hideKeyTable(); return; }
+    if (r.status === 403) { status.textContent = "Kein admin-Scope (403) — dieser Key darf keine Keys verwalten."; hideKeyTable(); return; }
+    if (!r.ok) { status.textContent = "Fehler: " + await problemDetail(r); hideKeyTable(); return; }
+    keysData = await r.json();
+    keysLoaded = true;
+    renderKeys();
+  } catch (e) { status.textContent = "Netzwerkfehler: " + e.message; }
+}
+
+function renderKeys() {
+  if (!keysData) return;
+  const keys = keysData.keys || [];
+  const filter = $("key-filter").value;
+  const rows = keys.filter((k) =>
+    filter === "all" ? true : filter === "active" ? k.status === "active" : k.status === "revoked");
+
+  const warn = $("key-warning");
+  if (keysData.warning) { warn.className = "gen-result warn"; warn.textContent = "⚠ " + keysData.warning; warn.style.display = "block"; }
+  else { warn.style.display = "none"; }
+
+  const tbody = $("key-tbody");
+  tbody.innerHTML = "";
+  for (const k of rows) {
+    const tr = document.createElement("tr");
+    if (k.status !== "active") tr.className = "revoked";
+    const scopes = (k.scopes || []).map((s) => '<span class="badge scope">' + escHtml(s) + "</span>").join("");
+    const statusBadge = k.status === "active"
+      ? '<span class="badge ok">active</span>' : '<span class="badge warn">revoked</span>';
+    const created = k.createdAt ? new Date(k.createdAt).toLocaleString("de-CH") : "–";
+    const revoked = k.revokedAt ? new Date(k.revokedAt).toLocaleString("de-CH") : "–";
+    tr.innerHTML =
+      '<td class="kid">' + escHtml(k.kid) + "</td><td>" + escHtml(k.name || "") + "</td><td>" +
+      scopes + "</td><td>" + statusBadge + "</td><td>" + created + "</td><td>" + revoked + "</td><td></td>";
+    if (k.status === "active") {
+      const btn = document.createElement("button");
+      btn.className = "link-btn"; btn.textContent = "widerrufen";
+      btn.addEventListener("click", () => revokeKey(k.kid, k.name));
+      tr.lastElementChild.appendChild(btn);
+    }
+    tbody.appendChild(tr);
+  }
+  $("key-table").style.display = rows.length ? "table" : "none";
+  let s = keys.length + " Key(s), " + activeAdminCount(keys) + " aktive Admin-Key(s) · aktualisiert " +
+    new Date().toLocaleTimeString("de-CH");
+  if (!rows.length) s += " — keine Treffer für diesen Filter.";
+  $("key-list-status").textContent = s;
+}
+
+async function revokeKey(kid, name) {
+  const keys = (keysData && keysData.keys) || [];
+  const isAdminKey = keys.some((k) => k.kid === kid && (k.scopes || []).includes("admin"));
+  const isLastAdmin = isAdminKey && activeAdminCount(keys) <= 1;
+  let msg = "Key " + kid + (name ? " (" + name + ")" : "") + " widerrufen?";
+  if (isLastAdmin) msg += "\n\n⚠ Das ist der letzte aktive Admin-Key — danach ist keine Schlüsselverwaltung mehr möglich (Self-Lockout).";
+  if (!confirm(msg)) return;
+  try {
+    const r = await authPost("/api/v1/keys/" + encodeURIComponent(kid) + "/revoke", {});
+    if (!r.ok) { alert("Widerruf fehlgeschlagen: " + await problemDetail(r)); return; }
+    await loadKeys();
+  } catch (e) { alert("Netzwerkfehler: " + e.message); }
+}
+
+function keyCreateResult(ok, msg) {
+  const el = $("key-create-result");
+  el.className = "gen-result " + (ok ? "ok" : "err");
+  el.textContent = msg;
+}
+
+function showNewSecret(j) {
+  const el = $("key-create-result");
+  el.className = "gen-result ok";
+  el.innerHTML = "";
+  const head = document.createElement("div");
+  head.innerHTML = "<strong>Key angelegt:</strong> " + escHtml(j.kid) + " (" + (j.scopes || []).map(escHtml).join(", ") + ")";
+  const warnEl = document.createElement("div");
+  warnEl.style.margin = "6px 0";
+  warnEl.textContent = "⚠ " + (j.warning || "Dieser Wert wird nur einmal angezeigt und ist danach nicht mehr abrufbar.");
+  const row = document.createElement("div");
+  row.className = "gen-row";
+  const code = document.createElement("code");
+  code.style.userSelect = "all"; code.style.wordBreak = "break-all";
+  code.textContent = j.secret;
+  const copy = document.createElement("button");
+  copy.className = "link-btn"; copy.textContent = "kopieren";
+  copy.addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText(j.secret); copy.textContent = "kopiert ✓"; }
+    catch (_) { copy.textContent = "(Strg+C)"; }
+  });
+  row.append(code, copy);
+  el.append(head, warnEl, row);
+}
+
+async function createKey() {
+  const name = $("key-name").value.trim();
+  if (!name) { keyCreateResult(false, "Name ist Pflicht."); return; }
+  const scopes = [];
+  if ($("key-scope-read").checked) scopes.push("read");
+  if ($("key-scope-write").checked) scopes.push("write");
+  if ($("key-scope-admin").checked) scopes.push("admin");
+  if (!scopes.length) { keyCreateResult(false, "Mindestens einen Scope wählen."); return; }
+  try {
+    const r = await authPost("/api/v1/keys", { name, scopes });
+    if (r.status === 401) { keyCreateResult(false, "Token ungültig (401)."); return; }
+    if (r.status === 403) { keyCreateResult(false, "Kein admin-Scope (403)."); return; }
+    if (r.status !== 201) { keyCreateResult(false, "Fehler: " + await problemDetail(r)); return; }
+    showNewSecret(await r.json());
+    $("key-name").value = "";
+    await loadKeys();
+  } catch (e) { keyCreateResult(false, "Netzwerkfehler: " + e.message); }
+}
+
+$("key-create").addEventListener("click", createKey);
+$("key-refresh").addEventListener("click", loadKeys);
+$("key-filter").addEventListener("change", renderKeys);
 
 // Eventstrom-Diagramm + Live-Liste initialisieren (Canvas, Buttons, Collapse).
 initEventStream();
