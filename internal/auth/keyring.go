@@ -130,23 +130,34 @@ const (
 // danach nicht mehr rekonstruierbar. Der vollständige Wert auf der Leitung ist
 // `kid.secret` (siehe Key.KID).
 func GenerateKey(name string, scopes []Scope) (Key, string, error) {
-	kid, err := randToken(kidPrefix, kidRandBytes)
-	if err != nil {
-		return Key{}, "", fmt.Errorf("kid erzeugen: %w", err)
-	}
 	secret, err := randToken("", secretRandBytes)
 	if err != nil {
 		return Key{}, "", fmt.Errorf("secret erzeugen: %w", err)
 	}
-	k := Key{
+	k, err := NewKeyWithSecret(name, scopes, secret)
+	if err != nil {
+		return Key{}, "", err
+	}
+	return k, secret, nil
+}
+
+// NewKeyWithSecret erzeugt einen Schlüssel mit zufälligem kid, aber einem vom
+// Aufrufer vorgegebenen Klartext-Geheimnis (z. B. beim Bootstrap, wo der
+// Betreiber das Geheimnis über eine ENV-Variable setzt). Gespeichert wird nur
+// der Hash. Der vollständige Leitungswert ist k.KID + "." + secret.
+func NewKeyWithSecret(name string, scopes []Scope, secret string) (Key, error) {
+	kid, err := randToken(kidPrefix, kidRandBytes)
+	if err != nil {
+		return Key{}, fmt.Errorf("kid erzeugen: %w", err)
+	}
+	return Key{
 		KID:        kid,
 		Name:       name,
 		SecretHash: HashSecret(secret),
 		Scopes:     scopes,
 		Status:     StatusActive,
 		CreatedAt:  time.Now().UTC(),
-	}
-	return k, secret, nil
+	}, nil
 }
 
 // randToken liefert prefix + Base32-Kodierung von n Zufallsbytes.

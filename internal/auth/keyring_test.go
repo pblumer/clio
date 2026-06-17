@@ -127,6 +127,27 @@ func TestGenerateKeyEntropieUndKollisionsfreiheit(t *testing.T) {
 	}
 }
 
+func TestNewKeyWithSecret(t *testing.T) {
+	k, err := NewKeyWithSecret("bootstrap-admin", []Scope{ScopeAdmin}, "operator-provided-secret")
+	if err != nil {
+		t.Fatalf("NewKeyWithSecret: %v", err)
+	}
+	if !strings.HasPrefix(k.KID, kidPrefix) {
+		t.Fatalf("kid ohne präfix: %q", k.KID)
+	}
+	if k.SecretHash != HashSecret("operator-provided-secret") {
+		t.Fatal("hash passt nicht zum vorgegebenen secret")
+	}
+	if k.Status != StatusActive || !k.HasScope(ScopeAdmin) {
+		t.Fatalf("unerwarteter key: %+v", k)
+	}
+	// Der vorgegebene Wert lässt sich als kid.secret wieder zerlegen.
+	kid, secret, ok := ParseBearer("Bearer " + k.KID + ".operator-provided-secret")
+	if !ok || kid != k.KID || secret != "operator-provided-secret" {
+		t.Fatalf("roundtrip fehlgeschlagen: ok=%v kid=%q secret=%q", ok, kid, secret)
+	}
+}
+
 // TestGeneratedKeyRoundTripsThroughParseBearer stellt sicher, dass ein erzeugter
 // Schlüssel als kid.secret wieder zerlegbar ist.
 func TestGeneratedKeyRoundTripsThroughParseBearer(t *testing.T) {
