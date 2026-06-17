@@ -504,8 +504,8 @@ seinen Hash — das beweist zusätzlich die *Urheberschaft* (nicht nur Integrit�
 # -> CLIO_SIGNING_KEY=<seed-base64>
 #    # public key (zum Verifizieren): <public-base64>
 
-# Server mit Signieren starten
-CLIO_API_TOKEN=… CLIO_SIGNING_KEY=<seed-base64> ./cliostore
+# Server mit Signieren starten (Leitungswert des Admin-Keys: kid.secret)
+CLIO_BOOTSTRAP_ADMIN_KEY=… CLIO_SIGNING_KEY=<seed-base64> ./cliostore
 
 # Öffentlichen Schlüssel abrufen (Clients prüfen damit selbst)
 curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:3000/api/v1/public-key
@@ -636,6 +636,12 @@ Jede Anfrage wird strukturiert geloggt (Methode, Route, Status, Dauer). Unter
 ```bash
 curl http://127.0.0.1:3000/metrics
 ```
+
+> **Sicherheitshinweis:** `/metrics` ist **bewusst ohne Auth** erreichbar — das
+> ist die übliche Konvention für Prometheus-Scraping im internen Netz (ADR-013).
+> Die Metriken enthalten keine Event-Inhalte, aber Betriebsdaten (Routen,
+> Request-Raten, DB-Größe). **Nicht öffentlich exponieren**: per Reverse-Proxy,
+> Firewall oder Netzwerksegmentierung auf das interne Scraping-Ziel beschränken.
 
 Enthalten u. a.: `clio_http_requests_total{method,route,status}`,
 `clio_http_request_duration_seconds` (Histogramm), `clio_events_written_total`,

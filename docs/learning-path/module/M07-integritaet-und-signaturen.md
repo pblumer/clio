@@ -46,8 +46,8 @@ Ed25519-Schlüssel signiert der Server zusätzlich jedes Event über seinen Hash
 # -> CLIO_SIGNING_KEY=<seed-base64>
 #    # public key (zum Verifizieren): <public-base64>
 
-# 2) Server mit Signieren starten
-CLIO_API_TOKEN=$TOKEN CLIO_SIGNING_KEY=<seed-base64> ./cliostore
+# 2) Server mit Signieren starten (Leitungswert des Keys: kid.secret)
+CLIO_BOOTSTRAP_ADMIN_KEY=<secret> CLIO_SIGNING_KEY=<seed-base64> ./cliostore
 
 # 3) Öffentlichen Schlüssel abrufen (Clients prüfen damit selbst)
 curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:3000/api/v1/public-key
