@@ -52,6 +52,14 @@ type Config struct {
 	// POST /api/v1/dev/reset-database und den dazugehörigen Button im Dashboard
 	// (ADR-022). Standardmäßig aus; nur explizit per CLIO_DEV_MODE aktivierbar.
 	DevMode bool
+
+	// ObservePreambleBytes ist die Größe des Anti-Buffering-Polsters (Whitespace),
+	// das ein observe-Stream einmalig beim Verbindungsaufbau sendet. Manche
+	// puffernden Reverse-Proxies/Security-Gateways geben einen Stream erst weiter,
+	// wenn genug Bytes geflossen sind — ein ausreichend großes Polster kippt sie in
+	// den Streaming-Modus. Per CLIO_OBSERVE_PREAMBLE_BYTES einstellbar; 0 schaltet
+	// das Polster ab. Vom Client als Leerzeile ignoriert.
+	ObservePreambleBytes int
 }
 
 // Environment-Variablen, aus denen die Konfiguration gelesen wird.
@@ -65,10 +73,13 @@ const (
 	envDevMode   = "CLIO_DEV_MODE"
 	envCompress  = "CLIO_COMPRESS"
 	envEventAuth = "CLIO_EVENT_AUTHORSHIP"
+	envObsvPre   = "CLIO_OBSERVE_PREAMBLE_BYTES"
 
-	defaultAddr   = ":3000"
-	defaultDBPath = "clio.db"
-	defaultSync   = "group"
+	defaultAddr    = ":3000"
+	defaultDBPath  = "clio.db"
+	defaultSync    = "group"
+	defaultObsvPre = 4096 // Anti-Buffering-Polster für observe (siehe Config-Feld)
+	maxObsvPre     = 1 << 20
 )
 
 // validSync enthält die erlaubten Werte für CLIO_SYNC.
@@ -82,15 +93,16 @@ var validSync = map[string]bool{"group": true, "always": true, "off": true}
 // optional mit Defaults.
 func FromEnv() (Config, error) {
 	cfg := Config{
-		Addr:              getenvDefault(envAddr, defaultAddr),
-		APIToken:          os.Getenv(envToken),
-		BootstrapAdminKey: os.Getenv(envBootstrap),
-		DBPath:            getenvDefault(envDBPath, defaultDBPath),
-		Sync:              getenvDefault(envSync, defaultSync),
-		SigningKey:        os.Getenv(envSignKey),
-		DevMode:           parseBoolDefault(envDevMode, false),
-		Compress:          parseBoolDefault(envCompress, false),
-		EventAuthorship:   parseBoolDefault(envEventAuth, false),
+		Addr:                 getenvDefault(envAddr, defaultAddr),
+		APIToken:             os.Getenv(envToken),
+		BootstrapAdminKey:    os.Getenv(envBootstrap),
+		DBPath:               getenvDefault(envDBPath, defaultDBPath),
+		Sync:                 getenvDefault(envSync, defaultSync),
+		SigningKey:           os.Getenv(envSignKey),
+		DevMode:              parseBoolDefault(envDevMode, false),
+		Compress:             parseBoolDefault(envCompress, false),
+		EventAuthorship:      parseBoolDefault(envEventAuth, false),
+		ObservePreambleBytes: parseIntDefault(envObsvPre, defaultObsvPre, 0, maxObsvPre),
 	}
 
 	if !validSync[cfg.Sync] {
@@ -98,6 +110,26 @@ func FromEnv() (Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// parseIntDefault liest eine nicht-negative Ganzzahl aus der Umgebung und
+// begrenzt sie auf [min,max]. Leer oder unlesbar ergibt fallback.
+func parseIntDefault(key string, fallback, min, max int) int {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return fallback
+	}
+	if n < min {
+		n = min
+	}
+	if n > max {
+		n = max
+	}
+	return n
 }
 
 // parseBoolDefault liest einen Wahrheitswert aus der Umgebung (akzeptiert

@@ -6,6 +6,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"crypto/subtle"
 	"encoding/json"
@@ -1023,17 +1024,25 @@ func (s *Server) doObserve(w http.ResponseWriter, r *http.Request, subject strin
 	// Reverse-Proxies (z. B. nginx) nicht puffern lassen — sonst hält der Proxy
 	// den nie endenden Stream zurück und der Client sieht nie Header/Bytes.
 	w.Header().Set("X-Accel-Buffering", "no")
+	// no-transform verbietet Zwischen-Proxies, die Antwort umzukodieren/zu
+	// komprimieren — Komprimieren erzwingt Pufferung und hält den Stream zurück.
+	w.Header().Set("Cache-Control", "no-store, no-transform")
 	w.WriteHeader(http.StatusOK)
 	enc := json.NewEncoder(w)
 
-	// Sofort ein Body-Byte senden (Blankzeile) und flushen, damit der Client die
-	// offene Verbindung umgehend sieht — auch ohne History und ohne neue Events.
-	// Ohne diesen Anstoß hält ein puffernder Reverse-Proxy die reine Header-Antwort
-	// zurück, bis das erste Body-Byte kommt (sonst erst der Heartbeat nach
-	// observeHeartbeat); ein „nur neue Events"-Observer (lowerBound jenseits der
-	// höchsten ID) bliebe dann bis zum ersten neuen Event in „verbinde …" hängen.
-	// Blankzeilen sind im NDJSON-Stream ohnehin Protokoll (Heartbeat) und werden
-	// klientseitig ignoriert.
+	// Sofort flushen, damit der Client die offene Verbindung umgehend sieht — auch
+	// ohne History und ohne neue Events. Ohne diesen Anstoß hält ein puffernder
+	// Reverse-Proxy die reine Header-Antwort zurück, bis das erste Body-Byte kommt.
+	// Zusätzlich ein optionales, ausreichend großes Whitespace-Polster
+	// (ObservePreambleBytes): manche Security-Gateways geben einen gepufferten
+	// Stream erst weiter, wenn genug Bytes geflossen sind — das Polster kippt sie in
+	// den Streaming-Modus. Whitespace-/Blankzeilen sind im NDJSON-Stream Protokoll
+	// (Heartbeat) und werden klientseitig ignoriert.
+	if n := s.cfg.ObservePreambleBytes; n > 0 {
+		if _, err := w.Write(bytes.Repeat([]byte(" "), n)); err != nil {
+			return
+		}
+	}
 	if _, err := w.Write([]byte("\n")); err != nil {
 		return
 	}
