@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/pblumer/clio/internal/auth"
 	"github.com/pblumer/clio/internal/config"
 	"github.com/pblumer/clio/internal/event"
 	"github.com/pblumer/clio/internal/store"
@@ -52,13 +53,17 @@ func BenchmarkRunQueryTypeFilter(b *testing.B) {
 		}
 	}
 
-	srv := New(config.Config{Addr: ":0", APIToken: "t"}, st, nil)
+	bk := auth.Key{KID: "kid_bench", Name: "bench", SecretHash: auth.HashSecret("benchsecret"), Scopes: []auth.Scope{auth.ScopeRead}, Status: auth.StatusActive}
+	if err := st.PutKey(bk); err != nil {
+		b.Fatal(err)
+	}
+	srv := New(config.Config{Addr: ":0"}, st, nil)
 	body := `{"subject":"/","recursive":true,"where":"event.type == 'afternoon.invoice.sent'","limit":100}`
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		r := httptest.NewRequest(http.MethodPost, "/api/v1/run-query", strings.NewReader(body))
-		r.Header.Set("Authorization", "Bearer t")
+		r.Header.Set("Authorization", "Bearer kid_bench.benchsecret")
 		rec := httptest.NewRecorder()
 		srv.Handler().ServeHTTP(rec, r)
 		if rec.Code != http.StatusOK {

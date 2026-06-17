@@ -43,9 +43,16 @@ type Event struct {
 	Type            string          `json:"type"`
 	DataContentType string          `json:"datacontenttype,omitempty"`
 	Data            json.RawMessage `json:"data,omitempty"`
-	PredecessorHash string          `json:"predecessorhash"`
-	Hash            string          `json:"hash"`
-	Signature       *string         `json:"signature"`
+	// AuthKID ist eine optionale CloudEvents-Extension: der kid des
+	// authentifizierten Schlüssels, der das Event geschrieben hat (Urheberschaft,
+	// ADR-025). Wird nur gesetzt, wenn die Event-Urheberschaft aktiviert ist
+	// (CLIO_EVENT_AUTHORSHIP); sonst leer und damit abwärtskompatibel. Geht in den
+	// Hash ein (nur wenn nicht-leer), bindet die Urheberschaft also an die
+	// Hash-Kette/Signatur (ADR-012/016).
+	AuthKID         string  `json:"clioauthkid,omitempty"`
+	PredecessorHash string  `json:"predecessorhash"`
+	Hash            string  `json:"hash"`
+	Signature       *string `json:"signature"`
 }
 
 // ComputeHash berechnet den SHA-256-Hash des Events über seinen Inhalt und den
@@ -70,6 +77,12 @@ func ComputeHash(ev Event) string {
 		writeField(h, []byte(f))
 	}
 	writeField(h, ev.Data)
+	// Urheberschaft (ADR-025) geht NUR ein, wenn gesetzt. So bleiben Events ohne
+	// Urheberschaft (Bestand sowie Feature-aus) byte-identisch zum bisherigen Hash
+	// — /verify bleibt für die gesamte vorhandene Historie grün.
+	if ev.AuthKID != "" {
+		writeField(h, []byte(ev.AuthKID))
+	}
 	return hex.EncodeToString(h.Sum(nil))
 }
 

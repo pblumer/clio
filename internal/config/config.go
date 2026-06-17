@@ -12,9 +12,16 @@ type Config struct {
 	// Addr ist die Listen-Adresse des HTTP-Servers, z. B. ":3000".
 	Addr string
 
-	// APIToken ist das Bearer-Token, das geschützte Routen absichert
-	// (siehe ADR-008). Pflichtfeld.
+	// APIToken ist das altgediente, geteilte Bearer-Token (ADR-008). Mit dem
+	// Schlüsselbund (ADR-025) ist es **deprecated** und nicht mehr Pflicht: ist
+	// es gesetzt und der Schlüsselbund leer, wird daraus beim Start ein einzelner
+	// Admin-Key gebootet (Legacy-Kompatibilität, siehe WP-05).
 	APIToken string
+
+	// BootstrapAdminKey ist das optionale Klartext-Geheimnis (CLIO_BOOTSTRAP_ADMIN_KEY),
+	// aus dem beim ersten Start — und nur bei leerem Schlüsselbund — ein
+	// initialer Admin-Key erzeugt wird (löst das Henne-Ei-Problem, ADR-025).
+	BootstrapAdminKey string
 
 	// DBPath ist der Pfad zur bbolt-Datenbankdatei (ADR-006).
 	DBPath string
@@ -33,6 +40,13 @@ type Config struct {
 	// auf neu geschriebene Events — bestehende bleiben lesbar.
 	Compress bool
 
+	// EventAuthorship übernimmt (wenn aktiv) die authentifizierte Identität (kid)
+	// als CloudEvents-Extension `clioauthkid` in jedes geschriebene Event
+	// (Urheberschaft, ADR-025). Default aus; per CLIO_EVENT_AUTHORSHIP aktivierbar.
+	// Append-only-konform (neues Attribut auf neuen Events) und in Hash/Signatur
+	// gebunden — wirkt nur auf neu geschriebene Events.
+	EventAuthorship bool
+
 	// DevMode schaltet Entwickler-Komfort frei, der im Produktivbetrieb nichts zu
 	// suchen hat — allen voran das destruktive Zurücksetzen der Datenbank über
 	// POST /api/v1/dev/reset-database und den dazugehörigen Button im Dashboard
@@ -42,13 +56,15 @@ type Config struct {
 
 // Environment-Variablen, aus denen die Konfiguration gelesen wird.
 const (
-	envAddr     = "CLIO_ADDR"
-	envToken    = "CLIO_API_TOKEN"
-	envDBPath   = "CLIO_DB_PATH"
-	envSync     = "CLIO_SYNC"
-	envSignKey  = "CLIO_SIGNING_KEY"
-	envDevMode  = "CLIO_DEV_MODE"
-	envCompress = "CLIO_COMPRESS"
+	envAddr      = "CLIO_ADDR"
+	envToken     = "CLIO_API_TOKEN"
+	envBootstrap = "CLIO_BOOTSTRAP_ADMIN_KEY"
+	envDBPath    = "CLIO_DB_PATH"
+	envSync      = "CLIO_SYNC"
+	envSignKey   = "CLIO_SIGNING_KEY"
+	envDevMode   = "CLIO_DEV_MODE"
+	envCompress  = "CLIO_COMPRESS"
+	envEventAuth = "CLIO_EVENT_AUTHORSHIP"
 
 	defaultAddr   = ":3000"
 	defaultDBPath = "clio.db"
@@ -59,21 +75,24 @@ const (
 var validSync = map[string]bool{"group": true, "always": true, "off": true}
 
 // FromEnv liest die Konfiguration aus Umgebungsvariablen und validiert sie.
-// CLIO_API_TOKEN ist Pflicht; übrige Variablen sind optional mit Defaults.
+// Mit dem Schlüsselbund (ADR-025) ist CLIO_API_TOKEN nicht mehr Pflicht: das
+// Vorhandensein von Auth-Material (nicht-leerer Bund, CLIO_BOOTSTRAP_ADMIN_KEY
+// oder CLIO_API_TOKEN) wird beim Start geprüft, sobald der Store offen ist
+// (WP-05) — denn dafür muss der Bucket gelesen werden. Übrige Variablen sind
+// optional mit Defaults.
 func FromEnv() (Config, error) {
 	cfg := Config{
-		Addr:       getenvDefault(envAddr, defaultAddr),
-		APIToken:   os.Getenv(envToken),
-		DBPath:     getenvDefault(envDBPath, defaultDBPath),
-		Sync:       getenvDefault(envSync, defaultSync),
-		SigningKey: os.Getenv(envSignKey),
-		DevMode:    parseBoolDefault(envDevMode, false),
-		Compress:   parseBoolDefault(envCompress, false),
+		Addr:              getenvDefault(envAddr, defaultAddr),
+		APIToken:          os.Getenv(envToken),
+		BootstrapAdminKey: os.Getenv(envBootstrap),
+		DBPath:            getenvDefault(envDBPath, defaultDBPath),
+		Sync:              getenvDefault(envSync, defaultSync),
+		SigningKey:        os.Getenv(envSignKey),
+		DevMode:           parseBoolDefault(envDevMode, false),
+		Compress:          parseBoolDefault(envCompress, false),
+		EventAuthorship:   parseBoolDefault(envEventAuth, false),
 	}
 
-	if cfg.APIToken == "" {
-		return Config{}, fmt.Errorf("%s muss gesetzt sein", envToken)
-	}
 	if !validSync[cfg.Sync] {
 		return Config{}, fmt.Errorf("%s muss group, always oder off sein, war %q", envSync, cfg.Sync)
 	}

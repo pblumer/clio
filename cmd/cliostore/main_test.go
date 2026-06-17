@@ -18,13 +18,16 @@ func quietLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-// TestRunConfigError: fehlendes Token führt zu sofortigem Fehler ohne Start.
-func TestRunConfigError(t *testing.T) {
+// TestRunNoAuthMaterial: ohne jedes Auth-Material (kein Token, kein
+// Bootstrap-Key, leerer Bund) verweigert der Start (ADR-025, Bootstrap).
+func TestRunNoAuthMaterial(t *testing.T) {
 	t.Setenv("CLIO_API_TOKEN", "")
+	t.Setenv("CLIO_BOOTSTRAP_ADMIN_KEY", "")
+	t.Setenv("CLIO_DB_PATH", filepath.Join(t.TempDir(), "noauth.db"))
 
 	err := run(context.Background(), quietLogger())
 	if err == nil {
-		t.Fatal("erwartete fehler bei fehlendem token, bekam nil")
+		t.Fatal("erwartete fehler bei fehlendem auth-material, bekam nil")
 	}
 }
 

@@ -6,6 +6,7 @@
 package httpapi
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -20,6 +21,7 @@ import (
 	"github.com/swaggest/swgui/v5emb"
 
 	"github.com/pblumer/clio/internal/apidocs"
+	"github.com/pblumer/clio/internal/auth"
 	"github.com/pblumer/clio/internal/config"
 	"github.com/pblumer/clio/internal/event"
 	"github.com/pblumer/clio/internal/eventstats"
@@ -42,17 +44,18 @@ var observeHeartbeat = 15 * time.Second
 
 // Server kapselt Konfiguration, Storage und Router des HTTP-API-Layers.
 type Server struct {
-	cfg       config.Config
-	store     *store.Store
-	broker    *pubsub.Broker
-	metrics   *metrics.Metrics
-	events    *eventstats.Histogram
-	queryC    *query.Compiler
-	logger    *slog.Logger
-	mux       *http.ServeMux
-	version   string
-	startedAt time.Time
-	devMode   bool
+	cfg             config.Config
+	store           *store.Store
+	broker          *pubsub.Broker
+	metrics         *metrics.Metrics
+	events          *eventstats.Histogram
+	queryC          *query.Compiler
+	logger          *slog.Logger
+	mux             *http.ServeMux
+	version         string
+	startedAt       time.Time
+	devMode         bool
+	eventAuthorship bool
 
 	bulkMu         sync.RWMutex
 	bulkImportOpen bool
@@ -87,17 +90,18 @@ func New(cfg config.Config, st *store.Store, logger *slog.Logger, opts ...Option
 
 	now := time.Now().UTC()
 	s := &Server{
-		cfg:            cfg,
-		store:          st,
-		broker:         pubsub.New(),
-		metrics:        metrics.New(),
-		queryC:         qc,
-		logger:         logger,
-		mux:            http.NewServeMux(),
-		version:        "dev",
-		startedAt:      now,
-		devMode:        cfg.DevMode,
-		bulkImportOpen: cfg.DevMode,
+		cfg:             cfg,
+		store:           st,
+		broker:          pubsub.New(),
+		metrics:         metrics.New(),
+		queryC:          qc,
+		logger:          logger,
+		mux:             http.NewServeMux(),
+		version:         "dev",
+		startedAt:       now,
+		devMode:         cfg.DevMode,
+		eventAuthorship: cfg.EventAuthorship,
+		bulkImportOpen:  cfg.DevMode,
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -195,28 +199,34 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/ping", s.handlePing)
 	s.mux.HandleFunc("POST /api/v1/ping", s.handlePing)
 
-	// Datenrouten sind durch das Bearer-Token geschützt (ADR-008).
-	s.mux.HandleFunc("GET /api/v1/info", s.requireAuth(s.handleInfo))
-	s.mux.HandleFunc("GET /api/v1/event-stats", s.requireAuth(s.handleEventStats))
-	s.mux.HandleFunc("POST /api/v1/write-events", s.requireAuth(s.handleWriteEvents))
-	s.mux.HandleFunc("POST /api/v1/read-events", s.requireAuth(s.handleReadEvents))
-	s.mux.HandleFunc("POST /api/v1/observe-events", s.requireAuth(s.handleObserveEvents))
-	s.mux.HandleFunc("POST /api/v1/run-query", s.requireAuth(s.handleRunQuery))
-	s.mux.HandleFunc("GET /api/v1/verify", s.requireAuth(s.handleVerify))
-	s.mux.HandleFunc("GET /api/v1/public-key", s.requireAuth(s.handlePublicKey))
-	s.mux.HandleFunc("GET /api/v1/read-subjects", s.requireAuth(s.handleReadSubjects))
-	s.mux.HandleFunc("GET /api/v1/read-event-types", s.requireAuth(s.handleReadEventTypes))
-	s.mux.HandleFunc("POST /api/v1/register-event-schema", s.requireAuth(s.handleRegisterEventSchema))
-	s.mux.HandleFunc("GET /api/v1/read-event-schema", s.requireAuth(s.handleReadEventSchema))
+	// Datenrouten sind scope-bewusst über den Schlüsselbund geschützt (ADR-025).
+	// Lesende Routen verlangen `read`, schreibende `write`, Verwaltung `admin`.
+	s.mux.HandleFunc("GET /api/v1/info", s.requireScope(auth.ScopeRead, s.handleInfo))
+	s.mux.HandleFunc("GET /api/v1/event-stats", s.requireScope(auth.ScopeRead, s.handleEventStats))
+	s.mux.HandleFunc("POST /api/v1/write-events", s.requireScope(auth.ScopeWrite, s.handleWriteEvents))
+	s.mux.HandleFunc("POST /api/v1/read-events", s.requireScope(auth.ScopeRead, s.handleReadEvents))
+	s.mux.HandleFunc("POST /api/v1/observe-events", s.requireScope(auth.ScopeRead, s.handleObserveEvents))
+	s.mux.HandleFunc("POST /api/v1/run-query", s.requireScope(auth.ScopeRead, s.handleRunQuery))
+	s.mux.HandleFunc("GET /api/v1/verify", s.requireScope(auth.ScopeRead, s.handleVerify))
+	s.mux.HandleFunc("GET /api/v1/public-key", s.requireScope(auth.ScopeRead, s.handlePublicKey))
+	s.mux.HandleFunc("GET /api/v1/read-subjects", s.requireScope(auth.ScopeRead, s.handleReadSubjects))
+	s.mux.HandleFunc("GET /api/v1/read-event-types", s.requireScope(auth.ScopeRead, s.handleReadEventTypes))
+	s.mux.HandleFunc("POST /api/v1/register-event-schema", s.requireScope(auth.ScopeWrite, s.handleRegisterEventSchema))
+	s.mux.HandleFunc("GET /api/v1/read-event-schema", s.requireScope(auth.ScopeRead, s.handleReadEventSchema))
+
+	// Schlüsselverwaltung zur Laufzeit (ADR-025) — ausschließlich Scope admin.
+	s.mux.HandleFunc("POST /api/v1/keys", s.requireScope(auth.ScopeAdmin, s.handleCreateKey))
+	s.mux.HandleFunc("GET /api/v1/keys", s.requireScope(auth.ScopeAdmin, s.handleListKeys))
+	s.mux.HandleFunc("POST /api/v1/keys/{kid}/revoke", s.requireScope(auth.ScopeAdmin, s.handleRevokeKey))
 
 	// Dev-Mode-only (ADR-022): destruktives Zurücksetzen der gesamten Datenbank
 	// plus Bulk-Import-Fenster direkt nach Start/Reset.
 	// Die Routen werden im Produktivbetrieb gar nicht erst registriert — ohne
-	// CLIO_DEV_MODE liefern sie damit 404 statt nur 401. Bearer-Token-geschützt.
+	// CLIO_DEV_MODE liefern sie damit 404 statt nur 401. Scope: admin.
 	if s.devMode {
-		s.mux.HandleFunc("POST /api/v1/dev/reset-database", s.requireAuth(s.handleDevReset))
-		s.mux.HandleFunc("POST /api/v1/dev/bulk-import-events", s.requireAuth(s.handleDevBulkImportEvents))
-		s.mux.HandleFunc("POST /api/v1/dev/close-bulk-import", s.requireAuth(s.handleDevCloseBulkImport))
+		s.mux.HandleFunc("POST /api/v1/dev/reset-database", s.requireScope(auth.ScopeAdmin, s.handleDevReset))
+		s.mux.HandleFunc("POST /api/v1/dev/bulk-import-events", s.requireScope(auth.ScopeAdmin, s.handleDevBulkImportEvents))
+		s.mux.HandleFunc("POST /api/v1/dev/close-bulk-import", s.requireScope(auth.ScopeAdmin, s.handleDevCloseBulkImport))
 	}
 
 	// Prometheus-Metriken (ohne Auth, üblich für Scraping im internen Netz).
@@ -225,8 +235,8 @@ func (s *Server) routes() {
 	// Komfort-Leseroute: GET /api/v1/events/<subject> (Subject = Pfad). Optionen
 	// als Query-Parameter (recursive, lowerBound, upperBound, type, watch).
 	// `GET /api/v1/events` ohne Subject = Wurzel (alle Events).
-	s.mux.HandleFunc("GET /api/v1/events", s.requireAuth(s.handleEventsPath))
-	s.mux.HandleFunc("GET /api/v1/events/{subject...}", s.requireAuth(s.handleEventsPath))
+	s.mux.HandleFunc("GET /api/v1/events", s.requireScope(auth.ScopeRead, s.handleEventsPath))
+	s.mux.HandleFunc("GET /api/v1/events/{subject...}", s.requireScope(auth.ScopeRead, s.handleEventsPath))
 
 	// Betriebs-Dashboard (ADR-020): statische, eingebettete Seite unter /ui.
 	// Wie /docs bewusst ohne Auth (nicht sensibel); die Daten holt die Seite
@@ -369,7 +379,7 @@ func (s *Server) handleDevBulkImportEvents(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	written, err := s.store.Append(req.Events, preconditions)
+	written, err := s.store.AppendAuthored(req.Events, preconditions, s.authorKID(r))
 	if err != nil {
 		if errors.Is(err, store.ErrPreconditionFailed) {
 			s.metrics.IncPreconditionFailure()
@@ -728,7 +738,7 @@ func (s *Server) handleWriteEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	written, err := s.store.Append(req.Events, preconditions)
+	written, err := s.store.AppendAuthored(req.Events, preconditions, s.authorKID(r))
 	if err != nil {
 		if errors.Is(err, store.ErrPreconditionFailed) {
 			s.metrics.IncPreconditionFailure()
@@ -1236,17 +1246,108 @@ func (s *Server) handleRunQuery(w http.ResponseWriter, r *http.Request) {
 	writeNDJSON(w, s.logger, projected)
 }
 
-// requireAuth umschließt einen Handler mit der Bearer-Token-Prüfung (ADR-008).
-func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
-	expected := []byte("Bearer " + s.cfg.APIToken)
+// contextKey ist der private Schlüsseltyp für Werte im Request-Context.
+type contextKey int
+
+const identityContextKey contextKey = iota
+
+// withIdentity legt die authentifizierte Identität in den Context.
+func withIdentity(ctx context.Context, id auth.Identity) context.Context {
+	return context.WithValue(ctx, identityContextKey, id)
+}
+
+// identityFromContext liefert die authentifizierte Identität eines Requests
+// (für Handler und Audit-Log). ok ist false bei nicht authentifizierten
+// Requests (offene Routen).
+func identityFromContext(r *http.Request) (auth.Identity, bool) {
+	id, ok := r.Context().Value(identityContextKey).(auth.Identity)
+	return id, ok
+}
+
+// authorKID liefert den kid, der als Urheberschaft auf neu geschriebene Events
+// gestempelt wird (ADR-025). Leer, wenn die Event-Urheberschaft deaktiviert ist
+// (CLIO_EVENT_AUTHORSHIP) oder keine Identität vorliegt — dann bleibt das
+// Verhalten byte-identisch zum bisherigen Schreibpfad.
+func (s *Server) authorKID(r *http.Request) string {
+	if !s.eventAuthorship {
+		return ""
+	}
+	if id, ok := identityFromContext(r); ok {
+		return id.KID
+	}
+	return ""
+}
+
+// dummyHash ist ein gültiger SHA-256-Hex-Hash, gegen den auch bei
+// unbekanntem/fehlendem kid zeitkonstant verglichen wird. So gleicht sich die
+// Antwortzeit an und verrät nicht über ein Timing-Orakel, ob ein kid existiert
+// (Sicherheits-Checkliste §3).
+var dummyHash = auth.HashSecret("clio:auth:nonexistent-key-timing-placeholder")
+
+// requireScope umschließt einen Handler mit der scope-bewussten
+// Schlüsselbund-Authentifizierung (ADR-025). Ablauf:
+//  1. Authorization-Header als `Bearer kid.secret` zerlegen.
+//  2. Schlüssel über kid laden; fehlt er (oder kid-Fehlformat) → 401.
+//  3. Geheimnis zeitkonstant gegen den gespeicherten Hash prüfen → 401 bei
+//     Ungleichheit. Der Vergleich läuft IMMER (auch bei unbekanntem kid gegen
+//     dummyHash), um kein Timing-Orakel über die kid-Existenz zu öffnen.
+//  4. Status != active (widerrufen) → 401.
+//  5. Fehlender Scope → 403 (klar getrennt von 401).
+//  6. Identität in den Context legen und next aufrufen.
+func (s *Server) requireScope(scope auth.Scope, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		got := []byte(r.Header.Get("Authorization"))
-		// Konstante Laufzeit gegen Timing-Angriffe.
-		if subtle.ConstantTimeCompare(got, expected) != 1 {
+		kid, secret, parsed := auth.ParseBearer(r.Header.Get("Authorization"))
+
+		var key auth.Key
+		var found bool
+		if parsed {
+			k, ok, err := s.store.GetKey(kid)
+			if err != nil {
+				// Echter Infrastrukturfehler (z. B. Store nicht verfügbar) ist ein
+				// Serverfehler, kein Authentifizierungsergebnis → 500. Ein bloß
+				// unbekannter kid liefert err==nil, ok==false und wird unten zu 401.
+				s.logger.Error("auth: key-lookup fehlgeschlagen", "kid", kid, "err", err)
+				writeError(w, http.StatusInternalServerError, "interner fehler bei der authentifizierung")
+				return
+			}
+			if ok {
+				key, found = k, true
+			}
+		}
+
+		// Zeitkonstanter Vergleich — auch bei nicht gefundenem kid gegen einen
+		// Dummy-Hash gleicher Länge (kein Timing-Leak über die Existenz, §3).
+		expectedHash := dummyHash
+		if found {
+			expectedHash = key.SecretHash
+		}
+		secretOK := subtle.ConstantTimeCompare([]byte(auth.HashSecret(secret)), []byte(expectedHash)) == 1
+
+		// auditKID ist der (nicht-geheime) übermittelte kid, sofern der Header
+		// überhaupt zerlegbar war — auch bei Ablehnung nützlich fürs Audit.
+		auditKID := ""
+		if parsed {
+			auditKID = kid
+		}
+
+		// 401: kein gültiger Bearer, unbekannter kid, falsches Geheimnis oder
+		// widerrufener Schlüssel. Bewusst kein Name im Log (uniformes 401).
+		if !parsed || !found || !secretOK || !key.Active() {
+			s.auditDecision(r, scope, "deny", http.StatusUnauthorized, auditKID, "")
 			writeError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
-		next(w, r)
+		// 403: gültig authentifiziert, aber der Schlüssel trägt den nötigen Scope
+		// nicht. Bewusst von 401 getrennt (ADR-025).
+		if !key.HasScope(scope) {
+			s.auditDecision(r, scope, "deny", http.StatusForbidden, key.KID, key.Name)
+			writeError(w, http.StatusForbidden, "forbidden: scope "+string(scope)+" erforderlich")
+			return
+		}
+
+		s.auditDecision(r, scope, "allow", http.StatusOK, key.KID, key.Name)
+		ident := auth.Identity{KID: key.KID, Name: key.Name, Scopes: key.Scopes}
+		next(w, r.WithContext(withIdentity(r.Context(), ident)))
 	}
 }
 

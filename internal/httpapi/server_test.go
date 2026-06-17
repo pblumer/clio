@@ -16,10 +16,42 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pblumer/clio/internal/auth"
 	"github.com/pblumer/clio/internal/config"
 	"github.com/pblumer/clio/internal/event"
 	"github.com/pblumer/clio/internal/store"
 )
+
+// Test-Schlüssel: ein Admin-Key mit allen Scopes deckt die bestehenden Tests ab
+// (read+write+admin). adminToken ist der vollständige `kid.secret`-Wert auf der
+// Leitung; do() ergänzt das "Bearer "-Präfix.
+const (
+	testAdminSecret = "adminsecretadminsecret0123456789"
+	testAdminKID    = "kid_test01"
+	adminToken      = testAdminKID + "." + testAdminSecret
+)
+
+// seedKey legt einen Schlüssel mit bekanntem kid/secret im Store an und liefert
+// den vollständigen `kid.secret`-Wert für do() zurück.
+func seedKey(t *testing.T, st *store.Store, kid, secret string, status auth.Status, scopes ...auth.Scope) string {
+	t.Helper()
+	now := time.Now().UTC()
+	k := auth.Key{
+		KID:        kid,
+		Name:       kid,
+		SecretHash: auth.HashSecret(secret),
+		Scopes:     scopes,
+		Status:     status,
+		CreatedAt:  now,
+	}
+	if status == auth.StatusRevoked {
+		k.RevokedAt = &now
+	}
+	if err := st.PutKey(k); err != nil {
+		t.Fatalf("seed key %q: %v", kid, err)
+	}
+	return kid + "." + secret
+}
 
 func newTestServer(t *testing.T) *Server {
 	t.Helper()
@@ -28,7 +60,8 @@ func newTestServer(t *testing.T) *Server {
 		t.Fatalf("store öffnen: %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	return New(config.Config{Addr: ":0", APIToken: "secret-token"}, st, nil)
+	seedKey(t, st, testAdminKID, testAdminSecret, auth.StatusActive, auth.ScopeRead, auth.ScopeWrite, auth.ScopeAdmin)
+	return New(config.Config{Addr: ":0"}, st, nil)
 }
 
 // newDevServer baut einen Server im Dev-Mode (Reset-Route freigeschaltet).
@@ -39,7 +72,8 @@ func newDevServer(t *testing.T) *Server {
 		t.Fatalf("store öffnen: %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	return New(config.Config{Addr: ":0", APIToken: "secret-token", DevMode: true}, st, nil)
+	seedKey(t, st, testAdminKID, testAdminSecret, auth.StatusActive, auth.ScopeRead, auth.ScopeWrite, auth.ScopeAdmin)
+	return New(config.Config{Addr: ":0", DevMode: true}, st, nil)
 }
 
 func do(t *testing.T, srv *Server, method, path, token, body string) *httptest.ResponseRecorder {
@@ -88,7 +122,7 @@ func TestInfoEndpoint(t *testing.T) {
 	}
 
 	// Mit Auth liefert /info Build- und Laufzeitinformationen.
-	rec = do(t, srv, http.MethodGet, "/api/v1/info", "secret-token", "")
+	rec = do(t, srv, http.MethodGet, "/api/v1/info", adminToken, "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status mit auth = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
@@ -136,7 +170,7 @@ func TestWriteEventsAuth(t *testing.T) {
 		token      string
 		wantStatus int
 	}{
-		{"gültiges token", "secret-token", http.StatusOK},
+		{"gültiges token", adminToken, http.StatusOK},
 		{"falsches token", "wrong", http.StatusUnauthorized},
 		{"kein token", "", http.StatusUnauthorized},
 	}
@@ -147,6 +181,75 @@ func TestWriteEventsAuth(t *testing.T) {
 				t.Fatalf("status = %d, want %d", rec.Code, tt.wantStatus)
 			}
 		})
+	}
+}
+
+// TestScopeEnforcement deckt das neue Schlüsselbund-Schema ab (ADR-025):
+// read-Key darf lesen, aber nicht schreiben (403); write-Key darf schreiben,
+// aber keine Admin-Route (403); widerrufener Key und falsches Geheimnis ergeben
+// 401; unbekannter kid ergibt 401. 401 und 403 werden klar unterschieden.
+func TestScopeEnforcement(t *testing.T) {
+	srv := newDevServer(t) // Dev-Mode, damit eine admin-Route (dev/reset) existiert
+	st := srv.store
+
+	readTok := seedKey(t, st, "kid_read01", "readsecretreadsecret0123456789ab", auth.StatusActive, auth.ScopeRead)
+	writeTok := seedKey(t, st, "kid_writ01", "writesecretwritesecret0123456789", auth.StatusActive, auth.ScopeRead, auth.ScopeWrite)
+	revokedTok := seedKey(t, st, "kid_revk01", "revokedsecretrevokedsecret012345", auth.StatusRevoked, auth.ScopeRead, auth.ScopeWrite, auth.ScopeAdmin)
+
+	writeBody := `{"events":[{"source":"s","subject":"/a","type":"t"}]}`
+	readBody := `{"subject":"/a"}`
+	resetPath := "/api/v1/dev/reset-database"
+
+	cases := []struct {
+		name       string
+		method     string
+		path       string
+		token      string
+		body       string
+		wantStatus int
+	}{
+		{"read-key darf lesen", http.MethodPost, "/api/v1/read-events", readTok, readBody, http.StatusOK},
+		{"read-key darf nicht schreiben", http.MethodPost, "/api/v1/write-events", readTok, writeBody, http.StatusForbidden},
+		{"read-key darf nicht admin", http.MethodPost, resetPath, readTok, "", http.StatusForbidden},
+		{"write-key darf schreiben", http.MethodPost, "/api/v1/write-events", writeTok, writeBody, http.StatusOK},
+		{"write-key darf lesen", http.MethodPost, "/api/v1/read-events", writeTok, readBody, http.StatusOK},
+		{"write-key darf nicht admin", http.MethodPost, resetPath, writeTok, "", http.StatusForbidden},
+		{"admin-key darf admin", http.MethodPost, resetPath, adminToken, "", http.StatusOK},
+		{"widerrufener key -> 401", http.MethodPost, "/api/v1/read-events", revokedTok, readBody, http.StatusUnauthorized},
+		{"falsches secret -> 401", http.MethodPost, "/api/v1/read-events", "kid_read01.falschesgeheimnis", readBody, http.StatusUnauthorized},
+		{"unbekannter kid -> 401", http.MethodPost, "/api/v1/read-events", "kid_gibtsnich.egal", readBody, http.StatusUnauthorized},
+		{"kein header -> 401", http.MethodPost, "/api/v1/read-events", "", readBody, http.StatusUnauthorized},
+		{"kein dot -> 401", http.MethodPost, "/api/v1/read-events", "nurtoken", readBody, http.StatusUnauthorized},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := do(t, srv, tc.method, tc.path, tc.token, tc.body)
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d; body=%s", rec.Code, tc.wantStatus, rec.Body.String())
+			}
+		})
+	}
+}
+
+// TestScopeUnauthorizedVsForbidden stellt sicher, dass beide Fälle als
+// problem+json kommen und sich der Status sauber trennt.
+func TestScopeUnauthorizedVsForbidden(t *testing.T) {
+	srv := newTestServer(t)
+	readTok := seedKey(t, srv.store, "kid_ro0001", "readonlyreadonlyreadonly01234567", auth.StatusActive, auth.ScopeRead)
+
+	// 403: gültig authentifiziert, aber kein write-Scope.
+	rec := do(t, srv, http.MethodPost, "/api/v1/write-events", readTok, `{"events":[{"source":"s","subject":"/a","type":"t"}]}`)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/problem+json") {
+		t.Fatalf("403 Content-Type = %q", ct)
+	}
+
+	// 401: gar nicht authentifiziert.
+	rec = do(t, srv, http.MethodPost, "/api/v1/write-events", "", "")
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", rec.Code)
 	}
 }
 
@@ -164,7 +267,7 @@ func TestWriteEventsValidation(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rec := do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token", tt.body)
+			rec := do(t, srv, http.MethodPost, "/api/v1/write-events", adminToken, tt.body)
 			if rec.Code != http.StatusBadRequest {
 				t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
 			}
@@ -181,7 +284,7 @@ func TestWriteThenReadRoundTrip(t *testing.T) {
 		{"source":"lib","subject":"/books/99","type":"acquired"},
 		{"source":"lib","subject":"/books/42","type":"borrowed"}
 	]}`
-	rec := do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token", writeBody)
+	rec := do(t, srv, http.MethodPost, "/api/v1/write-events", adminToken, writeBody)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("write status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
@@ -201,7 +304,7 @@ func TestWriteThenReadRoundTrip(t *testing.T) {
 	}
 
 	// Read /books/42 liefert genau die beiden zugehörigen Events in Reihenfolge.
-	rec = do(t, srv, http.MethodPost, "/api/v1/read-events", "secret-token", `{"subject":"/books/42"}`)
+	rec = do(t, srv, http.MethodPost, "/api/v1/read-events", adminToken, `{"subject":"/books/42"}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("read status = %d, want 200", rec.Code)
 	}
@@ -214,7 +317,7 @@ func TestWriteThenReadRoundTrip(t *testing.T) {
 	}
 
 	// Unbekanntes Subject liefert leer (kein Fehler).
-	rec = do(t, srv, http.MethodPost, "/api/v1/read-events", "secret-token", `{"subject":"/nope"}`)
+	rec = do(t, srv, http.MethodPost, "/api/v1/read-events", adminToken, `{"subject":"/nope"}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("read leeres subject status = %d, want 200", rec.Code)
 	}
@@ -240,11 +343,11 @@ func TestRunQueryIndexChoice(t *testing.T) {
 		{"source":"s","subject":"/orders/42","type":"cancelled"},
 		{"source":"s","subject":"/orders/42","type":"placed","data":{"amount":10}}
 	]}`
-	do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token", events)
+	do(t, srv, http.MethodPost, "/api/v1/write-events", adminToken, events)
 
 	// Enges Subject + Typ-Constraint -> Subject-Index-Pfad. Genau die zwei
 	// 'placed' unter /orders/42.
-	rec := do(t, srv, http.MethodPost, "/api/v1/run-query", "secret-token",
+	rec := do(t, srv, http.MethodPost, "/api/v1/run-query", adminToken,
 		`{"subject":"/orders/42","recursive":true,"where":"event.type == 'placed'"}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; %s", rec.Code, rec.Body.String())
@@ -255,7 +358,7 @@ func TestRunQueryIndexChoice(t *testing.T) {
 	}
 
 	// Breiter Scope (Wurzel) + Typ-Constraint -> Typ-Index-Pfad. Alle 'placed'.
-	rec = do(t, srv, http.MethodPost, "/api/v1/run-query", "secret-token",
+	rec = do(t, srv, http.MethodPost, "/api/v1/run-query", adminToken,
 		`{"subject":"/","recursive":true,"where":"event.type == 'placed'"}`)
 	if n := len(decodeNDJSON(t, rec.Body.String())); n != 32 {
 		t.Fatalf("breiter scope: %d treffer, want 32", n)
@@ -264,7 +367,7 @@ func TestRunQueryIndexChoice(t *testing.T) {
 
 func TestRunQuery(t *testing.T) {
 	srv := newTestServer(t)
-	do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token",
+	do(t, srv, http.MethodPost, "/api/v1/write-events", adminToken,
 		`{"events":[
 			{"source":"s","subject":"/orders/1","type":"placed","data":{"amount":250}},
 			{"source":"s","subject":"/orders/2","type":"placed","data":{"amount":50}},
@@ -273,7 +376,7 @@ func TestRunQuery(t *testing.T) {
 		]}`)
 
 	// Filter: placed mit amount > 100 -> nur ID 1.
-	rec := do(t, srv, http.MethodPost, "/api/v1/run-query", "secret-token",
+	rec := do(t, srv, http.MethodPost, "/api/v1/run-query", adminToken,
 		`{"subject":"/orders","recursive":true,"where":"event.type == 'placed' && has(event.data.amount) && event.data.amount > 100"}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; %s", rec.Code, rec.Body.String())
@@ -285,7 +388,7 @@ func TestRunQuery(t *testing.T) {
 
 	// Eval-Fehler (event ohne data, Prädikat referenziert data) -> kein Treffer,
 	// nicht 500. /orders/4 hat kein data.
-	rec = do(t, srv, http.MethodPost, "/api/v1/run-query", "secret-token",
+	rec = do(t, srv, http.MethodPost, "/api/v1/run-query", adminToken,
 		`{"subject":"/orders","recursive":true,"where":"event.data.amount > 0"}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("eval-fehler status = %d, want 200", rec.Code)
@@ -296,14 +399,14 @@ func TestRunQuery(t *testing.T) {
 	}
 
 	// Limit.
-	rec = do(t, srv, http.MethodPost, "/api/v1/run-query", "secret-token",
+	rec = do(t, srv, http.MethodPost, "/api/v1/run-query", adminToken,
 		`{"subject":"/orders","recursive":true,"limit":2}`)
 	if n := len(decodeNDJSON(t, rec.Body.String())); n != 2 {
 		t.Fatalf("limit: %d treffer, want 2", n)
 	}
 
 	// Ohne where -> alle 4 im Scope.
-	rec = do(t, srv, http.MethodPost, "/api/v1/run-query", "secret-token",
+	rec = do(t, srv, http.MethodPost, "/api/v1/run-query", adminToken,
 		`{"subject":"/orders","recursive":true}`)
 	if n := len(decodeNDJSON(t, rec.Body.String())); n != 4 {
 		t.Fatalf("ohne where: %d treffer, want 4", n)
@@ -312,14 +415,14 @@ func TestRunQuery(t *testing.T) {
 
 func TestRunQueryProjection(t *testing.T) {
 	srv := newTestServer(t)
-	do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token",
+	do(t, srv, http.MethodPost, "/api/v1/write-events", adminToken,
 		`{"events":[
 			{"source":"s","subject":"/orders/1","type":"placed","data":{"amount":250,"customer":{"name":"Ada"}}},
 			{"source":"s","subject":"/orders/2","type":"placed"}
 		]}`)
 
 	// Feldliste: id (top-level) + verschachtelte data-Pfade.
-	rec := do(t, srv, http.MethodPost, "/api/v1/run-query", "secret-token",
+	rec := do(t, srv, http.MethodPost, "/api/v1/run-query", adminToken,
 		`{"subject":"/orders","recursive":true,"select":["id","subject","data.amount","data.customer.name"]}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; %s", rec.Code, rec.Body.String())
@@ -377,7 +480,7 @@ func TestRunQueryBadRequest(t *testing.T) {
 		`{"subject":"/o","select":["data."]}`,                // select-pfad mit leerem segment
 	}
 	for _, body := range tests {
-		rec := do(t, srv, http.MethodPost, "/api/v1/run-query", "secret-token", body)
+		rec := do(t, srv, http.MethodPost, "/api/v1/run-query", adminToken, body)
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("body %s: status = %d, want 400", body, rec.Code)
 		}
@@ -387,7 +490,7 @@ func TestRunQueryBadRequest(t *testing.T) {
 func TestProblemJSONError(t *testing.T) {
 	srv := newTestServer(t)
 	// Ungültige Anfrage -> 400 als application/problem+json (RFC 7807).
-	rec := do(t, srv, http.MethodPost, "/api/v1/read-events", "secret-token", `{"subject":"a"}`)
+	rec := do(t, srv, http.MethodPost, "/api/v1/read-events", adminToken, `{"subject":"a"}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rec.Code)
 	}
@@ -410,7 +513,7 @@ func TestProblemJSONError(t *testing.T) {
 		t.Fatalf("detail fehlt: %+v", p)
 	}
 
-	// Auch 401 (requireAuth) nutzt problem+json.
+	// Auch 401 (requireScope) nutzt problem+json.
 	rec = do(t, srv, http.MethodPost, "/api/v1/read-events", "wrong-token", `{"subject":"/a"}`)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401", rec.Code)
@@ -423,14 +526,14 @@ func TestProblemJSONError(t *testing.T) {
 func TestCacheControlDefault(t *testing.T) {
 	srv := newTestServer(t)
 	// Default-Header no-store auf einer Datenroute (Erfolg).
-	do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token",
+	do(t, srv, http.MethodPost, "/api/v1/write-events", adminToken,
 		`{"events":[{"source":"s","subject":"/a","type":"t"}]}`)
-	rec := do(t, srv, http.MethodPost, "/api/v1/read-events", "secret-token", `{"subject":"/a"}`)
+	rec := do(t, srv, http.MethodPost, "/api/v1/read-events", adminToken, `{"subject":"/a"}`)
 	if cc := rec.Header().Get("Cache-Control"); cc != "no-store" {
 		t.Fatalf("Cache-Control = %q, want no-store", cc)
 	}
 	// Auch auf Fehlerantworten gesetzt.
-	rec = do(t, srv, http.MethodPost, "/api/v1/read-events", "secret-token", `{"subject":"a"}`)
+	rec = do(t, srv, http.MethodPost, "/api/v1/read-events", adminToken, `{"subject":"a"}`)
 	if cc := rec.Header().Get("Cache-Control"); cc != "no-store" {
 		t.Fatalf("Cache-Control (fehler) = %q, want no-store", cc)
 	}
@@ -449,7 +552,7 @@ func TestReadEventsBadRequest(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rec := do(t, srv, http.MethodPost, "/api/v1/read-events", "secret-token", tt.body)
+			rec := do(t, srv, http.MethodPost, "/api/v1/read-events", adminToken, tt.body)
 			if rec.Code != http.StatusBadRequest {
 				t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
 			}
@@ -463,24 +566,24 @@ func TestWriteEventsPreconditions(t *testing.T) {
 	// isSubjectPristine: erster Write auf leeren Stream -> 200.
 	body := `{"events":[{"source":"s","subject":"/p","type":"t"}],
 		"preconditions":[{"type":"isSubjectPristine","payload":{"subject":"/p"}}]}`
-	if rec := do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token", body); rec.Code != http.StatusOK {
+	if rec := do(t, srv, http.MethodPost, "/api/v1/write-events", adminToken, body); rec.Code != http.StatusOK {
 		t.Fatalf("pristine-write status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	// Zweiter Write mit gleicher Precondition -> 409 (Stream nicht mehr leer).
-	if rec := do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token", body); rec.Code != http.StatusConflict {
+	if rec := do(t, srv, http.MethodPost, "/api/v1/write-events", adminToken, body); rec.Code != http.StatusConflict {
 		t.Fatalf("zweiter pristine-write status = %d, want 409", rec.Code)
 	}
 
 	// isSubjectOnEventId: /p steht jetzt auf ID 1.
 	okBody := `{"events":[{"source":"s","subject":"/p","type":"t2"}],
 		"preconditions":[{"type":"isSubjectOnEventId","payload":{"subject":"/p","eventId":"1"}}]}`
-	if rec := do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token", okBody); rec.Code != http.StatusOK {
+	if rec := do(t, srv, http.MethodPost, "/api/v1/write-events", adminToken, okBody); rec.Code != http.StatusOK {
 		t.Fatalf("onEventId-write status = %d, want 200", rec.Code)
 	}
 	// Veraltete erwartete ID -> 409.
 	staleBody := `{"events":[{"source":"s","subject":"/p","type":"t3"}],
 		"preconditions":[{"type":"isSubjectOnEventId","payload":{"subject":"/p","eventId":"1"}}]}`
-	if rec := do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token", staleBody); rec.Code != http.StatusConflict {
+	if rec := do(t, srv, http.MethodPost, "/api/v1/write-events", adminToken, staleBody); rec.Code != http.StatusConflict {
 		t.Fatalf("veralteter onEventId-write status = %d, want 409", rec.Code)
 	}
 }
@@ -491,31 +594,31 @@ func TestWriteEventsQueryPrecondition(t *testing.T) {
 		"preconditions":[{"type":"isQueryResultEmpty","payload":{"subject":"/accounts/42","where":"event.type == 'opened'"}}]}`
 
 	// Erster Write: kein opened vorhanden -> 200.
-	if rec := do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token", emptyPre); rec.Code != http.StatusOK {
+	if rec := do(t, srv, http.MethodPost, "/api/v1/write-events", adminToken, emptyPre); rec.Code != http.StatusOK {
 		t.Fatalf("erster write = %d, want 200; %s", rec.Code, rec.Body.String())
 	}
 	// Zweiter Write mit gleicher Empty-Precondition -> 409.
-	if rec := do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token", emptyPre); rec.Code != http.StatusConflict {
+	if rec := do(t, srv, http.MethodPost, "/api/v1/write-events", adminToken, emptyPre); rec.Code != http.StatusConflict {
 		t.Fatalf("zweiter write = %d, want 409", rec.Code)
 	}
 
 	// NonEmpty: closed nur, wenn opened existiert -> 200.
 	nonEmpty := `{"events":[{"source":"s","subject":"/accounts/42","type":"closed"}],
 		"preconditions":[{"type":"isQueryResultNonEmpty","payload":{"subject":"/accounts/42","where":"event.type == 'opened'"}}]}`
-	if rec := do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token", nonEmpty); rec.Code != http.StatusOK {
+	if rec := do(t, srv, http.MethodPost, "/api/v1/write-events", adminToken, nonEmpty); rec.Code != http.StatusOK {
 		t.Fatalf("nonEmpty erfüllt = %d, want 200", rec.Code)
 	}
 	// NonEmpty auf leerem Scope -> 409.
 	nonEmptyEmpty := `{"events":[{"source":"s","subject":"/accounts/99","type":"closed"}],
 		"preconditions":[{"type":"isQueryResultNonEmpty","payload":{"subject":"/accounts/99","where":"event.type == 'opened'"}}]}`
-	if rec := do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token", nonEmptyEmpty); rec.Code != http.StatusConflict {
+	if rec := do(t, srv, http.MethodPost, "/api/v1/write-events", adminToken, nonEmptyEmpty); rec.Code != http.StatusConflict {
 		t.Fatalf("nonEmpty leer = %d, want 409", rec.Code)
 	}
 
 	// Ungültiges where -> 400.
 	bad := `{"events":[{"source":"s","subject":"/x","type":"t"}],
 		"preconditions":[{"type":"isQueryResultEmpty","payload":{"subject":"/x","where":"event.type ==="}}]}`
-	if rec := do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token", bad); rec.Code != http.StatusBadRequest {
+	if rec := do(t, srv, http.MethodPost, "/api/v1/write-events", adminToken, bad); rec.Code != http.StatusBadRequest {
 		t.Fatalf("ungültiges where = %d, want 400", rec.Code)
 	}
 }
@@ -533,7 +636,7 @@ func TestWriteEventsPreconditionBadRequest(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rec := do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token", tt.body)
+			rec := do(t, srv, http.MethodPost, "/api/v1/write-events", adminToken, tt.body)
 			if rec.Code != http.StatusBadRequest {
 				t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
 			}
@@ -544,11 +647,11 @@ func TestWriteEventsPreconditionBadRequest(t *testing.T) {
 func TestReadEventsBounds(t *testing.T) {
 	srv := newTestServer(t)
 	for i := 0; i < 5; i++ {
-		do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token",
+		do(t, srv, http.MethodPost, "/api/v1/write-events", adminToken,
 			`{"events":[{"source":"s","subject":"/s","type":"t"}]}`)
 	}
 
-	rec := do(t, srv, http.MethodPost, "/api/v1/read-events", "secret-token",
+	rec := do(t, srv, http.MethodPost, "/api/v1/read-events", adminToken,
 		`{"subject":"/s","lowerBound":"2","upperBound":"4"}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
@@ -567,7 +670,7 @@ func TestReadEventsBoundsBadRequest(t *testing.T) {
 		`{"subject":"/s","lowerBound":"5","upperBound":"2"}`,
 	}
 	for _, body := range tests {
-		rec := do(t, srv, http.MethodPost, "/api/v1/read-events", "secret-token", body)
+		rec := do(t, srv, http.MethodPost, "/api/v1/read-events", adminToken, body)
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("body %s: status = %d, want 400", body, rec.Code)
 		}
@@ -576,14 +679,14 @@ func TestReadEventsBoundsBadRequest(t *testing.T) {
 
 func TestReadEventsRecursive(t *testing.T) {
 	srv := newTestServer(t)
-	do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token",
+	do(t, srv, http.MethodPost, "/api/v1/write-events", adminToken,
 		`{"events":[
 			{"source":"s","subject":"/r/a","type":"t1"},
 			{"source":"s","subject":"/other","type":"t2"},
 			{"source":"s","subject":"/r/b","type":"t3"}
 		]}`)
 
-	rec := do(t, srv, http.MethodPost, "/api/v1/read-events", "secret-token",
+	rec := do(t, srv, http.MethodPost, "/api/v1/read-events", adminToken,
 		`{"subject":"/r","recursive":true}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
@@ -596,7 +699,7 @@ func TestReadEventsRecursive(t *testing.T) {
 
 func TestReadEventsTypeFilter(t *testing.T) {
 	srv := newTestServer(t)
-	do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token",
+	do(t, srv, http.MethodPost, "/api/v1/write-events", adminToken,
 		`{"events":[
 			{"source":"s","subject":"/o/1","type":"placed"},
 			{"source":"s","subject":"/o/2","type":"cancelled"},
@@ -605,7 +708,7 @@ func TestReadEventsTypeFilter(t *testing.T) {
 		]}`)
 
 	// Rekursiv ab /o, nur placed + shipped -> IDs 1,3,4.
-	rec := do(t, srv, http.MethodPost, "/api/v1/read-events", "secret-token",
+	rec := do(t, srv, http.MethodPost, "/api/v1/read-events", adminToken,
 		`{"subject":"/o","recursive":true,"types":["placed","shipped"]}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
@@ -618,7 +721,7 @@ func TestReadEventsTypeFilter(t *testing.T) {
 
 func TestReadEventsTypesBadRequest(t *testing.T) {
 	srv := newTestServer(t)
-	rec := do(t, srv, http.MethodPost, "/api/v1/read-events", "secret-token",
+	rec := do(t, srv, http.MethodPost, "/api/v1/read-events", adminToken,
 		`{"subject":"/o","types":["placed",""]}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rec.Code)
@@ -628,7 +731,7 @@ func TestReadEventsTypesBadRequest(t *testing.T) {
 func TestPublicKeyEndpoint(t *testing.T) {
 	// Ohne Signieren -> 404.
 	plain := newTestServer(t)
-	if rec := do(t, plain, http.MethodGet, "/api/v1/public-key", "secret-token", ""); rec.Code != http.StatusNotFound {
+	if rec := do(t, plain, http.MethodGet, "/api/v1/public-key", adminToken, ""); rec.Code != http.StatusNotFound {
 		t.Fatalf("ohne signieren: status = %d, want 404", rec.Code)
 	}
 
@@ -646,9 +749,10 @@ func TestPublicKeyEndpoint(t *testing.T) {
 		t.Fatalf("open: %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	srv := New(config.Config{APIToken: "secret-token"}, st, nil)
+	seedKey(t, st, testAdminKID, testAdminSecret, auth.StatusActive, auth.ScopeRead, auth.ScopeWrite, auth.ScopeAdmin)
+	srv := New(config.Config{}, st, nil)
 
-	rec := do(t, srv, http.MethodGet, "/api/v1/public-key", "secret-token", "")
+	rec := do(t, srv, http.MethodGet, "/api/v1/public-key", adminToken, "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
@@ -663,7 +767,7 @@ func TestPublicKeyEndpoint(t *testing.T) {
 
 func TestVerifyEndpoint(t *testing.T) {
 	srv := newTestServer(t)
-	do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token",
+	do(t, srv, http.MethodPost, "/api/v1/write-events", adminToken,
 		`{"events":[{"source":"s","subject":"/a","type":"t1"},{"source":"s","subject":"/a","type":"t2"}]}`)
 
 	// Ohne Token -> 401.
@@ -671,7 +775,7 @@ func TestVerifyEndpoint(t *testing.T) {
 		t.Fatalf("ohne token: status = %d, want 401", rec.Code)
 	}
 
-	rec := do(t, srv, http.MethodGet, "/api/v1/verify", "secret-token", "")
+	rec := do(t, srv, http.MethodGet, "/api/v1/verify", adminToken, "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
@@ -692,32 +796,32 @@ func TestEventSchemaLifecycle(t *testing.T) {
 	reg := `{"type":"order","schema":{"type":"object","required":["amount"],"properties":{"amount":{"type":"number"}},"additionalProperties":false}}`
 
 	// Registrieren -> 200.
-	if rec := do(t, srv, http.MethodPost, "/api/v1/register-event-schema", "secret-token", reg); rec.Code != http.StatusOK {
+	if rec := do(t, srv, http.MethodPost, "/api/v1/register-event-schema", adminToken, reg); rec.Code != http.StatusOK {
 		t.Fatalf("register status = %d, want 200; %s", rec.Code, rec.Body.String())
 	}
 	// Erneut -> 409.
-	if rec := do(t, srv, http.MethodPost, "/api/v1/register-event-schema", "secret-token", reg); rec.Code != http.StatusConflict {
+	if rec := do(t, srv, http.MethodPost, "/api/v1/register-event-schema", adminToken, reg); rec.Code != http.StatusConflict {
 		t.Fatalf("re-register status = %d, want 409", rec.Code)
 	}
 
 	// Gültiges Event -> 200.
-	if rec := do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token",
+	if rec := do(t, srv, http.MethodPost, "/api/v1/write-events", adminToken,
 		`{"events":[{"source":"s","subject":"/o/1","type":"order","data":{"amount":5}}]}`); rec.Code != http.StatusOK {
 		t.Fatalf("gültiger write = %d, want 200", rec.Code)
 	}
 	// Ungültiges Event -> 400.
-	if rec := do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token",
+	if rec := do(t, srv, http.MethodPost, "/api/v1/write-events", adminToken,
 		`{"events":[{"source":"s","subject":"/o/2","type":"order","data":{"foo":1}}]}`); rec.Code != http.StatusBadRequest {
 		t.Fatalf("ungültiger write = %d, want 400", rec.Code)
 	}
 
 	// read-event-schema -> 200 mit Schema.
-	rec := do(t, srv, http.MethodGet, "/api/v1/read-event-schema?type=order", "secret-token", "")
+	rec := do(t, srv, http.MethodGet, "/api/v1/read-event-schema?type=order", adminToken, "")
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "amount") {
 		t.Fatalf("read-event-schema = %d / %s", rec.Code, rec.Body.String())
 	}
 	// Unbekannter Typ -> 404.
-	if rec := do(t, srv, http.MethodGet, "/api/v1/read-event-schema?type=nope", "secret-token", ""); rec.Code != http.StatusNotFound {
+	if rec := do(t, srv, http.MethodGet, "/api/v1/read-event-schema?type=nope", adminToken, ""); rec.Code != http.StatusNotFound {
 		t.Fatalf("unbekannter typ = %d, want 404", rec.Code)
 	}
 }
@@ -730,7 +834,7 @@ func TestRegisterEventSchemaBadRequest(t *testing.T) {
 		`{"type":"x","schema":{"type":"quark"}}`, // ungültiges schema
 	}
 	for _, body := range tests {
-		rec := do(t, srv, http.MethodPost, "/api/v1/register-event-schema", "secret-token", body)
+		rec := do(t, srv, http.MethodPost, "/api/v1/register-event-schema", adminToken, body)
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("body %s: status = %d, want 400", body, rec.Code)
 		}
@@ -739,7 +843,7 @@ func TestRegisterEventSchemaBadRequest(t *testing.T) {
 
 func TestReadEventTypes(t *testing.T) {
 	srv := newTestServer(t)
-	do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token",
+	do(t, srv, http.MethodPost, "/api/v1/write-events", adminToken,
 		`{"events":[
 			{"source":"s","subject":"/a","type":"borrowed"},
 			{"source":"s","subject":"/a","type":"acquired"},
@@ -751,7 +855,7 @@ func TestReadEventTypes(t *testing.T) {
 		t.Fatalf("ohne token: status = %d, want 401", rec.Code)
 	}
 
-	rec := do(t, srv, http.MethodGet, "/api/v1/read-event-types", "secret-token", "")
+	rec := do(t, srv, http.MethodGet, "/api/v1/read-event-types", adminToken, "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
@@ -786,7 +890,7 @@ func TestReadEventTypes(t *testing.T) {
 
 func TestReadSubjects(t *testing.T) {
 	srv := newTestServer(t)
-	do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token",
+	do(t, srv, http.MethodPost, "/api/v1/write-events", adminToken,
 		`{"events":[
 			{"source":"s","subject":"/books/42","type":"acquired"},
 			{"source":"s","subject":"/books/42","type":"borrowed"},
@@ -800,7 +904,7 @@ func TestReadSubjects(t *testing.T) {
 	}
 
 	// Ohne prefix: alle Subjects, alphabetisch, mit Count.
-	rec := do(t, srv, http.MethodGet, "/api/v1/read-subjects", "secret-token", "")
+	rec := do(t, srv, http.MethodGet, "/api/v1/read-subjects", adminToken, "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
@@ -819,7 +923,7 @@ func TestReadSubjects(t *testing.T) {
 	}
 
 	// Mit prefix: nur Subjects unter /books.
-	rec = do(t, srv, http.MethodGet, "/api/v1/read-subjects?prefix=/books", "secret-token", "")
+	rec = do(t, srv, http.MethodGet, "/api/v1/read-subjects?prefix=/books", adminToken, "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("prefix status = %d, want 200", rec.Code)
 	}
@@ -829,14 +933,14 @@ func TestReadSubjects(t *testing.T) {
 	}
 
 	// Ungültiger prefix (ohne /) -> 400.
-	if rec := do(t, srv, http.MethodGet, "/api/v1/read-subjects?prefix=books", "secret-token", ""); rec.Code != http.StatusBadRequest {
+	if rec := do(t, srv, http.MethodGet, "/api/v1/read-subjects?prefix=books", adminToken, ""); rec.Code != http.StatusBadRequest {
 		t.Fatalf("prefix ohne slash: status = %d, want 400", rec.Code)
 	}
 }
 
 func TestReadSubjectsTree(t *testing.T) {
 	srv := newTestServer(t)
-	do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token",
+	do(t, srv, http.MethodPost, "/api/v1/write-events", adminToken,
 		`{"events":[
 			{"source":"s","subject":"/books/42","type":"acquired"},
 			{"source":"s","subject":"/books/42","type":"borrowed"},
@@ -845,7 +949,7 @@ func TestReadSubjectsTree(t *testing.T) {
 			{"source":"s","subject":"/movies/7","type":"z"}
 		]}`)
 
-	rec := do(t, srv, http.MethodGet, "/api/v1/read-subjects?tree=true", "secret-token", "")
+	rec := do(t, srv, http.MethodGet, "/api/v1/read-subjects?tree=true", adminToken, "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; %s", rec.Code, rec.Body.String())
 	}
@@ -876,7 +980,7 @@ func TestReadSubjectsTree(t *testing.T) {
 	}
 
 	// Mit prefix: Wurzel = prefix.
-	rec = do(t, srv, http.MethodGet, "/api/v1/read-subjects?tree=true&prefix=/books", "secret-token", "")
+	rec = do(t, srv, http.MethodGet, "/api/v1/read-subjects?tree=true&prefix=/books", adminToken, "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("prefix-tree status = %d, want 200", rec.Code)
 	}
@@ -932,7 +1036,7 @@ func TestEventStatsEndpoint(t *testing.T) {
 	}
 
 	// Vor jedem Write: leeres, aber wohlgeformtes Histogramm (counts = []).
-	rec := do(t, srv, http.MethodGet, "/api/v1/event-stats", "secret-token", "")
+	rec := do(t, srv, http.MethodGet, "/api/v1/event-stats", adminToken, "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; %s", rec.Code, rec.Body.String())
 	}
@@ -953,10 +1057,10 @@ func TestEventStatsEndpoint(t *testing.T) {
 	}
 
 	// Nach drei Writes: total = 3 und die Bucket-Summe stimmt.
-	do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token",
+	do(t, srv, http.MethodPost, "/api/v1/write-events", adminToken,
 		`{"events":[{"source":"s","subject":"/a","type":"t1"},{"source":"s","subject":"/a","type":"t2"},{"source":"s","subject":"/b","type":"t3"}]}`)
 
-	rec = do(t, srv, http.MethodGet, "/api/v1/event-stats", "secret-token", "")
+	rec = do(t, srv, http.MethodGet, "/api/v1/event-stats", adminToken, "")
 	var got struct {
 		Counts []uint64 `json:"counts"`
 		Total  uint64   `json:"total"`
@@ -980,10 +1084,10 @@ func TestEventStatsBySource(t *testing.T) {
 	srv := newTestServer(t)
 
 	// Events von zwei verschiedenen Sources schreiben.
-	do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token",
+	do(t, srv, http.MethodPost, "/api/v1/write-events", adminToken,
 		`{"events":[{"source":"svc-a","subject":"/a","type":"t1"},{"source":"svc-b","subject":"/b","type":"t2"},{"source":"svc-a","subject":"/a","type":"t3"}]}`)
 
-	rec := do(t, srv, http.MethodGet, "/api/v1/event-stats?by=source", "secret-token", "")
+	rec := do(t, srv, http.MethodGet, "/api/v1/event-stats?by=source", adminToken, "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; %s", rec.Code, rec.Body.String())
 	}
@@ -1032,16 +1136,17 @@ func TestEventStatsSeededFromHistory(t *testing.T) {
 		t.Fatalf("store öffnen: %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	cfg := config.Config{Addr: ":0", APIToken: "secret-token"}
+	seedKey(t, st, testAdminKID, testAdminSecret, auth.StatusActive, auth.ScopeRead, auth.ScopeWrite, auth.ScopeAdmin)
+	cfg := config.Config{Addr: ":0"}
 
 	srv1 := New(cfg, st, nil)
-	do(t, srv1, http.MethodPost, "/api/v1/write-events", "secret-token",
+	do(t, srv1, http.MethodPost, "/api/v1/write-events", adminToken,
 		`{"events":[{"source":"s","subject":"/a","type":"t"},{"source":"s","subject":"/a","type":"t"},{"source":"s","subject":"/b","type":"t"}]}`)
 
 	// … dann einen NEUEN Server auf demselben Store erzeugen (wie ein Neustart):
 	// das Histogramm muss aus der bestehenden Historie aufgebaut werden.
 	srv2 := New(cfg, st, nil)
-	rec := do(t, srv2, http.MethodGet, "/api/v1/event-stats", "secret-token", "")
+	rec := do(t, srv2, http.MethodGet, "/api/v1/event-stats", adminToken, "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
@@ -1066,7 +1171,7 @@ func TestEventStatsSeededFromHistory(t *testing.T) {
 
 func TestMetricsEndpoint(t *testing.T) {
 	srv := newTestServer(t)
-	do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token",
+	do(t, srv, http.MethodPost, "/api/v1/write-events", adminToken,
 		`{"events":[{"source":"s","subject":"/a","type":"t1"},{"source":"s","subject":"/a","type":"t2"}]}`)
 
 	// Ohne Auth erreichbar (Scraping).
@@ -1165,7 +1270,7 @@ func TestDashboardUI(t *testing.T) {
 
 func TestEventsPathRead(t *testing.T) {
 	srv := newTestServer(t)
-	do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token",
+	do(t, srv, http.MethodPost, "/api/v1/write-events", adminToken,
 		`{"events":[
 			{"source":"s","subject":"/books/42","type":"acquired"},
 			{"source":"s","subject":"/books/42","type":"borrowed"},
@@ -1186,7 +1291,7 @@ func TestEventsPathRead(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rec := do(t, srv, http.MethodGet, tt.path, "secret-token", "")
+			rec := do(t, srv, http.MethodGet, tt.path, adminToken, "")
 			if rec.Code != http.StatusOK {
 				t.Fatalf("status = %d, want 200", rec.Code)
 			}
@@ -1210,10 +1315,10 @@ func TestEventsPathAuthAndBadRequest(t *testing.T) {
 		want              int
 	}{
 		{"kein token", "", "/api/v1/events/books", http.StatusUnauthorized},
-		{"recursive kaputt", "secret-token", "/api/v1/events/books?recursive=vielleicht", http.StatusBadRequest},
-		{"lowerBound kaputt", "secret-token", "/api/v1/events/books?lowerBound=x", http.StatusBadRequest},
-		{"leerer typ", "secret-token", "/api/v1/events/books?type=", http.StatusBadRequest},
-		{"watch kaputt", "secret-token", "/api/v1/events/books?watch=jain", http.StatusBadRequest},
+		{"recursive kaputt", adminToken, "/api/v1/events/books?recursive=vielleicht", http.StatusBadRequest},
+		{"lowerBound kaputt", adminToken, "/api/v1/events/books?lowerBound=x", http.StatusBadRequest},
+		{"leerer typ", adminToken, "/api/v1/events/books?type=", http.StatusBadRequest},
+		{"watch kaputt", adminToken, "/api/v1/events/books?watch=jain", http.StatusBadRequest},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1236,7 +1341,7 @@ func TestEventsPathWatch(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL+"/api/v1/events/w?watch=true", nil)
-	req.Header.Set("Authorization", "Bearer secret-token")
+	req.Header.Set("Authorization", "Bearer "+adminToken)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("watch-request: %v", err)
@@ -1269,7 +1374,7 @@ func idsOfEvents(events []event.Event) []string {
 // dem ODER-Fallback (der nicht einschränkbar ist und voll scannen muss).
 func TestRunQueryTypeIndex(t *testing.T) {
 	srv := newTestServer(t)
-	do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token",
+	do(t, srv, http.MethodPost, "/api/v1/write-events", adminToken,
 		`{"events":[
 			{"source":"s","subject":"/orders/1","type":"placed","data":{"amount":250}},
 			{"source":"s","subject":"/orders/2","type":"cancelled"},
@@ -1280,7 +1385,7 @@ func TestRunQueryTypeIndex(t *testing.T) {
 
 	run := func(body string) []string {
 		t.Helper()
-		rec := do(t, srv, http.MethodPost, "/api/v1/run-query", "secret-token", body)
+		rec := do(t, srv, http.MethodPost, "/api/v1/run-query", adminToken, body)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("status = %d; %s", rec.Code, rec.Body.String())
 		}
@@ -1332,9 +1437,9 @@ func TestObserveEventsBadRequest(t *testing.T) {
 		want              int
 	}{
 		{"kein token", "", `{"subject":"/a"}`, http.StatusUnauthorized},
-		{"subject ohne slash", "secret-token", `{"subject":"a"}`, http.StatusBadRequest},
-		{"lowerBound nicht numerisch", "secret-token", `{"subject":"/a","lowerBound":"x"}`, http.StatusBadRequest},
-		{"kaputtes json", "secret-token", `{`, http.StatusBadRequest},
+		{"subject ohne slash", adminToken, `{"subject":"a"}`, http.StatusBadRequest},
+		{"lowerBound nicht numerisch", adminToken, `{"subject":"/a","lowerBound":"x"}`, http.StatusBadRequest},
+		{"kaputtes json", adminToken, `{`, http.StatusBadRequest},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1363,7 +1468,7 @@ func TestObserveEventsHistoryAndLive(t *testing.T) {
 	defer cancel()
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, ts.URL+"/api/v1/observe-events",
 		strings.NewReader(`{"subject":"/obs"}`))
-	req.Header.Set("Authorization", "Bearer secret-token")
+	req.Header.Set("Authorization", "Bearer "+adminToken)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("observe-request: %v", err)
@@ -1415,7 +1520,7 @@ func TestObserveFlushesImmediately(t *testing.T) {
 	// lowerBound jenseits aller (hier: null) Events => keine History, keine Live-Events.
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, ts.URL+"/api/v1/observe-events",
 		strings.NewReader(`{"subject":"/none","lowerBound":"999999"}`))
-	req.Header.Set("Authorization", "Bearer secret-token")
+	req.Header.Set("Authorization", "Bearer "+adminToken)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("observe-request: %v", err)
@@ -1460,7 +1565,7 @@ func TestObserveSendsHeartbeat(t *testing.T) {
 	defer cancel()
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, ts.URL+"/api/v1/observe-events",
 		strings.NewReader(`{"subject":"/hb"}`))
-	req.Header.Set("Authorization", "Bearer secret-token")
+	req.Header.Set("Authorization", "Bearer "+adminToken)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("observe-request: %v", err)
@@ -1503,7 +1608,7 @@ func TestObserveEventsTypeFilter(t *testing.T) {
 	defer cancel()
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, ts.URL+"/api/v1/observe-events",
 		strings.NewReader(`{"subject":"/t","recursive":true,"types":["placed"]}`))
-	req.Header.Set("Authorization", "Bearer secret-token")
+	req.Header.Set("Authorization", "Bearer "+adminToken)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("observe-request: %v", err)
@@ -1527,7 +1632,7 @@ func TestObserveEventsTypeFilter(t *testing.T) {
 func writeViaHTTP(t *testing.T, baseURL, body string) {
 	t.Helper()
 	req, _ := http.NewRequest(http.MethodPost, baseURL+"/api/v1/write-events", strings.NewReader(body))
-	req.Header.Set("Authorization", "Bearer secret-token")
+	req.Header.Set("Authorization", "Bearer "+adminToken)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("write-request: %v", err)
@@ -1567,25 +1672,25 @@ func TestDataRoutesStoreError(t *testing.T) {
 		t.Fatalf("store schließen: %v", err)
 	}
 
-	rec := do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token",
+	rec := do(t, srv, http.MethodPost, "/api/v1/write-events", adminToken,
 		`{"events":[{"source":"s","subject":"/a","type":"t"}]}`)
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("write status = %d, want 500", rec.Code)
 	}
 
-	rec = do(t, srv, http.MethodPost, "/api/v1/read-events", "secret-token", `{"subject":"/a"}`)
+	rec = do(t, srv, http.MethodPost, "/api/v1/read-events", adminToken, `{"subject":"/a"}`)
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("read status = %d, want 500", rec.Code)
 	}
 
 	// run-query scheitert beim Lesen aus dem geschlossenen Store.
-	rec = do(t, srv, http.MethodPost, "/api/v1/run-query", "secret-token", `{"subject":"/a"}`)
+	rec = do(t, srv, http.MethodPost, "/api/v1/run-query", adminToken, `{"subject":"/a"}`)
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("run-query status = %d, want 500", rec.Code)
 	}
 
 	// observe scheitert beim History-Lesen aus dem geschlossenen Store.
-	rec = do(t, srv, http.MethodPost, "/api/v1/observe-events", "secret-token", `{"subject":"/a"}`)
+	rec = do(t, srv, http.MethodPost, "/api/v1/observe-events", adminToken, `{"subject":"/a"}`)
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("observe status = %d, want 500", rec.Code)
 	}
@@ -1596,7 +1701,7 @@ func TestDataRoutesStoreError(t *testing.T) {
 func TestRunQueryNoEngine(t *testing.T) {
 	srv := newTestServer(t)
 	srv.queryC = nil
-	rec := do(t, srv, http.MethodPost, "/api/v1/run-query", "secret-token", `{"subject":"/a"}`)
+	rec := do(t, srv, http.MethodPost, "/api/v1/run-query", adminToken, `{"subject":"/a"}`)
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500", rec.Code)
 	}
@@ -1671,13 +1776,13 @@ func TestDevResetNotRegisteredWithoutDevMode(t *testing.T) {
 	srv := newTestServer(t) // kein Dev-Mode
 
 	// Route existiert nicht → 404 (nicht nur 401), auch mit gültigem Token.
-	rec := do(t, srv, http.MethodPost, "/api/v1/dev/reset-database", "secret-token", "")
+	rec := do(t, srv, http.MethodPost, "/api/v1/dev/reset-database", adminToken, "")
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404 ohne dev-mode", rec.Code)
 	}
 
 	// /info meldet devMode=false.
-	rec = do(t, srv, http.MethodGet, "/api/v1/info", "secret-token", "")
+	rec = do(t, srv, http.MethodGet, "/api/v1/info", adminToken, "")
 	var info map[string]any
 	if err := json.NewDecoder(rec.Body).Decode(&info); err != nil {
 		t.Fatalf("info dekodieren: %v", err)
@@ -1700,7 +1805,7 @@ func TestDevResetClearsDatabase(t *testing.T) {
 	srv := newDevServer(t)
 
 	// /info meldet devMode=true.
-	rec := do(t, srv, http.MethodGet, "/api/v1/info", "secret-token", "")
+	rec := do(t, srv, http.MethodGet, "/api/v1/info", adminToken, "")
 	var info map[string]any
 	if err := json.NewDecoder(rec.Body).Decode(&info); err != nil {
 		t.Fatalf("info dekodieren: %v", err)
@@ -1714,12 +1819,12 @@ func TestDevResetClearsDatabase(t *testing.T) {
 		{"source":"lib","subject":"/books/1","type":"acquired"},
 		{"source":"lib","subject":"/books/2","type":"acquired"}
 	]}`
-	if rec := do(t, srv, http.MethodPost, "/api/v1/write-events", "secret-token", writeBody); rec.Code != http.StatusOK {
+	if rec := do(t, srv, http.MethodPost, "/api/v1/write-events", adminToken, writeBody); rec.Code != http.StatusOK {
 		t.Fatalf("write status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 
 	// Reset.
-	rec = do(t, srv, http.MethodPost, "/api/v1/dev/reset-database", "secret-token", "")
+	rec = do(t, srv, http.MethodPost, "/api/v1/dev/reset-database", adminToken, "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("reset status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
@@ -1738,7 +1843,7 @@ func TestDevResetClearsDatabase(t *testing.T) {
 	}
 
 	// Danach ist der Store leer.
-	rec = do(t, srv, http.MethodGet, "/api/v1/info", "secret-token", "")
+	rec = do(t, srv, http.MethodGet, "/api/v1/info", adminToken, "")
 	if err := json.NewDecoder(rec.Body).Decode(&info); err != nil {
 		t.Fatalf("info dekodieren: %v", err)
 	}
@@ -1753,30 +1858,30 @@ func TestDevBulkImportWindowLifecycle(t *testing.T) {
 	bulkBody := `{"events":[{"source":"bulk","subject":"/import/a","type":"migrated"}]}`
 
 	// Direkt nach Start offen.
-	rec := do(t, srv, http.MethodPost, "/api/v1/dev/bulk-import-events", "secret-token", bulkBody)
+	rec := do(t, srv, http.MethodPost, "/api/v1/dev/bulk-import-events", adminToken, bulkBody)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("bulk import initial status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 
 	// Fenster schließen.
-	rec = do(t, srv, http.MethodPost, "/api/v1/dev/close-bulk-import", "secret-token", "")
+	rec = do(t, srv, http.MethodPost, "/api/v1/dev/close-bulk-import", adminToken, "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("close bulk window status = %d, want 200", rec.Code)
 	}
 
 	// Danach blockiert.
-	rec = do(t, srv, http.MethodPost, "/api/v1/dev/bulk-import-events", "secret-token", bulkBody)
+	rec = do(t, srv, http.MethodPost, "/api/v1/dev/bulk-import-events", adminToken, bulkBody)
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("bulk import after close status = %d, want 409", rec.Code)
 	}
 
 	// Reset öffnet Fenster wieder.
-	rec = do(t, srv, http.MethodPost, "/api/v1/dev/reset-database", "secret-token", "")
+	rec = do(t, srv, http.MethodPost, "/api/v1/dev/reset-database", adminToken, "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("reset status = %d, want 200", rec.Code)
 	}
 
-	rec = do(t, srv, http.MethodPost, "/api/v1/dev/bulk-import-events", "secret-token", bulkBody)
+	rec = do(t, srv, http.MethodPost, "/api/v1/dev/bulk-import-events", adminToken, bulkBody)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("bulk import after reset status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
@@ -1784,7 +1889,7 @@ func TestDevBulkImportWindowLifecycle(t *testing.T) {
 
 func TestDevBulkImportNotRegisteredWithoutDevMode(t *testing.T) {
 	srv := newTestServer(t)
-	rec := do(t, srv, http.MethodPost, "/api/v1/dev/bulk-import-events", "secret-token", `{"events":[{"source":"s","subject":"/x","type":"t"}]}`)
+	rec := do(t, srv, http.MethodPost, "/api/v1/dev/bulk-import-events", adminToken, `{"events":[{"source":"s","subject":"/x","type":"t"}]}`)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404 ohne dev-mode", rec.Code)
 	}
@@ -1792,7 +1897,7 @@ func TestDevBulkImportNotRegisteredWithoutDevMode(t *testing.T) {
 
 func TestDevCloseBulkImportNotRegisteredWithoutDevMode(t *testing.T) {
 	srv := newTestServer(t)
-	rec := do(t, srv, http.MethodPost, "/api/v1/dev/close-bulk-import", "secret-token", "")
+	rec := do(t, srv, http.MethodPost, "/api/v1/dev/close-bulk-import", adminToken, "")
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404 ohne dev-mode", rec.Code)
 	}

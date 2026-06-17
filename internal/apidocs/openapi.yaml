@@ -280,6 +280,94 @@ paths:
             application/problem+json:
               schema: { $ref: "#/components/schemas/ProblemDetails" }
 
+  /api/v1/keys:
+    post:
+      tags: [Admin]
+      summary: Neuen API-Key anlegen (Scope admin)
+      description: |
+        Legt einen benannten Schlüssel mit Scopes an und antwortet **einmalig**
+        mit dem vollständigen Klartextwert `kid.secret`. Der Wert ist danach nicht
+        mehr abrufbar (nur sein SHA-256-Hash wird gespeichert).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, scopes]
+              properties:
+                name: { type: string, example: "ci-writer" }
+                scopes:
+                  type: array
+                  items: { type: string, enum: [read, write, admin] }
+                  example: ["read", "write"]
+      responses:
+        "201":
+          description: Angelegt — Geheimnis nur jetzt sichtbar
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CreatedKey" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/InternalError" }
+    get:
+      tags: [Admin]
+      summary: API-Keys auflisten (Scope admin)
+      description: |
+        Liefert alle Schlüssel ohne Geheimnisse/Hashes sowie die Anzahl aktiver
+        Admin-Keys. Ist nur noch ein Admin-Key aktiv, enthält die Antwort eine
+        `warning` (Self-Lockout-Schutz, kein harter Block).
+      responses:
+        "200":
+          description: Liste der Schlüssel
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  keys:
+                    type: array
+                    items: { $ref: "#/components/schemas/KeyView" }
+                  activeAdminKeys: { type: integer, example: 2 }
+                  warning: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/v1/keys/{kid}/revoke:
+    post:
+      tags: [Admin]
+      summary: API-Key widerrufen (Scope admin)
+      description: |
+        Setzt den Status auf `revoked` (kein Löschen — die kid-Zuordnung bleibt
+        fürs Audit erhalten). Ein Admin darf sich selbst widerrufen; bliebe danach
+        kein aktiver Admin-Key übrig, enthält die Antwort eine `warning`.
+      parameters:
+        - name: kid
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Widerrufen
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  kid: { type: string, example: "kid_ci01" }
+                  status: { type: string, example: "revoked" }
+                  warning: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404":
+          description: Unbekannter kid
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/ProblemDetails" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
   /api/v1/public-key:
     get:
       tags: [Events]
@@ -602,7 +690,12 @@ components:
     bearerAuth:
       type: http
       scheme: bearer
-      description: Konfiguriertes API-Token (CLIO_API_TOKEN)
+      description: |
+        Benannter API-Key im Format `kid.secret` (ADR-025), z. B.
+        `Authorization: Bearer kid_ci01.W8xq…`. Jeder Key trägt Scopes
+        (read/write/admin); lesende Routen verlangen `read`, schreibende
+        `write`, die Schlüsselverwaltung `admin`. Fehlender/ungültiger Key → 401,
+        gültiger Key ohne passenden Scope → 403.
 
   responses:
     BadRequest:
@@ -611,7 +704,12 @@ components:
         application/problem+json:
           schema: { $ref: "#/components/schemas/ProblemDetails" }
     Unauthorized:
-      description: Fehlendes oder falsches Bearer-Token
+      description: Fehlender/ungültiger Schlüssel oder widerrufen
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/ProblemDetails" }
+    Forbidden:
+      description: Gültig authentifiziert, aber der Schlüssel trägt den nötigen Scope nicht
       content:
         application/problem+json:
           schema: { $ref: "#/components/schemas/ProblemDetails" }
@@ -637,6 +735,34 @@ components:
         title: { type: string, example: "Bad Request" }
         status: { type: integer, example: 400 }
         detail: { type: string, example: "subject muss mit \"/\" beginnen" }
+    KeyView:
+      type: object
+      description: |
+        Öffentliche Sicht auf einen API-Key (ADR-025) — ohne Geheimnis/Hash.
+      properties:
+        kid: { type: string, example: "kid_ci01" }
+        name: { type: string, example: "ci-writer" }
+        scopes:
+          type: array
+          items: { type: string, enum: [read, write, admin] }
+        status: { type: string, enum: [active, revoked], example: "active" }
+        createdAt: { type: string, format: date-time }
+        revokedAt: { type: string, format: date-time, nullable: true }
+    CreatedKey:
+      type: object
+      description: |
+        Antwort auf `POST /api/v1/keys`. `secret` ist der vollständige
+        Leitungswert `kid.secret` und wird **nur jetzt** ausgeliefert.
+      properties:
+        kid: { type: string, example: "kid_ci01" }
+        name: { type: string, example: "ci-writer" }
+        scopes:
+          type: array
+          items: { type: string, enum: [read, write, admin] }
+        status: { type: string, example: "active" }
+        createdAt: { type: string, format: date-time }
+        secret: { type: string, example: "kid_ci01.W8xqT2vK9pL4mN6rS1dF3hJ5" }
+        warning: { type: string }
     SubjectTreeNode:
       type: object
       description: |
@@ -683,6 +809,13 @@ components:
         type: { type: string }
         datacontenttype: { type: string, example: "application/json" }
         data: { nullable: true }
+        clioauthkid:
+          type: string
+          description: |
+            Optionale CloudEvents-Extension: kid des authentifizierten Schlüssels,
+            der das Event geschrieben hat (Urheberschaft, ADR-025). Nur vorhanden,
+            wenn `CLIO_EVENT_AUTHORSHIP` aktiv war; geht dann in den Hash ein.
+          example: "kid_ci01"
         predecessorhash:
           type: string
           description: SHA-256-Hash des Vorgängers (Genesis = 64 Nullen)
