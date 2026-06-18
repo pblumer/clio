@@ -39,6 +39,42 @@ func TestInitialMmapSizePreallocatesFile(t *testing.T) {
 	}
 }
 
+// TestStatsUnderPreallocation prüft, dass der Füllgrad sich auf den genutzten
+// Umfang (DataBytes) bezieht, nicht auf die große vorbelegte Datei — sonst läse
+// eine frisch vorbelegte, fast leere DB fälschlich ~100 % voll.
+func TestStatsUnderPreallocation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "stats.db")
+	const initial = 32 << 20 // 32 MiB vorbelegt
+
+	st, err := OpenWithOptions(path, Options{SyncMode: SyncGroup, InitialMmapSize: initial})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	appendAll(t, st, event.Candidate{Source: "s", Subject: "/a", Type: "t"})
+
+	stats, err := st.Stats()
+	if err != nil {
+		t.Fatalf("stats: %v", err)
+	}
+	if stats.FileBytes < initial {
+		t.Errorf("FileBytes = %d, want >= %d (vorbelegt)", stats.FileBytes, initial)
+	}
+	// DataBytes (High-Water-Mark) ist die winzige tatsächliche Nutzung, weit
+	// unter der 32-MiB-Datei.
+	if stats.DataBytes <= 0 || stats.DataBytes >= initial {
+		t.Errorf("DataBytes = %d, want (0, %d)", stats.DataBytes, initial)
+	}
+	if stats.DataBytes >= stats.FileBytes {
+		t.Errorf("DataBytes (%d) sollte < FileBytes (%d) sein bei Vorbelegung", stats.DataBytes, stats.FileBytes)
+	}
+	// Füllgrad bezieht sich auf die genutzte Region — plausibel in [0,100], NICHT
+	// die ~100 %, die used/FileBytes ergäbe.
+	if stats.FillPercent < 0 || stats.FillPercent > 100 {
+		t.Errorf("FillPercent = %v, außerhalb [0,100]", stats.FillPercent)
+	}
+}
+
 // TestInitialMmapSizeNeverShrinks stellt sicher, dass das erneute Öffnen mit
 // einer kleineren InitialMmapSize die bereits größere Datei NICHT verkleinert
 // (das würde bbolt-Seiten abschneiden) und die Daten erhalten bleiben.

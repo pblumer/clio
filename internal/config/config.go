@@ -37,6 +37,19 @@ type Config struct {
 	// bleibt sie unangetastet.
 	DBInitialMB int
 
+	// DBMonitorInterval steuert den Hintergrund-Monitor, der den Daten-Füllstand
+	// gegen die vorbelegte Grenze (DBInitialMB) beobachtet und warnt, bevor die
+	// teuren bbolt-Remaps zurückkehren (CLIO_DB_MONITOR_INTERVAL als Go-Dauer,
+	// Default 60s; 0 schaltet den Monitor ab). Er läuft ohnehin nur, wenn
+	// DBInitialMB gesetzt ist (sonst gibt es keine Grenze zu überwachen).
+	DBMonitorInterval time.Duration
+
+	// DBGrowThresholdPct ist der Schwellwert (Prozent der vorbelegten Größe), ab
+	// dem der Monitor warnt (CLIO_DB_GROW_THRESHOLD_PCT). Eine spätere Etappe nutzt
+	// denselben Schwellwert, um automatisch zu vergrößern (daher der Name). Geklemmt
+	// auf [1,99]; Default 80.
+	DBGrowThresholdPct int
+
 	// Sync steuert die Durability-/Performance-Abwägung beim Schreiben:
 	// "group" (Default, Group Commit), "always" (fsync pro Write) oder
 	// "off" (kein fsync, maximaler Durchsatz).
@@ -91,6 +104,8 @@ const (
 	envBootstrap = "CLIO_BOOTSTRAP_ADMIN_KEY"
 	envDBPath    = "CLIO_DB_PATH"
 	envDBInitMB  = "CLIO_DB_INITIAL_MB"
+	envDBMonInt  = "CLIO_DB_MONITOR_INTERVAL"
+	envDBGrowPct = "CLIO_DB_GROW_THRESHOLD_PCT"
 	envSync      = "CLIO_SYNC"
 	envSignKey   = "CLIO_SIGNING_KEY"
 	envDevMode   = "CLIO_DEV_MODE"
@@ -108,6 +123,9 @@ const (
 	// maxInitMB deckelt CLIO_DB_INITIAL_MB auf 64 TiB — großzügig genug für jede
 	// reale Platte, schützt aber vor versehentlichen Tippfehlern (und Overflow).
 	maxInitMB = 64 << 20
+
+	defaultMonInterval = 60 * time.Second
+	defaultGrowPct     = 80
 )
 
 // validSync enthält die erlaubten Werte für CLIO_SYNC.
@@ -126,6 +144,7 @@ func FromEnv() (Config, error) {
 		BootstrapAdminKey:    os.Getenv(envBootstrap),
 		DBPath:               getenvDefault(envDBPath, defaultDBPath),
 		DBInitialMB:          parseIntDefault(envDBInitMB, 0, 0, maxInitMB),
+		DBGrowThresholdPct:   parseIntDefault(envDBGrowPct, defaultGrowPct, 1, 99),
 		Sync:                 getenvDefault(envSync, defaultSync),
 		SigningKey:           os.Getenv(envSignKey),
 		DevMode:              parseBoolDefault(envDevMode, false),
@@ -143,6 +162,12 @@ func FromEnv() (Config, error) {
 		return Config{}, err
 	}
 	cfg.QueryTimeout = to
+
+	mon, err := parseDurationDefault(envDBMonInt, defaultMonInterval)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.DBMonitorInterval = mon
 
 	return cfg, nil
 }

@@ -143,6 +143,10 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		logger.Warn("DEV-MODE aktiv — destruktiver DB-Reset unter POST /api/v1/dev/reset-database freigeschaltet (nicht in Produktion verwenden)")
 	}
 
+	// Hintergrund-Monitor: warnt vor Annäherung an die vorbelegte DB-Grenze
+	// (läuft nur bei gesetztem CLIO_DB_INITIAL_MB). Endet mit ctx beim Shutdown.
+	startBackgroundMaintenance(ctx, st, cfg, logger)
+
 	srv := &http.Server{
 		Addr: cfg.Addr,
 		Handler: httpapi.New(

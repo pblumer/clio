@@ -36,40 +36,53 @@ func (s *Store) Size() (int64, error) {
 	return info.Size(), nil
 }
 
-// DBStats beschreibt die Speicherbelegung der bbolt-Datei: ihre Größe auf der
-// Platte und – aus der bbolt-Freelist – wie viel davon belegt bzw. freier,
-// wiederverwendbarer Platz ist. bbolt vergrößert die Datei bei Bedarf, gibt sie
-// aber nie von selbst frei (freie Seiten werden zuerst wiederverwendet); echtes
-// Verkleinern geschieht nur offline via `cliostore compact` (ADR-015). Der
-// Füllgrad macht sichtbar, wie viel der Datei tatsächlich genutzt wird.
+// DBStats beschreibt die Speicherbelegung der bbolt-Datei. Wichtig bei
+// vorbelegter Datei (CLIO_DB_INITIAL_MB): FileBytes ist dann die – ggf. weit
+// größere – Datei auf der Platte, während DataBytes (die bbolt-High-Water-Mark)
+// den tatsächlich in Benutzung genommenen Umfang angibt. Der Füllgrad bezieht
+// sich auf diese genutzte Region (Live-Daten vs. wiederverwendbare freie Seiten
+// aus der Freelist), nicht auf die ggf. vorbelegte Datei — sonst läse er bei
+// frisch vorbelegter, leerer DB fälschlich ~100 %. bbolt gibt belegten Platz nie
+// von selbst frei; echtes Verkleinern geschieht nur via `cliostore compact`
+// (ADR-015). Der Abstand DataBytes ↔ FileBytes ist der Remap-Headroom.
 type DBStats struct {
 	FileBytes   int64   `json:"fileBytes"`   // Dateigröße auf der Platte (os.Stat)
-	UsedBytes   int64   `json:"usedBytes"`   // FileBytes - FreeBytes (Nutzdaten + Strukturen)
+	DataBytes   int64   `json:"dataBytes"`   // tatsächlich genutzter Umfang (High-Water-Mark = pgid*pageSize)
+	UsedBytes   int64   `json:"usedBytes"`   // DataBytes - FreeBytes (Nutzdaten + Strukturen)
 	FreeBytes   int64   `json:"freeBytes"`   // in freien Seiten gebundener, wiederverwendbarer Platz
-	FillPercent float64 `json:"fillPercent"` // UsedBytes / FileBytes * 100
+	FillPercent float64 `json:"fillPercent"` // UsedBytes / DataBytes * 100 (Live-Anteil der genutzten Region)
 	FreePages   int     `json:"freePages"`   // Anzahl freier (+ pending) Seiten
 	PageSize    int     `json:"pageSize"`    // Seitengröße in Bytes
 }
 
 // Stats liefert die Speicherbelegung der Datenbankdatei (siehe DBStats). Der
-// freie Anteil wird aus der bbolt-Freelist ermittelt (FreeAlloc).
+// genutzte Umfang ist die High-Water-Mark (tx.Size = pgid*pageSize), der freie
+// Anteil stammt aus der bbolt-Freelist (FreeAlloc).
 func (s *Store) Stats() (DBStats, error) {
 	fileBytes, err := s.Size()
 	if err != nil {
 		return DBStats{}, err
 	}
+	var dataBytes int64
+	if err := s.db.View(func(tx *bolt.Tx) error {
+		dataBytes = tx.Size()
+		return nil
+	}); err != nil {
+		return DBStats{}, err
+	}
 	st := s.db.Stats()
 	freeBytes := int64(st.FreeAlloc)
-	if freeBytes > fileBytes {
-		freeBytes = fileBytes
+	if freeBytes > dataBytes {
+		freeBytes = dataBytes
 	}
-	used := fileBytes - freeBytes
+	used := dataBytes - freeBytes
 	var fill float64
-	if fileBytes > 0 {
-		fill = float64(used) / float64(fileBytes) * 100
+	if dataBytes > 0 {
+		fill = float64(used) / float64(dataBytes) * 100
 	}
 	return DBStats{
 		FileBytes:   fileBytes,
+		DataBytes:   dataBytes,
 		UsedBytes:   used,
 		FreeBytes:   freeBytes,
 		FillPercent: fill,

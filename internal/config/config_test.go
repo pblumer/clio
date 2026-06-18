@@ -103,6 +103,63 @@ func TestFromEnvDBInitialMB(t *testing.T) {
 	}
 }
 
+func TestFromEnvDBMonitorInterval(t *testing.T) {
+	t.Run("default", func(t *testing.T) {
+		t.Setenv(envToken, "tok")
+		t.Setenv(envDBMonInt, "")
+		cfg, err := FromEnv()
+		if err != nil {
+			t.Fatalf("unerwarteter fehler: %v", err)
+		}
+		if cfg.DBMonitorInterval != defaultMonInterval {
+			t.Errorf("DBMonitorInterval = %v, want %v", cfg.DBMonitorInterval, defaultMonInterval)
+		}
+	})
+	t.Run("gesetzt", func(t *testing.T) {
+		t.Setenv(envToken, "tok")
+		t.Setenv(envDBMonInt, "30s")
+		cfg, err := FromEnv()
+		if err != nil {
+			t.Fatalf("unerwarteter fehler: %v", err)
+		}
+		if cfg.DBMonitorInterval != 30*time.Second {
+			t.Errorf("DBMonitorInterval = %v, want 30s", cfg.DBMonitorInterval)
+		}
+	})
+	t.Run("unlesbar -> fehler", func(t *testing.T) {
+		t.Setenv(envToken, "tok")
+		t.Setenv(envDBMonInt, "bald")
+		if _, err := FromEnv(); err == nil {
+			t.Fatal("erwartete fehler bei ungültigem CLIO_DB_MONITOR_INTERVAL")
+		}
+	})
+}
+
+func TestFromEnvDBGrowThresholdPct(t *testing.T) {
+	cases := []struct {
+		val  string
+		want int
+	}{
+		{"", defaultGrowPct},
+		{"75", 75},
+		{"0", 1},    // auf min geklemmt
+		{"150", 99}, // auf max geklemmt
+	}
+	for _, tc := range cases {
+		t.Run(tc.val, func(t *testing.T) {
+			t.Setenv(envToken, "tok")
+			t.Setenv(envDBGrowPct, tc.val)
+			cfg, err := FromEnv()
+			if err != nil {
+				t.Fatalf("unerwarteter fehler: %v", err)
+			}
+			if cfg.DBGrowThresholdPct != tc.want {
+				t.Errorf("DBGrowThresholdPct = %d, want %d", cfg.DBGrowThresholdPct, tc.want)
+			}
+		})
+	}
+}
+
 func TestFromEnvSyncDefault(t *testing.T) {
 	t.Setenv(envToken, "tok")
 	t.Setenv(envSync, "")

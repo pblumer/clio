@@ -29,6 +29,8 @@ type Gauges struct {
 	ActiveObservers int
 	EventsTotal     uint64
 	DBSizeBytes     int64
+	DBDataBytes     int64 // genutzter Umfang (High-Water-Mark; < 0 = unbekannt)
+	DBInitialBytes  int64 // vorbelegte Grenze CLIO_DB_INITIAL_MB (< 0 = aus/unbekannt)
 	DBUsedBytes     int64 // belegter Anteil der DB-Datei (< 0 = unbekannt)
 	DBFreeBytes     int64 // wiederverwendbarer freier Anteil (< 0 = unbekannt)
 	DiskFreeBytes   int64 // freier Speicher auf dem Dateisystem der DB (< 0 = unbekannt)
@@ -125,6 +127,12 @@ func (m *Metrics) Write(w io.Writer, g Gauges) {
 	writeGauge(w, "clio_events_total", "Anzahl gespeicherter Events.", g.EventsTotal)
 	if g.DBSizeBytes >= 0 {
 		writeGauge(w, "clio_db_size_bytes", "Größe der Datenbankdatei in Bytes.", uint64(g.DBSizeBytes))
+	}
+	if g.DBDataBytes >= 0 {
+		writeGauge(w, "clio_db_data_bytes", "Tatsächlich genutzter Umfang der DB in Bytes (High-Water-Mark); bei vorbelegter Datei kleiner als clio_db_size_bytes.", uint64(g.DBDataBytes))
+	}
+	if g.DBInitialBytes > 0 {
+		writeGauge(w, "clio_db_initial_bytes", "Vorbelegte DB-Grenze in Bytes (CLIO_DB_INITIAL_MB); ab Annäherung drohen bbolt-Remap-Latenzspitzen.", uint64(g.DBInitialBytes))
 	}
 	if g.DBUsedBytes >= 0 {
 		writeGauge(w, "clio_db_used_bytes", "Belegter Anteil der Datenbankdatei in Bytes (Nutzdaten + Strukturen).", uint64(g.DBUsedBytes))

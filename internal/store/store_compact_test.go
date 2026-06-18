@@ -79,17 +79,21 @@ func TestStats(t *testing.T) {
 	if stats.FileBytes <= 0 || stats.PageSize <= 0 {
 		t.Fatalf("unplausibel: %+v", stats)
 	}
-	// Invarianten: belegt + frei = Datei, Füllgrad konsistent, frei <= Datei.
-	if stats.UsedBytes+stats.FreeBytes != stats.FileBytes {
-		t.Fatalf("used+free != file: %+v", stats)
+	// Invarianten: genutzter Umfang liegt innerhalb der Datei; belegt + frei =
+	// genutzter Umfang (nicht die ggf. größere Datei); Füllgrad konsistent.
+	if stats.DataBytes <= 0 || stats.DataBytes > stats.FileBytes {
+		t.Fatalf("dataBytes außerhalb (0,file]: %+v", stats)
 	}
-	if stats.FreeBytes < 0 || stats.FreeBytes > stats.FileBytes {
-		t.Fatalf("freeBytes außerhalb [0,file]: %+v", stats)
+	if stats.UsedBytes+stats.FreeBytes != stats.DataBytes {
+		t.Fatalf("used+free != data: %+v", stats)
+	}
+	if stats.FreeBytes < 0 || stats.FreeBytes > stats.DataBytes {
+		t.Fatalf("freeBytes außerhalb [0,data]: %+v", stats)
 	}
 	if stats.FillPercent < 0 || stats.FillPercent > 100 {
 		t.Fatalf("fillPercent außerhalb [0,100]: %+v", stats)
 	}
-	wantFill := float64(stats.UsedBytes) / float64(stats.FileBytes) * 100
+	wantFill := float64(stats.UsedBytes) / float64(stats.DataBytes) * 100
 	if d := stats.FillPercent - wantFill; d < -0.001 || d > 0.001 {
 		t.Fatalf("fillPercent inkonsistent: %v vs %v", stats.FillPercent, wantFill)
 	}
