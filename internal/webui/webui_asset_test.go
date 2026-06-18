@@ -96,3 +96,33 @@ func TestDashboardHTMLReferencesExternalCSS(t *testing.T) {
 		t.Fatal("dashboard.html enthält noch ein Inline-<style> (sollte ausgelagert sein)")
 	}
 }
+
+// TestDashboardHTMLReferencesExternalJS prüft, dass das Markup das ausgelagerte
+// Skript einbindet und kein Inline-<script> (mit Code) mehr enthält.
+func TestDashboardHTMLReferencesExternalJS(t *testing.T) {
+	html := string(dashboardHTML)
+	if !strings.Contains(html, `<script src="/ui/js/dashboard.js"></script>`) {
+		t.Fatal("dashboard.html verweist nicht auf das ausgelagerte Skript")
+	}
+	// Nach der Auslagerung darf es kein attributloses Inline-<script> mehr geben.
+	if strings.Contains(html, "<script>") {
+		t.Fatal("dashboard.html enthält noch ein Inline-<script> (sollte ausgelagert sein)")
+	}
+}
+
+func TestAssetHandlerServesJS(t *testing.T) {
+	rec := httptest.NewRecorder()
+	AssetHandler().ServeHTTP(rec, assetRequest("js/dashboard.js"))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	// .js wird als JavaScript-MIME ausgeliefert (text/javascript bzw.
+	// application/javascript je nach Plattform-MIME-Tabelle).
+	if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "javascript") {
+		t.Fatalf("Content-Type = %q, want …javascript…", ct)
+	}
+	if rec.Body.Len() == 0 {
+		t.Fatal("leerer JS-Body")
+	}
+}
