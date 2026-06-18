@@ -200,6 +200,10 @@ verpackt sie pro Plattform als Archiv (`.tar.gz` bzw. `.zip` für Windows, jewei
 inkl. `LICENSE`/`README.md`), erzeugt eine `checksums.txt` (SHA-256) und hängt
 alles an ein GitHub-Release.
 
+> **Windows Server?** Eine vollständige Schritt-für-Schritt-Anleitung
+> (Installation, Betrieb als Dienst, Firewall, Reverse Proxy, Backup) steht unter
+> [**docs/windows-server-2022.md**](./docs/windows-server-2022.md).
+
 Aus einem Release installieren (Beispiel Linux/amd64):
 
 ```bash
