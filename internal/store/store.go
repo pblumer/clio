@@ -292,6 +292,33 @@ func (s *Store) Count() (uint64, error) {
 	return n, err
 }
 
+// FirstEventTime liefert den Zeitstempel des ersten (ältesten) Events — O(1)
+// über das erste Element des nach Sequenz geordneten events-Buckets. ok ist
+// false, wenn keine Events existieren. Genutzt, um den Origin des Eventstrom-
+// Histogramms zu bestimmen, ohne die gesamte Historie zu scannen (das eigentliche
+// Seeding läuft danach asynchron, siehe httpapi.New).
+func (s *Store) FirstEventTime() (t time.Time, ok bool, err error) {
+	err = s.db.View(func(tx *bolt.Tx) error {
+		k, v := tx.Bucket(bucketEvents).Cursor().First()
+		if k == nil {
+			return nil
+		}
+		var rec struct {
+			Time string `json:"time"`
+		}
+		if err := unmarshalStored(v, &rec); err != nil {
+			return nil // ungültig → wie „keine Events", Origin fällt auf Default
+		}
+		parsed, perr := time.Parse(time.RFC3339Nano, rec.Time)
+		if perr != nil {
+			return nil
+		}
+		t, ok = parsed.UTC(), true
+		return nil
+	})
+	return t, ok, err
+}
+
 // CountByTypes liefert die Gesamtzahl der Events über die angegebenen Typen
 // (Summe der Typ-Zähler, O(len(types))). Grundlage der kostenbasierten
 // Index-Wahl in run-query (ADR-023): die Kosten eines Typ-Index-Scans.
@@ -350,10 +377,18 @@ func (s *Store) CountSubject(subject string, recursive bool) (uint64, error) {
 // optional nach Source aufgeschlüsselt — aufbauen können, ohne die Events
 // vollständig zu laden. Events mit fehlendem/ungültigem Zeitstempel werden
 // übersprungen.
-func (s *Store) ForEachEventTimeSource(fn func(time.Time, string)) error {
+//
+// Ist maxSeq > 0, werden nur Events bis einschließlich dieser globalen Sequenz
+// berücksichtigt (der events-Bucket ist nach Sequenz geordnet, der Scan bricht
+// danach ab). So kann ein asynchroner Seeder eine saubere Grenze gegen
+// gleichzeitig neu geschriebene Events ziehen (maxSeq = 0 → keine Grenze).
+func (s *Store) ForEachEventTimeSource(maxSeq uint64, fn func(time.Time, string)) error {
 	return s.db.View(func(tx *bolt.Tx) error {
 		c := tx.Bucket(bucketEvents).Cursor()
 		for k, v := c.First(); k != nil; k, v = c.Next() {
+			if maxSeq != 0 && binary.BigEndian.Uint64(k) > maxSeq {
+				break
+			}
 			var rec struct {
 				Time   string `json:"time"`
 				Source string `json:"source"`
@@ -1009,12 +1044,9 @@ func (s *Store) ReadSubject(subject string, opts ReadOptions) ([]event.Event, er
 // auch über mehrere Subjects hinweg erhalten.
 func (s *Store) Read(query string, recursive bool, opts ReadOptions) ([]event.Event, error) {
 	var events []event.Event
-
-	err := s.db.View(func(tx *bolt.Tx) error {
-		if recursive {
-			return readRecursive(tx, query, opts, &events)
-		}
-		return readSubjectIndex(tx, query, opts, &events)
+	err := s.ReadFunc(query, recursive, opts, func(ev event.Event) bool {
+		events = append(events, ev)
+		return true
 	})
 	if err != nil {
 		return nil, err
@@ -1022,7 +1054,22 @@ func (s *Store) Read(query string, recursive bool, opts ReadOptions) ([]event.Ev
 	return events, nil
 }
 
-func readSubjectIndex(tx *bolt.Tx, subject string, opts ReadOptions, out *[]event.Event) error {
+// ReadFunc ist die streamende Variante von Read: statt alle Treffer in ein Slice
+// zu materialisieren (O(Treffer) Speicher), ruft es fn für jedes passende Event
+// in globaler Schreibreihenfolge auf. Gibt fn false zurück, bricht der Scan
+// vorzeitig (und speicherschonend) ab — so kann der Aufrufer ein Limit
+// durchsetzen, ohne erst den gesamten Scope zu laden. Der Speicherbedarf bleibt
+// damit konstant, unabhängig von der Größe der Historie.
+func (s *Store) ReadFunc(query string, recursive bool, opts ReadOptions, fn func(event.Event) bool) error {
+	return s.db.View(func(tx *bolt.Tx) error {
+		if recursive {
+			return readRecursive(tx, query, opts, fn)
+		}
+		return readSubjectIndex(tx, query, opts, fn)
+	})
+}
+
+func readSubjectIndex(tx *bolt.Tx, subject string, opts ReadOptions, fn func(event.Event) bool) error {
 	evts := tx.Bucket(bucketEvents)
 	cur := tx.Bucket(bucketSubjectIdx).Cursor()
 	prefix := append([]byte(subject), subjectSep)
@@ -1044,16 +1091,18 @@ func readSubjectIndex(tx *bolt.Tx, subject string, opts ReadOptions, out *[]even
 		if !matchType(ev.Type, types) {
 			continue
 		}
-		*out = append(*out, ev)
+		if !fn(ev) {
+			return nil
+		}
 	}
 	return nil
 }
 
-func readRecursive(tx *bolt.Tx, query string, opts ReadOptions, out *[]event.Event) error {
+func readRecursive(tx *bolt.Tx, query string, opts ReadOptions, fn func(event.Event) bool) error {
 	// Wurzel: das Subtree ist „alles" — der nach Sequenz geordnete events-Bucket
 	// ist hier optimal (eine Index-Umleitung wäre nur teurer).
 	if query == "/" {
-		return scanEventsRecursive(tx, query, opts, out)
+		return scanEventsRecursive(tx, query, opts, fn)
 	}
 
 	// Nicht-Wurzel: über den Subject-Index begrenzen, statt den gesamten
@@ -1089,7 +1138,9 @@ func readRecursive(tx *bolt.Tx, query string, opts ReadOptions, out *[]event.Eve
 			return fmt.Errorf("event dekodieren: %w", err)
 		}
 		if matchType(ev.Type, types) {
-			*out = append(*out, ev)
+			if !fn(ev) {
+				return nil
+			}
 		}
 	}
 	return nil
@@ -1097,7 +1148,7 @@ func readRecursive(tx *bolt.Tx, query string, opts ReadOptions, out *[]event.Eve
 
 // scanEventsRecursive durchläuft den global nach Sequenz geordneten events-Bucket
 // und filtert per MatchSubject — verwendet für die Wurzel-Abfrage ("/").
-func scanEventsRecursive(tx *bolt.Tx, query string, opts ReadOptions, out *[]event.Event) error {
+func scanEventsRecursive(tx *bolt.Tx, query string, opts ReadOptions, fn func(event.Event) bool) error {
 	cur := tx.Bucket(bucketEvents).Cursor()
 	types := opts.typeSet()
 
@@ -1118,7 +1169,9 @@ func scanEventsRecursive(tx *bolt.Tx, query string, opts ReadOptions, out *[]eve
 			return fmt.Errorf("event dekodieren: %w", err)
 		}
 		if MatchSubject(ev.Subject, query, true) && matchType(ev.Type, types) {
-			*out = append(*out, ev)
+			if !fn(ev) {
+				return nil
+			}
 		}
 	}
 	return nil

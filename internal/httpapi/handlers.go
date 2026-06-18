@@ -25,6 +25,13 @@ import (
 // Variable (nicht const), damit Tests das Intervall verkürzen können.
 var observeHeartbeat = 15 * time.Second
 
+// defaultReadLimit ist die Obergrenze an Events, die read-events / GET-events
+// ohne explizites `limit` zurückgeben. Sie schützt vor versehentlich breiten
+// Reads (z. B. „/" über Millionen Events), die einen Client/das Dashboard
+// überschwemmen. Da Reads streamen (konstanter Server-Speicher), ist ein
+// größeres explizites Limit unbedenklich; 0 im Request bedeutet „Default".
+const defaultReadLimit = 10_000
+
 func (s *Server) handleOpenAPISpec(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/yaml")
 	_, _ = w.Write(apidocs.Spec)
@@ -586,6 +593,7 @@ type readEventsRequest struct {
 	LowerBound string   `json:"lowerBound"`
 	UpperBound string   `json:"upperBound"`
 	Types      []string `json:"types"`
+	Limit      int      `json:"limit"` // 0 = Default-Obergrenze (defaultReadLimit)
 }
 
 func (s *Server) handleReadEvents(w http.ResponseWriter, r *http.Request) {
@@ -617,24 +625,78 @@ func (s *Server) handleReadEvents(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	limit, err := effectiveReadLimit(req.Limit)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	s.doRead(w, req.Subject, req.Recursive, store.ReadOptions{
 		LowerBound: lower,
 		UpperBound: upper,
 		Types:      req.Types,
-	})
+	}, limit)
 }
 
-// doRead liest Events und schreibt sie als NDJSON (oder 500 bei Fehler).
-// Gemeinsamer Kern von read-events (POST) und der GET-Pfad-Route.
-func (s *Server) doRead(w http.ResponseWriter, subject string, recursive bool, opts store.ReadOptions) {
-	events, err := s.store.Read(subject, recursive, opts)
-	if err != nil {
-		s.logger.Error("read fehlgeschlagen", "err", err)
-		writeError(w, http.StatusInternalServerError, "interner fehler beim lesen")
-		return
+// effectiveReadLimit validiert ein Roh-Limit und setzt den Default ein. 0 → Default,
+// negativ → Fehler.
+func effectiveReadLimit(raw int) (int, error) {
+	if raw < 0 {
+		return 0, errors.New("limit darf nicht negativ sein")
 	}
-	writeNDJSON(w, s.logger, events)
+	if raw == 0 {
+		return defaultReadLimit, nil
+	}
+	return raw, nil
+}
+
+// doRead liest Events und streamt sie als NDJSON. Gemeinsamer Kern von
+// read-events (POST) und der GET-Pfad-Route. limit > 0 begrenzt die Ausgabe und
+// bricht den Scan vorzeitig ab.
+//
+// Anders als früher wird NICHT erst das gesamte Ergebnis im Speicher
+// materialisiert: über store.ReadFunc wird Event für Event kodiert und periodisch
+// geflusht — der Server-Speicher bleibt konstant, unabhängig von der Trefferzahl.
+// Tradeoff des Streamings: der 200-Header geht raus, bevor ein etwaiger
+// Lesefehler bekannt ist; ein (seltener) Fehler mitten im Stream wird daher nur
+// geloggt, der Status bleibt 200 (wie beim observe-Stream).
+func (s *Server) doRead(w http.ResponseWriter, subject string, recursive bool, opts store.ReadOptions, limit int) {
+	w.Header().Set("Content-Type", ndjsonContentType)
+	if limit > 0 {
+		w.Header().Set("X-Clio-Result-Limit", strconv.Itoa(limit))
+	}
+	w.WriteHeader(http.StatusOK)
+
+	// Streaming-Antwort variabler Dauer (datenabhängig, durch limit begrenzt) — die
+	// pauschale Server-WriteTimeout passt hier nicht; Deadline für diese Verbindung
+	// aufheben (Fehler ignorieren, s. doObserve). Die gepufferten Handler behalten
+	// den 30s-Schutz.
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
+
+	enc := json.NewEncoder(w)
+	flusher, _ := w.(http.Flusher)
+	var n int
+	var encErr error
+	readErr := s.store.ReadFunc(subject, recursive, opts, func(ev event.Event) bool {
+		if encErr = enc.Encode(ev); encErr != nil {
+			return false // Schreiben fehlgeschlagen (Client weg) → abbrechen
+		}
+		n++
+		if flusher != nil && n%512 == 0 {
+			flusher.Flush()
+		}
+		return limit == 0 || n < limit
+	})
+	if flusher != nil {
+		flusher.Flush()
+	}
+	switch {
+	case readErr != nil:
+		// Header sind bereits gesendet; nur noch loggen.
+		s.logger.Error("read fehlgeschlagen (stream bereits begonnen)", "err", readErr)
+	case encErr != nil:
+		s.logger.Error("ndjson schreiben fehlgeschlagen", "err", encErr)
+	}
 }
 
 // validateTypes stellt sicher, dass jeder angegebene Typ-Filter nicht leer ist.
@@ -716,7 +778,23 @@ func (s *Server) handleEventsPath(w http.ResponseWriter, r *http.Request) {
 		s.doObserve(w, r, subject, recursive, lower, types)
 		return
 	}
-	s.doRead(w, subject, recursive, store.ReadOptions{LowerBound: lower, UpperBound: upper, Types: types})
+
+	rawLimit := 0
+	if v := q.Get("limit"); v != "" {
+		parsed, err := strconv.Atoi(v)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "limit muss eine ganze Zahl sein")
+			return
+		}
+		rawLimit = parsed
+	}
+	limit, err := effectiveReadLimit(rawLimit)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	s.doRead(w, subject, recursive, store.ReadOptions{LowerBound: lower, UpperBound: upper, Types: types}, limit)
 }
 
 // parseBound parst eine optionale ID-Grenze. Leer bedeutet „keine Grenze" (0).
@@ -775,6 +853,11 @@ func (s *Server) doObserve(w http.ResponseWriter, r *http.Request, subject strin
 		return
 	}
 
+	// observe ist ein potenziell unendlicher Stream — die Server-WriteTimeout darf
+	// ihn nicht kappen. Schreib-Deadline für diese Verbindung aufheben (Fehler
+	// ignorieren: nicht jeder ResponseWriter unterstützt das, z. B. im Test).
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
+
 	// Zuerst abonnieren, dann History lesen: so geht kein Event verloren, das
 	// zwischen History-Snapshot und Live-Phase geschrieben wird. Doppelte
 	// werden über die ID (lastID) verworfen.
@@ -782,12 +865,6 @@ func (s *Server) doObserve(w http.ResponseWriter, r *http.Request, subject strin
 	defer s.broker.Unsubscribe(sub)
 
 	typeFilter := typeSet(types)
-	history, err := s.store.Read(subject, recursive, store.ReadOptions{LowerBound: lower, Types: types})
-	if err != nil {
-		s.logger.Error("observe history fehlgeschlagen", "err", err)
-		writeError(w, http.StatusInternalServerError, "interner fehler beim lesen")
-		return
-	}
 
 	w.Header().Set("Content-Type", ndjsonContentType)
 	// Reverse-Proxies (z. B. nginx) nicht puffern lassen — sonst hält der Proxy
@@ -823,13 +900,27 @@ func (s *Server) doObserve(w http.ResponseWriter, r *http.Request, subject strin
 	if lower > 0 {
 		lastID = lower - 1
 	}
-	for _, ev := range history {
-		if err := enc.Encode(ev); err != nil {
-			return
+	// History streamend ausliefern (nicht erst komplett in den Speicher laden) —
+	// ein Reconnect mit niedrigem lowerBound über einen breiten Scope bliebe sonst
+	// ein OOM-Pfad. Live-Events, die währenddessen eintreffen, puffert der Broker
+	// im Subscriber-Channel; die ID-Deduplizierung (lastID) verwirft Dubletten.
+	var encErr error
+	histErr := s.store.ReadFunc(subject, recursive, store.ReadOptions{LowerBound: lower, Types: types}, func(ev event.Event) bool {
+		if encErr = enc.Encode(ev); encErr != nil {
+			return false
 		}
 		if id, perr := strconv.ParseUint(ev.ID, 10, 64); perr == nil && id > lastID {
 			lastID = id
 		}
+		return true
+	})
+	if encErr != nil {
+		return // Client weg
+	}
+	if histErr != nil {
+		// Header/200 sind bereits gesendet; nur loggen und Verbindung schließen.
+		s.logger.Error("observe history fehlgeschlagen (stream bereits begonnen)", "err", histErr)
+		return
 	}
 	flusher.Flush()
 
@@ -972,13 +1063,7 @@ func (s *Server) handleRunQuery(w http.ResponseWriter, r *http.Request) {
 			// Subject-Index günstiger: Teilbaum scannen, Typ-Filter einschieben.
 			optsT := opts
 			optsT.Types = reqTypes
-			var events []event.Event
-			events, scanErr = s.store.Read(req.Subject, req.Recursive, optsT)
-			for _, ev := range events {
-				if !collect(ev) {
-					break
-				}
-			}
+			scanErr = s.store.ReadFunc(req.Subject, req.Recursive, optsT, collect)
 		} else {
 			// Typ-Index günstiger (oder Kostenschätzung fehlgeschlagen → sicherer
 			// Default): nur die geforderten Typen laden, Subject nachfiltern.
@@ -990,14 +1075,9 @@ func (s *Server) handleRunQuery(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 	default:
-		// Kein sicherer Typ-Filter → vollständiger Scan des Scopes.
-		var events []event.Event
-		events, scanErr = s.store.Read(req.Subject, req.Recursive, opts)
-		for _, ev := range events {
-			if !collect(ev) {
-				break
-			}
-		}
+		// Kein sicherer Typ-Filter → vollständiger Scan des Scopes (streamend,
+		// bricht bei erreichtem Limit ab — kein Materialisieren des ganzen Scopes).
+		scanErr = s.store.ReadFunc(req.Subject, req.Recursive, opts, collect)
 	}
 	if scanErr != nil {
 		s.logger.Error("run-query fehlgeschlagen", "err", scanErr)

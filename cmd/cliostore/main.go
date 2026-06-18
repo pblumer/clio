@@ -148,7 +148,16 @@ func run(ctx context.Context, logger *slog.Logger) error {
 			logger,
 			httpapi.WithBuildInfo(version, time.Now().UTC()),
 		).Handler(),
+		// ReadHeaderTimeout schützt gegen Slowloris auf den Headern.
 		ReadHeaderTimeout: 5 * time.Second,
+		// WriteTimeout begrenzt hängende/langsame Antworten und gibt so blockierte
+		// Goroutinen/Verbindungen frei. Die streamenden Handler (observe-events und
+		// die Lese-Routen) heben ihre eigene Schreib-Deadline per
+		// http.ResponseController bewusst wieder auf — sonst würde ein langer
+		// Live-Stream bzw. ein großer Read fälschlich gekappt.
+		WriteTimeout: 30 * time.Second,
+		// IdleTimeout schließt im Leerlauf gehaltene Keep-Alive-Verbindungen.
+		IdleTimeout: 120 * time.Second,
 	}
 
 	errCh := make(chan error, 1)

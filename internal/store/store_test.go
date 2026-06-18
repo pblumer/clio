@@ -42,6 +42,54 @@ func TestAppendAssignsMonotonicIDs(t *testing.T) {
 	}
 }
 
+func TestReadFuncStreamsAndStopsEarly(t *testing.T) {
+	st := openTemp(t)
+	appendAll(t, st,
+		event.Candidate{Source: "s", Subject: "/a", Type: "t"},
+		event.Candidate{Source: "s", Subject: "/a", Type: "t"},
+		event.Candidate{Source: "s", Subject: "/b", Type: "t"},
+		event.Candidate{Source: "s", Subject: "/a", Type: "t"},
+	)
+
+	// Frühabbruch über die Wurzel (recursive "/"): nach 2 Events stoppen.
+	var seen int
+	err := st.ReadFunc("/", true, ReadOptions{}, func(event.Event) bool {
+		seen++
+		return seen < 2 // bei 2 false → Abbruch
+	})
+	if err != nil {
+		t.Fatalf("ReadFunc: %v", err)
+	}
+	if seen != 2 {
+		t.Fatalf("seen = %d, want 2 (Frühabbruch)", seen)
+	}
+
+	// Nicht-rekursiv über den Subject-Index: ebenfalls abbrechbar.
+	seen = 0
+	if err := st.ReadFunc("/a", false, ReadOptions{}, func(event.Event) bool {
+		seen++
+		return false // sofort nach dem ersten stoppen
+	}); err != nil {
+		t.Fatalf("ReadFunc subject: %v", err)
+	}
+	if seen != 1 {
+		t.Fatalf("seen subject = %d, want 1", seen)
+	}
+
+	// Ohne Abbruch liefert ReadFunc dieselbe Menge wie Read (Wrapper-Konsistenz).
+	full, err := st.Read("/", true, ReadOptions{})
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	var streamed int
+	if err := st.ReadFunc("/", true, ReadOptions{}, func(event.Event) bool { streamed++; return true }); err != nil {
+		t.Fatalf("ReadFunc full: %v", err)
+	}
+	if streamed != len(full) || streamed != 4 {
+		t.Fatalf("streamed = %d, Read = %d, want 4", streamed, len(full))
+	}
+}
+
 func TestReadSubjectFiltersAndOrders(t *testing.T) {
 	st := openTemp(t)
 	appendAll(t, st,
