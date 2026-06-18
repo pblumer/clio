@@ -201,6 +201,8 @@
   .tnode .tlabel.sel { background: var(--accent); color: #0b1020; }
   .tnode .tcount { color: var(--muted); font-size: 11px; white-space: nowrap; }
   .tchildren.collapsed { display: none; }
+  .tnode .tmore, .tree .tmore { cursor: pointer; color: var(--accent); font-size: 12px; padding: 2px 6px; user-select: none; }
+  .tnode .tmore:hover, .tree .tmore:hover { text-decoration: underline; }
   #exp-events { max-height: 460px; overflow: auto; display: flex; flex-direction: column; gap: 6px; }
   .type-item { border-bottom: 1px solid var(--border); }
   .type-row { display: flex; align-items: center; gap: 10px; padding: 7px 2px; }
@@ -518,10 +520,10 @@
       <span id="exp-status" class="badge">–</span>
     </div>
     <div class="notice" id="exp-notice">
-      Read-only Explorer: Subject-Baum (<code>read-subjects?tree=true</code>),
-      Event-Typen &amp; Schemas (<code>read-event-types</code> / <code>read-event-schema</code>)
-      und Integrität (<code>verify</code> / <code>public-key</code>). Subject anklicken lädt
-      dessen Events (nicht rekursiv).
+      Read-only Explorer: Subject-Baum (<code>read-subjects?children=…</code>, seitenweise
+      nachgeladen), Event-Typen &amp; Schemas (<code>read-event-types</code> / <code>read-event-schema</code>)
+      und Integrität (<code>verify</code> / <code>public-key</code>). Knoten aufklappen lädt dessen
+      direkte Kinder; Subject anklicken lädt dessen Events (nicht rekursiv).
     </div>
     <div class="explorer-grid">
       <div class="card">
@@ -2054,29 +2056,45 @@ function loadExplorer() {
     .catch((e) => setExpStatus(e.message === "401" ? "Token ungültig" : "Fehler"));
 }
 
+// EXP_TREE_PAGE: Kinder werden seitenweise nachgeladen, damit der Baum auch bei
+// Millionen Subjects unter einem Knoten flüssig bleibt (kein Voll-Baum-Render).
+const EXP_TREE_PAGE = 500;
+
+function fetchChildren(parent, after) {
+  let p = "/api/v1/read-subjects?children=" + encodeURIComponent(parent) + "&limit=" + EXP_TREE_PAGE;
+  if (after) p += "&after=" + encodeURIComponent(after);
+  return getJSON(p);
+}
+
 async function loadTree(prefix) {
   const el = $("exp-tree");
   el.innerHTML = '<div class="empty">lädt …</div>';
   try {
-    const q = prefix ? "?tree=true&prefix=" + encodeURIComponent(prefix) : "?tree=true";
-    const root = await getJSON("/api/v1/read-subjects" + q);
+    const root = prefix || "/";
+    const data = await fetchChildren(root, "");
     el.innerHTML = "";
-    if ((!root.children || !root.children.length) && !root.total) {
+    if ((!data.children || !data.children.length) && !data.total) {
       el.innerHTML = '<div class="empty">Keine Subjects.</div>'; return;
     }
-    renderTreeNode(root, el, 0, true);
+    // Wurzelknoten rendern und direkt aufklappen (erste Kinderseite ist da).
+    renderTreeNode({ subject: root, count: data.count || 0, total: data.total || 0, hasChildren: true }, el, 0, true, data);
   } catch (e) {
     el.innerHTML = '<div class="empty">' + (e.message === "401" ? "Token ungültig (401)" : "Fehler: " + e.message) + "</div>";
     throw e;
   }
 }
-function renderTreeNode(node, container, depth, isRoot) {
+
+// renderTreeNode erzeugt eine Baumzeile. Kinder werden lazy beim Aufklappen über
+// read-subjects?children=… geladen (seitenweise via „mehr laden"). node hat die
+// Form {subject, count, total, hasChildren}. preloaded (optional) ist eine bereits
+// geladene erste Kinderseite ({children, nextAfter}); dann wird sofort aufgeklappt.
+function renderTreeNode(node, container, depth, isRoot, preloaded) {
   const row = document.createElement("div");
   row.className = "tnode";
   row.style.paddingLeft = depth * 14 + "px";
-  const hasKids = node.children && node.children.length;
+  const expandable = isRoot || node.hasChildren;
   const tog = document.createElement("span");
-  tog.className = "tog"; tog.textContent = hasKids ? "▾" : "";
+  tog.className = "tog"; tog.textContent = expandable ? "▸" : "";
   const label = document.createElement("span");
   label.className = "tlabel";
   label.textContent = isRoot ? node.subject : node.subject.split("/").pop();
@@ -2086,15 +2104,47 @@ function renderTreeNode(node, container, depth, isRoot) {
   cnt.textContent = node.count === node.total ? String(node.total) : node.count + "·Σ" + node.total;
   row.append(tog, label, cnt);
   container.appendChild(row);
-  if (hasKids) {
+
+  if (expandable) {
     const kids = document.createElement("div");
-    kids.className = "tchildren";
+    kids.className = "tchildren collapsed";
     container.appendChild(kids);
-    for (const c of node.children) renderTreeNode(c, kids, depth + 1, false);
-    tog.addEventListener("click", () => {
+    let loaded = false, nextAfter = "";
+
+    // Hängt eine Kinderseite an (Daten optional bereits vorhanden).
+    const appendPage = (data) => {
+      [...kids.children].forEach((n) => { if (n.classList.contains("tmore") || n.classList.contains("empty")) n.remove(); });
+      for (const c of (data.children || [])) renderTreeNode(c, kids, depth + 1, false);
+      nextAfter = data.nextAfter || "";
+      if (!kids.children.length) { kids.innerHTML = '<div class="empty">leer</div>'; return; }
+      if (nextAfter) {
+        const more = document.createElement("div");
+        more.className = "tmore"; more.style.paddingLeft = (depth + 1) * 14 + "px";
+        more.textContent = "… mehr laden";
+        more.addEventListener("click", async (e) => {
+          e.stopPropagation(); more.textContent = "lädt …";
+          try { appendPage(await fetchChildren(node.subject, nextAfter)); }
+          catch (err) { more.textContent = "Fehler: " + err.message; }
+        });
+        kids.appendChild(more);
+      }
+    };
+    const expand = async () => {
+      if (loaded) return;
+      loaded = true;
+      kids.innerHTML = '<div class="empty">lädt …</div>';
+      try { appendPage(await fetchChildren(node.subject, "")); }
+      catch (err) { loaded = false; kids.innerHTML = '<div class="empty">Fehler: ' + err.message + '</div>'; }
+    };
+    tog.addEventListener("click", async () => {
       const collapsed = kids.classList.toggle("collapsed");
       tog.textContent = collapsed ? "▸" : "▾";
+      if (!collapsed) await expand();
     });
+    if (preloaded) { // Wurzel: erste Seite ist schon da → sofort offen zeigen.
+      loaded = true; kids.classList.remove("collapsed"); tog.textContent = "▾";
+      appendPage(preloaded);
+    }
   }
   label.addEventListener("click", () => selectSubject(node.subject, label));
 }

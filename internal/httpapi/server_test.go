@@ -1000,6 +1000,73 @@ func TestReadSubjectsTree(t *testing.T) {
 	}
 }
 
+func TestReadSubjectsChildren(t *testing.T) {
+	srv := newTestServer(t)
+	do(t, srv, http.MethodPost, "/api/v1/write-events", adminToken,
+		`{"events":[
+			{"source":"s","subject":"/books/42","type":"acquired"},
+			{"source":"s","subject":"/books/42","type":"borrowed"},
+			{"source":"s","subject":"/books/99","type":"acquired"},
+			{"source":"s","subject":"/movies/7","type":"y"},
+			{"source":"s","subject":"/movies/7","type":"z"}
+		]}`)
+
+	// Wurzel: direkte Kinder /books, /movies + Eltern-Zähler (erste Seite).
+	rec := do(t, srv, http.MethodGet, "/api/v1/read-subjects?children=/", adminToken, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; %s", rec.Code, rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		t.Fatalf("Content-Type = %q, want application/json", ct)
+	}
+	var root subjectChildrenResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &root); err != nil {
+		t.Fatalf("children dekodieren: %v", err)
+	}
+	if root.Parent != "/" || root.Total != 5 || root.NextAfter != "" {
+		t.Fatalf("root = %+v, want parent=/ total=5 ohne nextAfter", root)
+	}
+	if len(root.Children) != 2 || root.Children[0].Subject != "/books" || !root.Children[0].HasChildren {
+		t.Fatalf("root.children falsch: %+v", root.Children)
+	}
+	if root.Children[0].Total != 3 || root.Children[1].Subject != "/movies" {
+		t.Fatalf("root.children werte falsch: %+v", root.Children)
+	}
+
+	// Direkte Kinder von /books (Blätter).
+	rec = do(t, srv, http.MethodGet, "/api/v1/read-subjects?children=/books", adminToken, "")
+	var books subjectChildrenResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &books); err != nil {
+		t.Fatalf("children /books dekodieren: %v", err)
+	}
+	if len(books.Children) != 2 || books.Children[0].Subject != "/books/42" || books.Children[0].Count != 2 || books.Children[0].HasChildren {
+		t.Fatalf("/books.children falsch: %+v", books.Children)
+	}
+
+	// Pagination: limit=1 → eine Seite + nextAfter, danach Rest.
+	rec = do(t, srv, http.MethodGet, "/api/v1/read-subjects?children=/books&limit=1", adminToken, "")
+	var p1 subjectChildrenResponse
+	json.Unmarshal(rec.Body.Bytes(), &p1)
+	if len(p1.Children) != 1 || p1.NextAfter != "/books/42" {
+		t.Fatalf("Seite1 = %+v, want 1 Kind + nextAfter=/books/42", p1)
+	}
+	rec = do(t, srv, http.MethodGet, "/api/v1/read-subjects?children=/books&limit=1&after="+p1.NextAfter, adminToken, "")
+	var p2 subjectChildrenResponse
+	json.Unmarshal(rec.Body.Bytes(), &p2)
+	if len(p2.Children) != 1 || p2.Children[0].Subject != "/books/99" || p2.NextAfter != "" {
+		t.Fatalf("Seite2 = %+v, want /books/99 ohne nextAfter", p2)
+	}
+
+	// Ungültiges limit → 400.
+	if rec := do(t, srv, http.MethodGet, "/api/v1/read-subjects?children=/&limit=0", adminToken, ""); rec.Code != http.StatusBadRequest {
+		t.Fatalf("limit=0 status = %d, want 400", rec.Code)
+	}
+	// children ohne führenden Slash → 400.
+	if rec := do(t, srv, http.MethodGet, "/api/v1/read-subjects?children=books", adminToken, ""); rec.Code != http.StatusBadRequest {
+		t.Fatalf("children=books status = %d, want 400", rec.Code)
+	}
+}
+
 func TestBuildSubjectTree(t *testing.T) {
 	// Direkter Unit-Test des Baum-Bauers, inkl. Subject auf einem Zwischenknoten.
 	subjects := []store.SubjectInfo{

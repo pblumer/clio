@@ -178,7 +178,17 @@ paths:
         Mit `tree=true` wird stattdessen ein **hierarchischer Baum** als
         einzelnes JSON-Objekt zurückgegeben (`application/json`): jeder Knoten
         trägt `count` (Events exakt auf diesem Subject) und `total` (aggregiert
-        im Teilbaum). `prefix` setzt dann die Baum-Wurzel.
+        im Teilbaum). `prefix` setzt dann die Baum-Wurzel. Achtung: `tree=true`
+        materialisiert den **gesamten** Teilbaum — bei sehr vielen Subjects
+        besser `children` verwenden.
+
+        Mit `children=<pfad>` werden nur die **direkten Kinder** eines Knotens
+        seitenweise geladen (`application/json`): `{parent,count,total,children,
+        nextAfter}`. Jedes Kind trägt `count`, `total` und `hasChildren`. `limit`
+        begrenzt die Seitengröße (Default 500, max 5000); `nextAfter` (das Subject
+        des letzten Kindes) wird als `after` der Folgeanfrage übergeben. So lädt
+        der Explorer den Baum schrittweise und bleibt auch bei Millionen Subjects
+        unter einem Pfad reaktiv.
       parameters:
         - name: prefix
           in: query
@@ -190,18 +200,41 @@ paths:
           required: false
           schema: { type: string, enum: ["true"] }
           description: "`true` liefert einen verschachtelten Baum statt NDJSON"
+        - name: children
+          in: query
+          required: false
+          schema: { type: string, example: "/books" }
+          description: |
+            Eltern-Pfad (beginnt mit "/", `/` = Wurzel). Liefert nur die direkten
+            Kinder als paginierte JSON-Seite statt NDJSON/Voll-Baum.
+        - name: after
+          in: query
+          required: false
+          schema: { type: string }
+          description: |
+            Fortsetzungs-Cursor für `children` (das `nextAfter` der Vorseite);
+            exklusiv. Nur in Kombination mit `children` relevant.
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 5000, default: 500 }
+          description: "Seitengröße für `children` (max 5000)"
       responses:
         "200":
           description: |
-            Subjects als NDJSON ({subject,count}) — oder, bei `tree=true`, ein
-            verschachtelter Baum als JSON-Objekt.
+            Subjects als NDJSON ({subject,count}) — bei `tree=true` ein
+            verschachtelter Baum, bei `children` eine paginierte Kinderseite,
+            jeweils als JSON-Objekt.
           content:
             application/x-ndjson:
               schema:
                 type: string
                 description: NDJSON von SubjectInfo-Objekten ({subject,count})
             application/json:
-              schema: { $ref: "#/components/schemas/SubjectTreeNode" }
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/SubjectTreeNode"
+                  - $ref: "#/components/schemas/SubjectChildren"
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "500": { $ref: "#/components/responses/InternalError" }
@@ -776,6 +809,27 @@ components:
         children:
           type: array
           items: { $ref: "#/components/schemas/SubjectTreeNode" }
+    SubjectChildren:
+      type: object
+      description: |
+        Eine paginierte Seite der direkten Kinder eines Knotens
+        (`GET /api/v1/read-subjects?children=<pfad>`). `count`/`total`
+        beschreiben den Eltern-Knoten und sind nur auf der ersten Seite (ohne
+        `after`) gesetzt. `nextAfter` fehlt, wenn keine weiteren Kinder folgen.
+      properties:
+        parent: { type: string, example: "/books" }
+        count: { type: integer, example: 0 }
+        total: { type: integer, example: 3 }
+        children:
+          type: array
+          items:
+            type: object
+            properties:
+              subject: { type: string, example: "/books/42" }
+              count: { type: integer, example: 2 }
+              total: { type: integer, example: 2 }
+              hasChildren: { type: boolean, example: false }
+        nextAfter: { type: string, example: "/books/42" }
     EventCandidate:
       type: object
       required: [source, subject, type]

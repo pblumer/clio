@@ -475,6 +475,122 @@ func (s *Store) Subjects(prefix string) ([]SubjectInfo, error) {
 	return out, nil
 }
 
+// ChildInfo beschreibt ein direktes Kind-Segment unterhalb eines Eltern-Pfads
+// im Subject-Baum. Count sind die Events exakt auf diesem Kind-Subject (0 für
+// reine Zwischenknoten), Total die aggregierte Anzahl im gesamten Teilbaum des
+// Kindes, HasChildren zeigt an, ob das Kind selbst weitere Nachfahren hat.
+type ChildInfo struct {
+	Subject     string `json:"subject"`
+	Count       uint64 `json:"count"`
+	Total       uint64 `json:"total"`
+	HasChildren bool   `json:"hasChildren"`
+}
+
+// Children liefert die direkten Kinder unterhalb von parent ("/" oder "/a/b")
+// seitenweise und alphabetisch sortiert. after (exklusiv) ist das zuletzt
+// gelesene Kind-Subject einer vorherigen Seite ("" = von vorne). limit > 0
+// begrenzt die Anzahl Kinder; der zweite Rückgabewert meldet, ob darüber hinaus
+// weitere Kinder folgen (Fortsetzungs-Cursor = Subject des letzten Kindes).
+//
+// Anders als Subjects arbeitet Children auf dem subj_count-Bucket (ein Eintrag
+// je distinktem Subject) statt auf dem per-Event-Index und bricht nach `limit`
+// fertigen Kindern ab. Damit skaliert das Aufklappen eines Knotens mit der Zahl
+// der distinkten Subjects — nicht mit der Gesamtzahl der Events.
+func (s *Store) Children(parent, after string, limit int) ([]ChildInfo, bool, error) {
+	// Scan-Präfix: unter der Wurzel beginnen alle Subjects mit "/", sonst mit
+	// "parent/". Der Kind-Pfad ist scanPrefix + erstes Segment bis zum nächsten "/".
+	scanPrefix := "/"
+	if parent != "/" && parent != "" {
+		scanPrefix = parent + "/"
+	}
+	sp := []byte(scanPrefix)
+	afterSub := []byte(after)
+	afterChild := []byte(after + "/")
+
+	var (
+		out  []ChildInfo
+		more bool
+	)
+	err := s.db.View(func(tx *bolt.Tx) error {
+		c := tx.Bucket(bucketSubjCount).Cursor()
+		seek := sp
+		if after != "" {
+			seek = afterSub
+		}
+
+		var cur *ChildInfo
+		// finalize hängt das aktuelle (vollständige) Kind an out an. Ist das Limit
+		// erreicht, ist dieses Kind das erste „darüber hinaus" → more=true, stop.
+		finalize := func() bool {
+			if cur == nil {
+				return true
+			}
+			if limit > 0 && len(out) >= limit {
+				more = true
+				return false
+			}
+			out = append(out, *cur)
+			cur = nil
+			return true
+		}
+
+		for k, v := c.Seek(seek); k != nil && hasPrefix(k, sp); k, v = c.Next() {
+			// after und dessen gesamten Teilbaum überspringen.
+			if after != "" && (bytes.Equal(k, afterSub) || hasPrefix(k, afterChild)) {
+				continue
+			}
+			rest := k[len(sp):]
+			if len(rest) == 0 {
+				continue // das Eltern-Subject selbst ist kein Kind
+			}
+			slash := bytes.IndexByte(rest, '/')
+			deeper := slash >= 0
+			childPath := string(k)
+			if deeper {
+				childPath = string(k[:len(sp)+slash])
+			}
+			if cur != nil && cur.Subject != childPath {
+				if !finalize() {
+					return nil
+				}
+			}
+			if cur == nil {
+				cur = &ChildInfo{Subject: childPath}
+			}
+			var cnt uint64
+			if len(v) == 8 {
+				cnt = binary.BigEndian.Uint64(v)
+			}
+			cur.Total += cnt
+			if deeper {
+				cur.HasChildren = true
+			} else {
+				cur.Count = cnt
+			}
+		}
+		finalize()
+		return nil
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	return out, more, nil
+}
+
+// DirectCount liefert die Anzahl Events exakt auf subject (ohne Nachfahren).
+// Im Gegensatz zu CountSubject(subject, false) wird auch die Wurzel "/" als
+// exaktes Subject behandelt (Events direkt auf "/"), nicht als Gesamtsumme.
+func (s *Store) DirectCount(subject string) (uint64, error) {
+	var n uint64
+	err := s.db.View(func(tx *bolt.Tx) error {
+		if v := tx.Bucket(bucketSubjCount).Get([]byte(subject)); len(v) == 8 {
+			n = binary.BigEndian.Uint64(v)
+		}
+		return nil
+	})
+	return n, err
+}
+
 // EventTypes liefert alle bisher geschriebenen Event-Typen in alphabetischer
 // Reihenfolge (bbolt-Schlüsselordnung) samt Anzahl und ob ein Schema registriert
 // ist.

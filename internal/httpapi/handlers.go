@@ -249,7 +249,15 @@ func (s *Server) handleEventStats(w http.ResponseWriter, r *http.Request) {
 // (z. B. ?prefix=/books). Mit `tree=true` wird stattdessen ein hierarchischer
 // Baum als einzelnes JSON-Objekt zurückgegeben.
 func (s *Server) handleReadSubjects(w http.ResponseWriter, r *http.Request) {
-	prefix := r.URL.Query().Get("prefix")
+	q := r.URL.Query()
+	// `children` lädt nur die direkten Kinder eines Knotens seitenweise — der
+	// skalierbare Pfad für den Explorer-Baum bei sehr vielen Subjects (statt den
+	// kompletten Baum mit `tree=true` zu materialisieren).
+	if _, ok := q["children"]; ok {
+		s.handleSubjectChildren(w, r)
+		return
+	}
+	prefix := q.Get("prefix")
 	if prefix != "" && prefix[0] != '/' {
 		writeError(w, http.StatusBadRequest, "prefix muss mit \"/\" beginnen")
 		return
@@ -269,6 +277,79 @@ func (s *Server) handleReadSubjects(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeNDJSON(w, s.logger, subjects)
+}
+
+// defaultChildrenLimit / maxChildrenLimit begrenzen, wie viele direkte Kinder
+// ein einzelner read-subjects?children=…-Aufruf liefert. Die Obergrenze schützt
+// den Server (und den Browser) davor, bei breiten Knoten — z. B. Millionen
+// Subjects unter einem Pfad — alles auf einmal zu materialisieren.
+const (
+	defaultChildrenLimit = 500
+	maxChildrenLimit     = 5000
+)
+
+// subjectChildrenResponse ist die Antwort von read-subjects?children=…: die
+// direkten Kinder eines Knotens als eine Seite. nextAfter ist gesetzt, wenn
+// weitere Kinder folgen (als `after` der nächsten Anfrage übergeben). count/
+// total beschreiben den Eltern-Knoten und werden nur auf der ersten Seite
+// (ohne `after`) berechnet, um wiederholte Teilbaum-Scans zu vermeiden.
+type subjectChildrenResponse struct {
+	Parent    string            `json:"parent"`
+	Count     uint64            `json:"count"`
+	Total     uint64            `json:"total"`
+	Children  []store.ChildInfo `json:"children"`
+	NextAfter string            `json:"nextAfter,omitempty"`
+}
+
+// handleSubjectChildren liefert die direkten Kinder eines Knotens im Subject-
+// Baum seitenweise (?children=<pfad>&after=<cursor>&limit=<n>). So lädt der
+// Explorer den Baum schrittweise statt den gesamten Baum auf einmal.
+func (s *Server) handleSubjectChildren(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	parent := q.Get("children")
+	if parent == "" {
+		parent = "/"
+	}
+	if parent[0] != '/' {
+		writeError(w, http.StatusBadRequest, "children muss mit \"/\" beginnen")
+		return
+	}
+	limit := defaultChildrenLimit
+	if v := q.Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 {
+			writeError(w, http.StatusBadRequest, "limit muss eine positive ganze Zahl sein")
+			return
+		}
+		if n > maxChildrenLimit {
+			n = maxChildrenLimit
+		}
+		limit = n
+	}
+	after := q.Get("after")
+
+	children, more, err := s.store.Children(parent, after, limit)
+	if err != nil {
+		s.logger.Error("read-subjects children fehlgeschlagen", "err", err)
+		writeError(w, http.StatusInternalServerError, "interner fehler beim lesen")
+		return
+	}
+	resp := subjectChildrenResponse{Parent: parent, Children: children}
+	if more && len(children) > 0 {
+		resp.NextAfter = children[len(children)-1].Subject
+	}
+	// Eltern-Zähler nur auf der ersten Seite: total = Teilbaum-Summe, count =
+	// Events exakt auf dem Eltern-Subject. Der rekursive Scan ist teurer und
+	// auf Folgeseiten unnötig (der Knoten ist bereits beschriftet).
+	if after == "" {
+		if total, err := s.store.CountSubject(parent, true); err == nil {
+			resp.Total = total
+		}
+		if count, err := s.store.DirectCount(parent); err == nil {
+			resp.Count = count
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // subjectTreeNode ist ein Knoten im Subject-Baum. `count` sind die Events exakt
