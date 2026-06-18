@@ -59,4 +59,10 @@ func TestStartBackgroundMaintenanceNoop(t *testing.T) {
 	startBackgroundMaintenance(ctx, st, config.Config{DBInitialMB: 0, DBMonitorInterval: time.Second}, logger)
 	// DBMonitorInterval == 0 -> aus.
 	startBackgroundMaintenance(ctx, st, config.Config{DBInitialMB: 64, DBMonitorInterval: 0}, logger)
+	// Compaction aus -> Scheduler startet nicht.
+	startBackgroundMaintenance(ctx, st, config.Config{DBCompactEnabled: false}, logger)
+	// Compaction an (langes Intervall) -> Scheduler startet, läuft aber nicht an;
+	// ctx-Cancel beendet ihn. Verifiziert die Verdrahtung ohne Panik.
+	startBackgroundMaintenance(ctx, st, config.Config{DBCompactEnabled: true, DBCompactIntervalH: 6}, logger)
+	cancel()
 }

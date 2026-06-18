@@ -23,14 +23,20 @@ func remapWarning(dataBytes, initialBytes int64, thresholdPct int) (pct float64,
 	return pct, pct >= float64(thresholdPct)
 }
 
-// startBackgroundMaintenance startet den Hintergrund-Monitor: er beobachtet in
-// festem Intervall den Daten-Füllstand gegen die vorbelegte Grenze und warnt —
-// einmal je Überschreitung, mit Hysterese gegen Flattern —, bevor bbolt wieder
-// remappt. Damit bekommt der Operator rechtzeitig den Hinweis, CLIO_DB_INITIAL_MB
-// zu erhöhen (eine spätere Etappe automatisiert das Vergrößern). Der Monitor tut
-// nichts, wenn keine Grenze konfiguriert ist (DBInitialMB == 0) oder das Intervall
-// 0 ist. Er blockiert nicht und endet, sobald ctx abgebrochen wird.
+// startBackgroundMaintenance startet — je nach Konfiguration — bis zu zwei
+// Hintergrund-Goroutinen: den Headroom-Monitor und den Compaction-Scheduler.
+// Beide blockieren nicht und enden, sobald ctx abgebrochen wird.
 func startBackgroundMaintenance(ctx context.Context, st *store.Store, cfg config.Config, logger *slog.Logger) {
+	startHeadroomMonitor(ctx, st, cfg, logger)
+	startCompactScheduler(ctx, st, cfg, logger)
+}
+
+// startHeadroomMonitor beobachtet in festem Intervall den Daten-Füllstand gegen
+// die vorbelegte Grenze und warnt — einmal je Überschreitung, mit Hysterese gegen
+// Flattern —, bevor bbolt wieder remappt. Damit bekommt der Operator rechtzeitig
+// den Hinweis, CLIO_DB_INITIAL_MB zu erhöhen. Tut nichts, wenn keine Grenze
+// konfiguriert ist (DBInitialMB == 0) oder das Intervall 0 ist.
+func startHeadroomMonitor(ctx context.Context, st *store.Store, cfg config.Config, logger *slog.Logger) {
 	if cfg.DBInitialMB <= 0 || cfg.DBMonitorInterval <= 0 {
 		return
 	}
@@ -61,6 +67,40 @@ func startBackgroundMaintenance(ctx context.Context, st *store.Store, cfg config
 					logger.Info("DB-Füllstand wieder unter der Warn-Schwelle", "fillPercent", math.Round(pct*10)/10)
 					warned = false
 				}
+			}
+		}
+	}()
+}
+
+// startCompactScheduler kompaktiert die DB periodisch online (CompactInPlace,
+// ADR-015), wenn CLIO_DB_COMPACT_ENABLED gesetzt ist. Pro Lauf gibt es eine kurze
+// Downtime (alle Zugriffe blockieren, bis der Reopen durch ist). Hinweis: ist die
+// Datei vorbelegt (CLIO_DB_INITIAL_MB), wird sie nach dem Compact wieder auf die
+// reservierte Größe gebracht — die gemeldete Verkleinerung bezieht sich dann auf
+// die defragmentierte Datei vor der erneuten Vorbelegung.
+func startCompactScheduler(ctx context.Context, st *store.Store, cfg config.Config, logger *slog.Logger) {
+	if !cfg.DBCompactEnabled || cfg.DBCompactIntervalH <= 0 {
+		return
+	}
+	go func() {
+		t := time.NewTicker(time.Duration(cfg.DBCompactIntervalH) * time.Hour)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				old, neu, err := st.CompactInPlace()
+				if err != nil {
+					logger.Error("hintergrund-compact fehlgeschlagen", "err", err)
+					continue
+				}
+				var pct float64
+				if old > 0 {
+					pct = 100 * (1 - float64(neu)/float64(old))
+				}
+				logger.Info("hintergrund-compact abgeschlossen",
+					"oldBytes", old, "newBytes", neu, "kleinerProzent", math.Round(pct*10)/10)
 			}
 		}
 	}()

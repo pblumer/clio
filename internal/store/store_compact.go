@@ -29,7 +29,7 @@ func ensureFileSize(path string, size int64) error {
 
 // Size liefert die aktuelle Größe der Datenbankdatei in Bytes.
 func (s *Store) Size() (int64, error) {
-	info, err := os.Stat(s.db.Path())
+	info, err := os.Stat(s.path())
 	if err != nil {
 		return 0, err
 	}
@@ -59,10 +59,17 @@ type DBStats struct {
 // genutzte Umfang ist die High-Water-Mark (tx.Size = pgid*pageSize), der freie
 // Anteil stammt aus der bbolt-Freelist (FreeAlloc).
 func (s *Store) Stats() (DBStats, error) {
-	fileBytes, err := s.Size()
+	// Eine RLock über die ganze Berechnung: hält den db-Pointer stabil und
+	// vermeidet verschachteltes RLock (daher os.Stat hier inline statt via Size()).
+	s.dbMu.RLock()
+	defer s.dbMu.RUnlock()
+
+	info, err := os.Stat(s.db.Path())
 	if err != nil {
 		return DBStats{}, err
 	}
+	fileBytes := info.Size()
+
 	var dataBytes int64
 	if err := s.db.View(func(tx *bolt.Tx) error {
 		dataBytes = tx.Size()
@@ -87,7 +94,7 @@ func (s *Store) Stats() (DBStats, error) {
 		FreeBytes:   freeBytes,
 		FillPercent: fill,
 		FreePages:   st.FreePageN + st.PendingPageN,
-		PageSize:    s.db.Info().PageSize,
+		PageSize:    s.pageSize,
 	}, nil
 }
 
@@ -153,4 +160,28 @@ func Compact(path string) (oldSize, newSize int64, err error) {
 		return oldSize, 0, err
 	}
 	return oldSize, ni.Size(), nil
+}
+
+// CompactInPlace kompaktiert die laufende Datenbank online (ADR-015): unter dem
+// exklusiven Reopen-Guard wird die DB geschlossen, mit Compact() defragmentiert
+// (neue Datei, atomarer Rename) und unter denselben Optionen neu geöffnet. Für
+// die Dauer (grob 1–2 s pro GB) blockieren Lese-/Schreibzugriffe — eine kurze,
+// bewusste "Downtime". Events bleiben unverändert (die Hash-Kette gilt weiter).
+//
+// Die zurückgegebenen Größen entsprechen Compact(); newSize ist die Größe NACH
+// dem Wiederöffnen, falls eine Vorbelegung (CLIO_DB_INITIAL_MB) die Datei direkt
+// wieder auf die Mindestgröße bringt — daher wird sie zusätzlich gemeldet.
+func (s *Store) CompactInPlace() (oldSize, newSize int64, err error) {
+	rerr := s.reopen(func(path string) error {
+		o, n, cerr := Compact(path)
+		if cerr != nil {
+			return cerr
+		}
+		oldSize, newSize = o, n
+		return nil
+	})
+	if rerr != nil {
+		return 0, 0, rerr
+	}
+	return oldSize, newSize, nil
 }

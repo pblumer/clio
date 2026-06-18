@@ -8,7 +8,7 @@ import "syscall"
 // auf dem die Datenbankdatei liegt.
 func (s *Store) DiskUsage() (freeBytes, totalBytes int64, err error) {
 	var st syscall.Statfs_t
-	if err := syscall.Statfs(s.db.Path(), &st); err != nil {
+	if err := syscall.Statfs(s.path(), &st); err != nil {
 		return 0, 0, err
 	}
 	free := int64(st.Bavail) * int64(st.Bsize)

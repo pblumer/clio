@@ -50,6 +50,15 @@ type Config struct {
 	// auf [1,99]; Default 80.
 	DBGrowThresholdPct int
 
+	// DBCompactEnabled schaltet die Online-Hintergrund-Kompaktierung ein
+	// (CLIO_DB_COMPACT_ENABLED). Defragmentiert die DB periodisch im laufenden
+	// Betrieb (kurze Downtime pro Lauf, ADR-015). Default aus.
+	DBCompactEnabled bool
+
+	// DBCompactIntervalH ist das Intervall der Hintergrund-Kompaktierung in Stunden
+	// (CLIO_DB_COMPACT_INTERVAL_H). Geklemmt auf [1, 168]; Default 6.
+	DBCompactIntervalH int
+
 	// Sync steuert die Durability-/Performance-Abwägung beim Schreiben:
 	// "group" (Default, Group Commit), "always" (fsync pro Write) oder
 	// "off" (kein fsync, maximaler Durchsatz).
@@ -106,6 +115,8 @@ const (
 	envDBInitMB  = "CLIO_DB_INITIAL_MB"
 	envDBMonInt  = "CLIO_DB_MONITOR_INTERVAL"
 	envDBGrowPct = "CLIO_DB_GROW_THRESHOLD_PCT"
+	envDBCompact = "CLIO_DB_COMPACT_ENABLED"
+	envDBCompInt = "CLIO_DB_COMPACT_INTERVAL_H"
 	envSync      = "CLIO_SYNC"
 	envSignKey   = "CLIO_SIGNING_KEY"
 	envDevMode   = "CLIO_DEV_MODE"
@@ -126,6 +137,8 @@ const (
 
 	defaultMonInterval = 60 * time.Second
 	defaultGrowPct     = 80
+	defaultCompactH    = 6
+	maxCompactH        = 168 // eine Woche
 )
 
 // validSync enthält die erlaubten Werte für CLIO_SYNC.
@@ -145,6 +158,8 @@ func FromEnv() (Config, error) {
 		DBPath:               getenvDefault(envDBPath, defaultDBPath),
 		DBInitialMB:          parseIntDefault(envDBInitMB, 0, 0, maxInitMB),
 		DBGrowThresholdPct:   parseIntDefault(envDBGrowPct, defaultGrowPct, 1, 99),
+		DBCompactEnabled:     parseBoolDefault(envDBCompact, false),
+		DBCompactIntervalH:   parseIntDefault(envDBCompInt, defaultCompactH, 1, maxCompactH),
 		Sync:                 getenvDefault(envSync, defaultSync),
 		SigningKey:           os.Getenv(envSignKey),
 		DevMode:              parseBoolDefault(envDevMode, false),

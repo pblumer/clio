@@ -21,7 +21,7 @@ func (s *Store) PutKey(k auth.Key) error {
 	if err != nil {
 		return fmt.Errorf("key serialisieren: %w", err)
 	}
-	return s.db.Update(func(tx *bolt.Tx) error {
+	return s.update(func(tx *bolt.Tx) error {
 		return tx.Bucket(bucketAuthKeys).Put([]byte(k.KID), data)
 	})
 }
@@ -31,7 +31,7 @@ func (s *Store) PutKey(k auth.Key) error {
 func (s *Store) GetKey(kid string) (auth.Key, bool, error) {
 	var k auth.Key
 	var found bool
-	err := s.db.View(func(tx *bolt.Tx) error {
+	err := s.view(func(tx *bolt.Tx) error {
 		v := tx.Bucket(bucketAuthKeys).Get([]byte(kid))
 		if v == nil {
 			return nil
@@ -49,7 +49,7 @@ func (s *Store) GetKey(kid string) (auth.Key, bool, error) {
 // bbolt-Iteration läuft in Byte-Reihenfolge der Keys).
 func (s *Store) ListKeys() ([]auth.Key, error) {
 	var keys []auth.Key
-	err := s.db.View(func(tx *bolt.Tx) error {
+	err := s.view(func(tx *bolt.Tx) error {
 		return tx.Bucket(bucketAuthKeys).ForEach(func(_, v []byte) error {
 			var k auth.Key
 			if err := json.Unmarshal(v, &k); err != nil {
@@ -71,7 +71,7 @@ func (s *Store) ListKeys() ([]auth.Key, error) {
 // unverändert (idempotent, ok=true).
 func (s *Store) RevokeKey(kid string) (bool, error) {
 	var found bool
-	err := s.db.Update(func(tx *bolt.Tx) error {
+	err := s.update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(bucketAuthKeys)
 		v := b.Get([]byte(kid))
 		if v == nil {
@@ -104,7 +104,7 @@ func (s *Store) RevokeKey(kid string) (bool, error) {
 // Bootstrap-Checks (Bootstrap greift nur bei leerem Bund).
 func (s *Store) CountKeys() (int, error) {
 	var n int
-	err := s.db.View(func(tx *bolt.Tx) error {
+	err := s.view(func(tx *bolt.Tx) error {
 		n = tx.Bucket(bucketAuthKeys).Stats().KeyN
 		return nil
 	})

@@ -160,6 +160,50 @@ func TestFromEnvDBGrowThresholdPct(t *testing.T) {
 	}
 }
 
+func TestFromEnvDBCompaction(t *testing.T) {
+	t.Run("defaults", func(t *testing.T) {
+		t.Setenv(envToken, "tok")
+		t.Setenv(envDBCompact, "")
+		t.Setenv(envDBCompInt, "")
+		cfg, err := FromEnv()
+		if err != nil {
+			t.Fatalf("unerwarteter fehler: %v", err)
+		}
+		if cfg.DBCompactEnabled {
+			t.Error("DBCompactEnabled = true, want false (Default aus)")
+		}
+		if cfg.DBCompactIntervalH != defaultCompactH {
+			t.Errorf("DBCompactIntervalH = %d, want %d", cfg.DBCompactIntervalH, defaultCompactH)
+		}
+	})
+	t.Run("aktiviert mit Intervall", func(t *testing.T) {
+		t.Setenv(envToken, "tok")
+		t.Setenv(envDBCompact, "true")
+		t.Setenv(envDBCompInt, "12")
+		cfg, err := FromEnv()
+		if err != nil {
+			t.Fatalf("unerwarteter fehler: %v", err)
+		}
+		if !cfg.DBCompactEnabled {
+			t.Error("DBCompactEnabled = false, want true")
+		}
+		if cfg.DBCompactIntervalH != 12 {
+			t.Errorf("DBCompactIntervalH = %d, want 12", cfg.DBCompactIntervalH)
+		}
+	})
+	t.Run("Intervall geklemmt", func(t *testing.T) {
+		t.Setenv(envToken, "tok")
+		t.Setenv(envDBCompInt, "0")
+		cfg, err := FromEnv()
+		if err != nil {
+			t.Fatalf("unerwarteter fehler: %v", err)
+		}
+		if cfg.DBCompactIntervalH != 1 {
+			t.Errorf("DBCompactIntervalH = %d, want 1 (min)", cfg.DBCompactIntervalH)
+		}
+	})
+}
+
 func TestFromEnvSyncDefault(t *testing.T) {
 	t.Setenv(envToken, "tok")
 	t.Setenv(envSync, "")
