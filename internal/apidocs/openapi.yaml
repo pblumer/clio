@@ -288,6 +288,12 @@ paths:
         Legt einen benannten Schlüssel mit Scopes an und antwortet **einmalig**
         mit dem vollständigen Klartextwert `kid.secret`. Der Wert ist danach nicht
         mehr abrufbar (nur sein SHA-256-Hash wird gespeichert).
+
+        Optional bindet `allowedSources` die Event-Herkunft an diesen Schlüssel
+        (ADR-026): leer = keine Einschränkung, **eine** Source = der Client darf
+        `source` beim Schreiben weglassen (der Server setzt sie) und eine
+        abweichende Source wird abgelehnt, **mehrere** = der Client muss eine der
+        erlaubten Sources mitschicken.
       requestBody:
         required: true
         content:
@@ -301,6 +307,13 @@ paths:
                   type: array
                   items: { type: string, enum: [read, write, admin] }
                   example: ["read", "write"]
+                allowedSources:
+                  type: array
+                  description: |
+                    Erlaubte `source`-Werte für diesen Schlüssel (ADR-026). Exaktes
+                    Matching. Leer = uneingeschränkt.
+                  items: { type: string }
+                  example: ["svc-orders"]
       responses:
         "201":
           description: Angelegt — Geheimnis nur jetzt sichtbar
@@ -748,6 +761,11 @@ components:
         status: { type: string, enum: [active, revoked], example: "active" }
         createdAt: { type: string, format: date-time }
         revokedAt: { type: string, format: date-time, nullable: true }
+        allowedSources:
+          type: array
+          description: Erlaubte source-Werte (ADR-026); fehlt/leer = uneingeschränkt.
+          items: { type: string }
+          example: ["svc-orders"]
     CreatedKey:
       type: object
       description: |
@@ -761,6 +779,11 @@ components:
           items: { type: string, enum: [read, write, admin] }
         status: { type: string, example: "active" }
         createdAt: { type: string, format: date-time }
+        allowedSources:
+          type: array
+          description: Erlaubte source-Werte (ADR-026); fehlt/leer = uneingeschränkt.
+          items: { type: string }
+          example: ["svc-orders"]
         secret: { type: string, example: "kid_ci01.W8xqT2vK9pL4mN6rS1dF3hJ5" }
         warning: { type: string }
     SubjectTreeNode:
@@ -782,7 +805,11 @@ components:
       properties:
         source:
           type: string
-          description: Herkunft (URI-artig)
+          description: |
+            Herkunft (URI-artig). Darf weggelassen werden, wenn das verwendete
+            Token genau eine erlaubte Source bindet — der Server setzt sie dann
+            (ADR-026). Andernfalls Pflicht; eine nicht autorisierte Source wird
+            abgelehnt (403).
           example: "https://library.example.io"
         subject:
           type: string

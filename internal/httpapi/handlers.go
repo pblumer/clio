@@ -138,6 +138,11 @@ func (s *Server) handleDevBulkImportEvents(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusBadRequest, "events darf nicht leer sein")
 		return
 	}
+	// Source-Bindung (ADR-026), wie im regulären write-events-Pfad.
+	if status, msg, ok := s.resolveEventSources(r, req.Events); !ok {
+		writeError(w, status, msg)
+		return
+	}
 	for i, c := range req.Events {
 		if err := c.Validate(); err != nil {
 			writeError(w, http.StatusBadRequest, "events["+strconv.Itoa(i)+"]: "+err.Error())
@@ -493,6 +498,12 @@ func (s *Server) handleWriteEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(req.Events) == 0 {
 		writeError(w, http.StatusBadRequest, "events darf nicht leer sein")
+		return
+	}
+	// Source-Bindung (ADR-026): vor der Validierung, da bei genau einer erlaubten
+	// Source der Client `source` weglassen darf — der Server setzt sie dann.
+	if status, msg, ok := s.resolveEventSources(r, req.Events); !ok {
+		writeError(w, status, msg)
 		return
 	}
 	for i, c := range req.Events {

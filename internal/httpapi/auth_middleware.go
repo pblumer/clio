@@ -3,9 +3,12 @@ package httpapi
 import (
 	"context"
 	"crypto/subtle"
+	"errors"
 	"net/http"
+	"strconv"
 
 	"github.com/pblumer/clio/internal/auth"
+	"github.com/pblumer/clio/internal/event"
 )
 
 // contextKey ist der private Schlüsseltyp für Werte im Request-Context.
@@ -38,6 +41,37 @@ func (s *Server) authorKID(r *http.Request) string {
 		return id.KID
 	}
 	return ""
+}
+
+// resolveEventSources bindet die `source` jedes Candidate an die im Token
+// hinterlegten erlaubten Sources (ADR-026, Entscheidung 2) und mutiert die Liste
+// in place: Erlaubt das Token genau eine Source und der Client lässt sie weg,
+// wird sie gesetzt; eine abweichende oder nicht erlaubte Source wird hart
+// abgelehnt. Bei einer Verletzung liefert ok=false plus den passenden
+// HTTP-Status und eine Meldung (400, wenn die Pflicht-source fehlt; 403, wenn die
+// Source nicht autorisiert ist). Ohne Identität (offene Route — auf dem
+// Write-Pfad nicht erreichbar) bleibt das Verhalten unverändert.
+func (s *Server) resolveEventSources(r *http.Request, candidates []event.Candidate) (status int, msg string, ok bool) {
+	id, hasID := identityFromContext(r)
+	if !hasID {
+		return 0, "", true
+	}
+	for i := range candidates {
+		resolved, err := id.ResolveSource(candidates[i].Source)
+		if err != nil {
+			prefix := "events[" + strconv.Itoa(i) + "]: "
+			if errors.Is(err, auth.ErrSourceRequired) {
+				return http.StatusBadRequest, prefix + err.Error(), false
+			}
+			// ErrSourceNotAllowed (und jeder andere Bindungsfehler): authentifiziert,
+			// aber für diese Source nicht autorisiert.
+			s.logger.Warn("write abgelehnt: source nicht autorisiert",
+				"kid", id.KID, "requestedSource", candidates[i].Source, "allowedSources", id.AllowedSources)
+			return http.StatusForbidden, prefix + err.Error(), false
+		}
+		candidates[i].Source = resolved
+	}
+	return 0, "", true
 }
 
 // dummyHash ist ein gültiger SHA-256-Hex-Hash, gegen den auch bei
@@ -108,7 +142,7 @@ func (s *Server) requireScope(scope auth.Scope, next http.HandlerFunc) http.Hand
 		}
 
 		s.auditDecision(r, scope, "allow", http.StatusOK, key.KID, key.Name)
-		ident := auth.Identity{KID: key.KID, Name: key.Name, Scopes: key.Scopes}
+		ident := auth.Identity{KID: key.KID, Name: key.Name, Scopes: key.Scopes, AllowedSources: key.AllowedSources}
 		next(w, r.WithContext(withIdentity(r.Context(), ident)))
 	}
 }

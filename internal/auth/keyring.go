@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"encoding/base32"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -59,6 +60,13 @@ type Key struct {
 	Status     Status     `json:"status"`
 	CreatedAt  time.Time  `json:"createdAt"`
 	RevokedAt  *time.Time `json:"revokedAt"`
+	// AllowedSources ist die Menge der `source`-Werte, als die dieser Schlüssel
+	// schreiben darf (ADR-026). Bindet die aufgezeichnete Event-Herkunft an einen
+	// authentifizierten Schreibkanal, statt sie selbstdeklariert zu lassen.
+	// Leer = keine Einschränkung (Legacy/uneingeschränkt, z. B. Bootstrap-Admin):
+	// die client-gesetzte source wird unverändert übernommen. Das Matching ist
+	// exakt; Präfix-/Pattern-Matching ist bewusst zurückgestellt (ADR-026).
+	AllowedSources []string `json:"allowedSources,omitempty"`
 }
 
 // Active meldet, ob der Schlüssel aktuell zur Authentifizierung taugt.
@@ -80,6 +88,58 @@ type Identity struct {
 	KID    string
 	Name   string
 	Scopes []Scope
+	// AllowedSources spiegelt Key.AllowedSources (ADR-026), damit der Write-Pfad
+	// die source binden kann, ohne den Schlüssel erneut zu laden.
+	AllowedSources []string
+}
+
+// Fehler der Source-Bindung (ADR-026). Beide stehen für eine harte Ablehnung;
+// der Aufrufer (HTTP-Schicht) bildet sie auf 400 (Pflichtfeld fehlt) bzw. 403
+// (nicht autorisiert) ab.
+var (
+	// ErrSourceNotAllowed: die übermittelte source ist nicht in der erlaubten
+	// Menge des Tokens enthalten.
+	ErrSourceNotAllowed = errors.New("source ist durch das token nicht autorisiert")
+	// ErrSourceRequired: das Token erlaubt mehrere Sources, der Client hat aber
+	// keine mitgeschickt (nur bei genau einer erlaubten Source darf sie fehlen).
+	ErrSourceRequired = errors.New("source ist pflicht (token erlaubt mehrere sources)")
+)
+
+// ResolveSource bindet die `source` eines Writes an die im Token erlaubten
+// Sources (ADR-026, Entscheidung 2). Zurückgegeben wird die zu verwendende
+// Source; das Matching ist exakt (Präfix-/Pattern-Matching ist zurückgestellt):
+//
+//   - allowed leer  → keine Einschränkung: requested unverändert (Legacy).
+//   - genau eine    → der Client darf source weglassen (Server setzt sie); eine
+//     abweichende source → ErrSourceNotAllowed (kein stilles Überschreiben).
+//   - mehrere       → der Client muss source mitschicken (sonst ErrSourceRequired);
+//     ein nicht enthaltener Wert → ErrSourceNotAllowed.
+func ResolveSource(allowed []string, requested string) (string, error) {
+	req := strings.TrimSpace(requested)
+	switch len(allowed) {
+	case 0:
+		return requested, nil
+	case 1:
+		if req == "" || req == allowed[0] {
+			return allowed[0], nil
+		}
+		return "", ErrSourceNotAllowed
+	default:
+		if req == "" {
+			return "", ErrSourceRequired
+		}
+		for _, a := range allowed {
+			if req == a {
+				return req, nil
+			}
+		}
+		return "", ErrSourceNotAllowed
+	}
+}
+
+// ResolveSource bindet die source gegen die erlaubte Menge dieser Identität.
+func (i Identity) ResolveSource(requested string) (string, error) {
+	return ResolveSource(i.AllowedSources, requested)
 }
 
 // bearerPrefix ist das Schema-Präfix des Authorization-Headers (case-insensitiv

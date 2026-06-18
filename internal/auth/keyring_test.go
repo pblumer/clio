@@ -164,3 +164,59 @@ func TestGeneratedKeyRoundTripsThroughParseBearer(t *testing.T) {
 		t.Fatalf("roundtrip: kid=%q secret=%q, want kid=%q secret=%q", kid, gotSecret, k.KID, secret)
 	}
 }
+
+func TestResolveSource(t *testing.T) {
+	tests := []struct {
+		name      string
+		allowed   []string
+		requested string
+		want      string
+		wantErr   error
+	}{
+		// Leere Menge = keine Einschränkung (Legacy): requested unverändert.
+		{name: "uneingeschränkt übernimmt requested", allowed: nil, requested: "https://a", want: "https://a"},
+		{name: "uneingeschränkt lässt leer leer", allowed: nil, requested: "", want: ""},
+
+		// Genau eine erlaubte Source.
+		{name: "eine: weglassen setzt sie", allowed: []string{"svc-a"}, requested: "", want: "svc-a"},
+		{name: "eine: nur whitespace setzt sie", allowed: []string{"svc-a"}, requested: "  ", want: "svc-a"},
+		{name: "eine: passende erlaubt", allowed: []string{"svc-a"}, requested: "svc-a", want: "svc-a"},
+		{name: "eine: passende mit whitespace normalisiert", allowed: []string{"svc-a"}, requested: " svc-a ", want: "svc-a"},
+		{name: "eine: abweichende abgelehnt", allowed: []string{"svc-a"}, requested: "svc-b", wantErr: ErrSourceNotAllowed},
+
+		// Mehrere erlaubte Sources.
+		{name: "mehrere: fehlend ist pflicht", allowed: []string{"svc-a", "svc-b"}, requested: "", wantErr: ErrSourceRequired},
+		{name: "mehrere: enthalten erlaubt", allowed: []string{"svc-a", "svc-b"}, requested: "svc-b", want: "svc-b"},
+		{name: "mehrere: nicht enthalten abgelehnt", allowed: []string{"svc-a", "svc-b"}, requested: "svc-c", wantErr: ErrSourceNotAllowed},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ResolveSource(tc.allowed, tc.requested)
+			if tc.wantErr != nil {
+				if err != tc.wantErr {
+					t.Fatalf("err = %v, want %v", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unerwarteter fehler: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("ResolveSource(%v, %q) = %q, want %q", tc.allowed, tc.requested, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestIdentityResolveSource prüft, dass die Identity-Methode die erlaubte Menge
+// des Tokens nutzt.
+func TestIdentityResolveSource(t *testing.T) {
+	id := Identity{KID: "kid_x", AllowedSources: []string{"gateway"}}
+	got, err := id.ResolveSource("")
+	if err != nil || got != "gateway" {
+		t.Fatalf("Identity.ResolveSource = %q, %v; want \"gateway\", nil", got, err)
+	}
+	if _, err := id.ResolveSource("fremd"); err != ErrSourceNotAllowed {
+		t.Fatalf("err = %v, want ErrSourceNotAllowed", err)
+	}
+}

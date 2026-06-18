@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,29 +16,35 @@ import (
 
 // keyView ist die öffentliche Sicht auf einen Schlüssel — ohne secretHash.
 type keyView struct {
-	KID       string       `json:"kid"`
-	Name      string       `json:"name"`
-	Scopes    []auth.Scope `json:"scopes"`
-	Status    auth.Status  `json:"status"`
-	CreatedAt time.Time    `json:"createdAt"`
-	RevokedAt *time.Time   `json:"revokedAt"`
+	KID            string       `json:"kid"`
+	Name           string       `json:"name"`
+	Scopes         []auth.Scope `json:"scopes"`
+	Status         auth.Status  `json:"status"`
+	CreatedAt      time.Time    `json:"createdAt"`
+	RevokedAt      *time.Time   `json:"revokedAt"`
+	AllowedSources []string     `json:"allowedSources,omitempty"`
 }
 
 func toKeyView(k auth.Key) keyView {
 	return keyView{
-		KID:       k.KID,
-		Name:      k.Name,
-		Scopes:    k.Scopes,
-		Status:    k.Status,
-		CreatedAt: k.CreatedAt,
-		RevokedAt: k.RevokedAt,
+		KID:            k.KID,
+		Name:           k.Name,
+		Scopes:         k.Scopes,
+		Status:         k.Status,
+		CreatedAt:      k.CreatedAt,
+		RevokedAt:      k.RevokedAt,
+		AllowedSources: k.AllowedSources,
 	}
 }
 
-// createKeyRequest ist der Body von POST /api/v1/keys.
+// createKeyRequest ist der Body von POST /api/v1/keys. allowedSources bindet die
+// Event-Herkunft an diesen Schlüssel (ADR-026): leer = keine Einschränkung
+// (uneingeschränkt), eine = der Client darf source weglassen, mehrere = der
+// Client muss eine der erlaubten Sources mitschicken.
 type createKeyRequest struct {
-	Name   string       `json:"name"`
-	Scopes []auth.Scope `json:"scopes"`
+	Name           string       `json:"name"`
+	Scopes         []auth.Scope `json:"scopes"`
+	AllowedSources []string     `json:"allowedSources"`
 }
 
 // handleCreateKey legt einen neuen Schlüssel an und antwortet EINMALIG mit dem
@@ -63,6 +70,14 @@ func (s *Server) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// allowedSources binden die Event-Herkunft (ADR-026). Leere/whitespace-only
+	// Einträge sind ein Konfigurationsfehler — sie würden nie matchen.
+	for i, src := range req.AllowedSources {
+		if strings.TrimSpace(src) == "" {
+			writeError(w, http.StatusBadRequest, "allowedSources["+strconv.Itoa(i)+"] darf nicht leer sein")
+			return
+		}
+	}
 
 	key, secret, err := auth.GenerateKey(req.Name, req.Scopes)
 	if err != nil {
@@ -70,6 +85,7 @@ func (s *Server) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "interner fehler beim erzeugen")
 		return
 	}
+	key.AllowedSources = req.AllowedSources
 	if err := s.store.PutKey(key); err != nil {
 		s.logger.Error("key speichern fehlgeschlagen", "err", err)
 		writeError(w, http.StatusInternalServerError, "interner fehler beim speichern")
@@ -77,15 +93,17 @@ func (s *Server) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if id, ok := identityFromContext(r); ok {
-		s.logger.Info("key angelegt", "by", id.KID, "kid", key.KID, "name", key.Name, "scopes", key.Scopes)
+		s.logger.Info("key angelegt", "by", id.KID, "kid", key.KID, "name", key.Name,
+			"scopes", key.Scopes, "allowedSources", key.AllowedSources)
 	}
 
 	writeJSON(w, http.StatusCreated, map[string]any{
-		"kid":       key.KID,
-		"name":      key.Name,
-		"scopes":    key.Scopes,
-		"status":    key.Status,
-		"createdAt": key.CreatedAt,
+		"kid":            key.KID,
+		"name":           key.Name,
+		"scopes":         key.Scopes,
+		"status":         key.Status,
+		"createdAt":      key.CreatedAt,
+		"allowedSources": key.AllowedSources,
 		// Vollständiger Leitungswert — nur jetzt verfügbar.
 		"secret":  key.KID + "." + secret,
 		"warning": "Dieser Wert (kid.secret) wird nur einmal angezeigt und ist danach nicht mehr abrufbar. Jetzt sicher speichern.",
