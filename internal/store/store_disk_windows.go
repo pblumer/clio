@@ -12,7 +12,7 @@ import (
 // auf dem die Datenbankdatei liegt. Windows-Variante über GetDiskFreeSpaceEx;
 // der Aufruf erwartet ein Verzeichnis, daher das Verzeichnis der DB-Datei.
 func (s *Store) DiskUsage() (freeBytes, totalBytes int64, err error) {
-	dir, err := windows.UTF16PtrFromString(filepath.Dir(s.db.Path()))
+	dir, err := windows.UTF16PtrFromString(filepath.Dir(s.path()))
 	if err != nil {
 		return 0, 0, err
 	}

@@ -135,11 +135,39 @@ type Options struct {
 	// byte-identisch zum bisherigen Verhalten). An = neue Werte werden komprimiert;
 	// das Lesen erkennt beide Formen, sodass gemischte Datenbanken funktionieren.
 	Compress bool
+
+	// InitialMmapSize dimensioniert die bbolt-Mmap (in Bytes) vorab. bbolt mappt
+	// die Datei beim Überschreiten der Mmap-Grenze neu (allocate → db.mmap), hält
+	// dabei kurz den mmaplock exklusiv und wartet auf das Freigeben aller
+	// Lese-Transaktionen — unter Leselast erzeugt das Schreib-Latenzspitzen. Eine
+	// vorab große Mmap verschiebt diese Remaps weit nach hinten. Zusätzlich wird
+	// die Datei real auf diese Größe vorbelegt (grow-only, siehe ensureFileSize).
+	// 0 = aus (bisheriges Verhalten).
+	InitialMmapSize int
 }
 
 // Store kapselt die bbolt-Datenbank.
 type Store struct {
-	db       *bolt.DB
+	// dbMu schützt den db-Pointer gegen den Austausch beim Online-Reopen
+	// (Compaction/Grow, ADR-015). Jeder DB-Zugriff hält RLock für die Dauer seiner
+	// Transaktion (view/update/batch); der Reopen nimmt Lock exklusiv und wartet
+	// damit, bis alle laufenden Transaktionen fertig sind, bevor er den Pointer
+	// tauscht. RLock wird bewusst nie verschachtelt (kein reentrant RLock).
+	dbMu sync.RWMutex
+	db   *bolt.DB
+
+	// initialMmapSize merkt sich die vorab dimensionierte Mmap-/Dateigröße, damit
+	// der Reopen (nach Compaction) sie wiederherstellt (sonst kehren die Remaps
+	// zurück und die Datei schrumpft auf Datengröße).
+	initialMmapSize int
+
+	// pageSize cached die (für die Lebensdauer der Datei konstante) bbolt-
+	// Seitengröße. Bewusst NICHT live über db.Info() gelesen: Info() greift ohne
+	// mmaplock auf den db.data-Pointer zu und races damit gegen einen gleichzeitigen
+	// Write, der einen Mmap-Remap (munmap/mmap) auslöst. Unter dbMu gesetzt
+	// (Open/Reopen), lesbar ohne Lock, weil unveränderlich.
+	pageSize int
+
 	now      func() time.Time
 	syncMode SyncMode
 
@@ -163,17 +191,45 @@ func Open(path string) (*Store, error) {
 	return OpenWithOptions(path, Options{SyncMode: SyncGroup})
 }
 
-// OpenWithOptions öffnet die Datenbank mit expliziten Optionen und legt die
-// nötigen Buckets an.
-func OpenWithOptions(path string, opts Options) (*Store, error) {
-	db, err := bolt.Open(path, 0o600, &bolt.Options{Timeout: time.Second})
+// openBolt öffnet die bbolt-Datei mit den für clio relevanten Optionen
+// (Timeout, optional InitialMmapSize/SyncOff) und belegt sie — falls
+// initialMmapSize > 0 — real auf diese Größe vor. Zentralisiert, weil sowohl der
+// erste Open als auch der Online-Reopen (nach Compaction) exakt dieselben
+// Optionen brauchen.
+func openBolt(path string, initialMmapSize int, syncMode SyncMode) (*bolt.DB, error) {
+	boltOpts := &bolt.Options{Timeout: time.Second}
+	if initialMmapSize > 0 {
+		boltOpts.InitialMmapSize = initialMmapSize
+	}
+	db, err := bolt.Open(path, 0o600, boltOpts)
 	if err != nil {
 		return nil, fmt.Errorf("bbolt öffnen: %w", err)
 	}
-
 	// SyncOff: bbolt fsync'd nicht mehr beim Commit.
-	if opts.SyncMode == SyncOff {
+	if syncMode == SyncOff {
 		db.NoSync = true
+	}
+	// Datei real auf die gewünschte Initialgröße bringen. Auf Nicht-Windows lässt
+	// bbolt die Datei trotz InitialMmapSize dynamisch wachsen (nur die Mmap ist
+	// vorab groß) — wir belegen sie hier einmalig nach dem (korrekt
+	// initialisierten) Open vor. Strikt grow-only: eine bereits größere DB bleibt
+	// unangetastet. Der Bereich liegt innerhalb der bereits gemappten Region, und
+	// es läuft noch keine Transaktion — daher sicher.
+	if initialMmapSize > 0 {
+		if err := ensureFileSize(db.Path(), int64(initialMmapSize)); err != nil {
+			_ = db.Close()
+			return nil, fmt.Errorf("datei vorbelegen: %w", err)
+		}
+	}
+	return db, nil
+}
+
+// OpenWithOptions öffnet die Datenbank mit expliziten Optionen und legt die
+// nötigen Buckets an.
+func OpenWithOptions(path string, opts Options) (*Store, error) {
+	db, err := openBolt(path, opts.InitialMmapSize, opts.SyncMode)
+	if err != nil {
+		return nil, err
 	}
 
 	err = db.Update(func(tx *bolt.Tx) error {
@@ -206,10 +262,12 @@ func OpenWithOptions(path string, opts Options) (*Store, error) {
 	}
 
 	s := &Store{
-		db:          db,
-		now:         time.Now,
-		syncMode:    opts.SyncMode,
-		schemaCache: make(map[string]*jsonschema.Schema),
+		db:              db,
+		initialMmapSize: opts.InitialMmapSize,
+		pageSize:        db.Info().PageSize, // sicher: noch keine Nebenläufigkeit
+		now:             time.Now,
+		syncMode:        opts.SyncMode,
+		schemaCache:     make(map[string]*jsonschema.Schema),
 	}
 	if opts.SigningKey != nil {
 		s.signKey = opts.SigningKey
@@ -228,19 +286,89 @@ func (s *Store) PublicKey() (ed25519.PublicKey, bool) {
 	return s.verifyKey, true
 }
 
+// view/update/batch führen eine bbolt-Transaktion aus und halten dabei den
+// Reopen-Guard (RLock), damit der db-Pointer für die Dauer der Transaktion
+// stabil bleibt. Sie dürfen NICHT verschachtelt werden (kein reentrant RLock):
+// keine dieser Callbacks ruft eine andere tx-öffnende Store-Methode auf.
+func (s *Store) view(fn func(*bolt.Tx) error) error {
+	s.dbMu.RLock()
+	defer s.dbMu.RUnlock()
+	return s.db.View(fn)
+}
+
+func (s *Store) update(fn func(*bolt.Tx) error) error {
+	s.dbMu.RLock()
+	defer s.dbMu.RUnlock()
+	return s.db.Update(fn)
+}
+
+func (s *Store) batch(fn func(*bolt.Tx) error) error {
+	s.dbMu.RLock()
+	defer s.dbMu.RUnlock()
+	return s.db.Batch(fn)
+}
+
+// path liefert den DB-Dateipfad unter dem Reopen-Guard (der Pointer könnte sonst
+// während eines Reopen getauscht werden).
+func (s *Store) path() string {
+	s.dbMu.RLock()
+	defer s.dbMu.RUnlock()
+	return s.db.Path()
+}
+
 // write führt eine Schreibtransaktion gemäß dem konfigurierten SyncMode aus.
 // Im Group-Commit-Modus werden gleichzeitige Aufrufe von bbolt coalesced; die
 // übergebene Funktion kann dann mehrfach aufgerufen werden und muss daher
 // idempotent sein (sie baut ihr Ergebnis bei jedem Lauf frisch auf).
 func (s *Store) write(fn func(*bolt.Tx) error) error {
 	if s.syncMode == SyncGroup {
-		return s.db.Batch(fn)
+		return s.batch(fn)
 	}
-	return s.db.Update(fn)
+	return s.update(fn)
+}
+
+// reopen schließt die laufende DB, lässt optional mutate die Datei verändern
+// (z. B. defragmentieren/ersetzen) und öffnet sie unter denselben Optionen neu —
+// alles unter dem exklusiven Reopen-Guard. Er wartet damit, bis alle laufenden
+// Transaktionen fertig sind, und blockiert neue, bis der Tausch abgeschlossen
+// ist (kurze "Downtime", siehe ADR-015). Schlägt das Wiederöffnen fehl, ist der
+// Store anschließend unbrauchbar — der Fehler wird zurückgegeben.
+func (s *Store) reopen(mutate func(path string) error) error {
+	s.dbMu.Lock()
+	defer s.dbMu.Unlock()
+
+	path := s.db.Path()
+	if err := s.db.Close(); err != nil {
+		return fmt.Errorf("db schließen: %w", err)
+	}
+
+	if mutate != nil {
+		if mErr := mutate(path); mErr != nil {
+			// Mutation fehlgeschlagen: Datei (idealerweise) unverändert — DB wieder
+			// öffnen, damit der Store nutzbar bleibt, und beide Fehler melden.
+			db, oErr := openBolt(path, s.initialMmapSize, s.syncMode)
+			if oErr != nil {
+				return errors.Join(mErr, fmt.Errorf("wiederöffnen: %w", oErr))
+			}
+			s.db = db
+			s.pageSize = db.Info().PageSize
+			return mErr
+		}
+	}
+
+	db, err := openBolt(path, s.initialMmapSize, s.syncMode)
+	if err != nil {
+		return fmt.Errorf("wiederöffnen: %w", err)
+	}
+	s.db = db
+	s.pageSize = db.Info().PageSize // unter Lock, keine Nebenläufigkeit
+	return nil
 }
 
 // Close schließt die Datenbank.
 func (s *Store) Close() error {
+	s.dbMu.Lock()
+	defer s.dbMu.Unlock()
 	return s.db.Close()
 }
 
@@ -255,7 +383,7 @@ func (s *Store) Close() error {
 // die Anzahl der gelöschten Events zurück.
 func (s *Store) Reset() (uint64, error) {
 	var deleted uint64
-	err := s.db.Update(func(tx *bolt.Tx) error {
+	err := s.update(func(tx *bolt.Tx) error {
 		deleted = tx.Bucket(bucketEvents).Sequence()
 		// Bewusst OHNE bucketAuthKeys: der Schlüsselbund (ADR-025) ist mutabler
 		// Steuerungs-State, kein Event-Strom. Würde der Dev-Reset ihn leeren,
@@ -285,7 +413,7 @@ func (s *Store) Reset() (uint64, error) {
 // Count liefert die Anzahl gespeicherter Events (O(1) über die bbolt-Sequenz).
 func (s *Store) Count() (uint64, error) {
 	var n uint64
-	err := s.db.View(func(tx *bolt.Tx) error {
+	err := s.view(func(tx *bolt.Tx) error {
 		n = tx.Bucket(bucketEvents).Sequence()
 		return nil
 	})
@@ -298,7 +426,7 @@ func (s *Store) Count() (uint64, error) {
 // Histogramms zu bestimmen, ohne die gesamte Historie zu scannen (das eigentliche
 // Seeding läuft danach asynchron, siehe httpapi.New).
 func (s *Store) FirstEventTime() (t time.Time, ok bool, err error) {
-	err = s.db.View(func(tx *bolt.Tx) error {
+	err = s.view(func(tx *bolt.Tx) error {
 		k, v := tx.Bucket(bucketEvents).Cursor().First()
 		if k == nil {
 			return nil
@@ -324,7 +452,7 @@ func (s *Store) FirstEventTime() (t time.Time, ok bool, err error) {
 // Index-Wahl in run-query (ADR-023): die Kosten eines Typ-Index-Scans.
 func (s *Store) CountByTypes(types []string) (uint64, error) {
 	var total uint64
-	err := s.db.View(func(tx *bolt.Tx) error {
+	err := s.view(func(tx *bolt.Tx) error {
 		b := tx.Bucket(bucketTypes)
 		for _, t := range types {
 			if v := b.Get([]byte(t)); len(v) == 8 {
@@ -347,7 +475,7 @@ func (s *Store) CountSubject(subject string, recursive bool) (uint64, error) {
 		return s.Count() // Wurzel = alle Events
 	}
 	var total uint64
-	err := s.db.View(func(tx *bolt.Tx) error {
+	err := s.view(func(tx *bolt.Tx) error {
 		subjc := tx.Bucket(bucketSubjCount)
 		if !recursive {
 			if v := subjc.Get([]byte(subject)); len(v) == 8 {
@@ -383,7 +511,7 @@ func (s *Store) CountSubject(subject string, recursive bool) (uint64, error) {
 // danach ab). So kann ein asynchroner Seeder eine saubere Grenze gegen
 // gleichzeitig neu geschriebene Events ziehen (maxSeq = 0 → keine Grenze).
 func (s *Store) ForEachEventTimeSource(maxSeq uint64, fn func(time.Time, string)) error {
-	return s.db.View(func(tx *bolt.Tx) error {
+	return s.view(func(tx *bolt.Tx) error {
 		c := tx.Bucket(bucketEvents).Cursor()
 		for k, v := c.First(); k != nil; k, v = c.Next() {
 			if maxSeq != 0 && binary.BigEndian.Uint64(k) > maxSeq {
@@ -431,7 +559,7 @@ type SubjectInfo struct {
 // `/booksstore` zu `/books` werden via MatchSubject ausgeschlossen.
 func (s *Store) Subjects(prefix string) ([]SubjectInfo, error) {
 	var out []SubjectInfo
-	err := s.db.View(func(tx *bolt.Tx) error {
+	err := s.view(func(tx *bolt.Tx) error {
 		c := tx.Bucket(bucketSubjectIdx).Cursor()
 		var seek []byte
 		if prefix != "" {
@@ -511,7 +639,7 @@ func (s *Store) Children(parent, after string, limit int) ([]ChildInfo, bool, er
 		out  []ChildInfo
 		more bool
 	)
-	err := s.db.View(func(tx *bolt.Tx) error {
+	err := s.view(func(tx *bolt.Tx) error {
 		c := tx.Bucket(bucketSubjCount).Cursor()
 		seek := sp
 		if after != "" {
@@ -582,7 +710,7 @@ func (s *Store) Children(parent, after string, limit int) ([]ChildInfo, bool, er
 // exaktes Subject behandelt (Events direkt auf "/"), nicht als Gesamtsumme.
 func (s *Store) DirectCount(subject string) (uint64, error) {
 	var n uint64
-	err := s.db.View(func(tx *bolt.Tx) error {
+	err := s.view(func(tx *bolt.Tx) error {
 		if v := tx.Bucket(bucketSubjCount).Get([]byte(subject)); len(v) == 8 {
 			n = binary.BigEndian.Uint64(v)
 		}
@@ -596,7 +724,7 @@ func (s *Store) DirectCount(subject string) (uint64, error) {
 // ist.
 func (s *Store) EventTypes() ([]TypeInfo, error) {
 	var out []TypeInfo
-	err := s.db.View(func(tx *bolt.Tx) error {
+	err := s.view(func(tx *bolt.Tx) error {
 		schemas := tx.Bucket(bucketSchemas)
 		c := tx.Bucket(bucketTypes).Cursor()
 		for k, v := c.First(); k != nil; k, v = c.Next() {
@@ -667,7 +795,7 @@ func backfillTypeIdx(tx *bolt.Tx) error {
 // Subject-Scope und weitere Prädikate prüft der Aufrufer. So werden bei
 // Typ-Filtern nur die Treffer geladen statt der gesamte Store gescannt.
 func (s *Store) ReadByTypesFunc(types []string, opts ReadOptions, fn func(event.Event) bool) error {
-	return s.db.View(func(tx *bolt.Tx) error {
+	return s.view(func(tx *bolt.Tx) error {
 		tidx := tx.Bucket(bucketTypeIdx)
 		evts := tx.Bucket(bucketEvents)
 		if tidx == nil {
@@ -948,7 +1076,7 @@ func (s *Store) Verify() (VerifyResult, error) {
 	res := VerifyResult{OK: true, Head: event.GenesisHash}
 	prev := event.GenesisHash
 
-	err := s.db.View(func(tx *bolt.Tx) error {
+	err := s.view(func(tx *bolt.Tx) error {
 		c := tx.Bucket(bucketEvents).Cursor()
 		for k, v := c.First(); k != nil; k, v = c.Next() {
 			var ev event.Event
@@ -1177,7 +1305,7 @@ func (s *Store) Read(query string, recursive bool, opts ReadOptions) ([]event.Ev
 // durchsetzen, ohne erst den gesamten Scope zu laden. Der Speicherbedarf bleibt
 // damit konstant, unabhängig von der Größe der Historie.
 func (s *Store) ReadFunc(query string, recursive bool, opts ReadOptions, fn func(event.Event) bool) error {
-	return s.db.View(func(tx *bolt.Tx) error {
+	return s.view(func(tx *bolt.Tx) error {
 		if recursive {
 			return readRecursive(tx, query, opts, fn)
 		}

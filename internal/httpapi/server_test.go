@@ -157,10 +157,16 @@ func TestInfoEndpoint(t *testing.T) {
 	if !ok || file <= 0 {
 		t.Fatalf("databaseFileBytes fehlt/unplausibel: %v", body["databaseFileBytes"])
 	}
+	// DataBytes (genutzter Umfang) liegt innerhalb der Datei; used+free bezieht
+	// sich auf diesen genutzten Umfang, nicht auf die (ggf. vorbelegte) Datei.
+	data, ok := body["databaseDataBytes"].(float64)
+	if !ok || data <= 0 || data > file {
+		t.Fatalf("databaseDataBytes fehlt/unplausibel: %v (file %v)", body["databaseDataBytes"], file)
+	}
 	used, _ := body["databaseUsedBytes"].(float64)
 	free, _ := body["databaseFreeBytes"].(float64)
-	if used+free != file {
-		t.Fatalf("used(%v)+free(%v) != file(%v)", used, free, file)
+	if used+free != data {
+		t.Fatalf("used(%v)+free(%v) != data(%v)", used, free, data)
 	}
 	fill, ok := body["databaseFillPercent"].(float64)
 	if !ok || fill < 0 || fill > 100 {

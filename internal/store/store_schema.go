@@ -36,7 +36,7 @@ func (s *Store) RegisterSchema(typ string, schema json.RawMessage) error {
 		return fmt.Errorf("%w: schema kompaktieren: %v", ErrSchemaValidation, err)
 	}
 
-	err = s.db.Update(func(tx *bolt.Tx) error {
+	err = s.update(func(tx *bolt.Tx) error {
 		schemas := tx.Bucket(bucketSchemas)
 		if schemas.Get([]byte(typ)) != nil {
 			return ErrSchemaExists
@@ -74,7 +74,7 @@ func (s *Store) RegisterSchema(typ string, schema json.RawMessage) error {
 func (s *Store) SchemaFor(typ string) (json.RawMessage, bool, error) {
 	var out json.RawMessage
 	var found bool
-	err := s.db.View(func(tx *bolt.Tx) error {
+	err := s.view(func(tx *bolt.Tx) error {
 		if v := tx.Bucket(bucketSchemas).Get([]byte(typ)); v != nil {
 			out = append(json.RawMessage(nil), v...)
 			found = true

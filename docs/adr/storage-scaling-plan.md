@@ -1,7 +1,7 @@
 # Implementierungsplan: Skalierbare Speicherverwaltung für bbolt
 
 **Projekt:** `github.com/pblumer/clio`  
-**Status:** PLANUNG — bereit zur Umsetzung durch einen AI-Coding-Agenten  
+**Status:** UMGESETZT (Etappen 1–3) — siehe **§0.5** für die Korrekturen zum ursprünglichen Plan und **§6** für die Benchmark-Ergebnisse  
 **Vorbild-Doku:** Temis-WP-Format (in sich geschlossene Work-Packages mit Akzeptanzkriterien)  
 **Auslöser:** Benchmark vom 2026-06-18 zeigt Performance-Einbruch bei DB-Füllgrad > 85%
 
@@ -29,6 +29,59 @@ Das Single-Binary-/Stdlib-Prinzip (ADR-001) bleibt erhalten: **keine neue extern
 | Scheduling | **Hintergrund-Goroutine** mit konfigurierbarem Intervall | Kein blocking im Request-Path; HTTP-API bleibt latenz-arm |
 | Kompaktierung | `ReAttach + compact` Muster (neue Datei anlegen, alte ersetzen) | Bbolt erlaubt kein online-compact; wir nutzen den bestehenden `Compact()` in `store_compact.go` |
 | Konfiguration | `CLIO_DB_INITIAL_MB` + `CLIO_DB_THRESHOLD_PCT` | Operator kann die Werte an VM-Plattengröße anpassen |
+
+---
+
+## 0.5 Umsetzungsstand & Korrekturen zum Plan
+
+Die Umsetzung (Etappen 1–3) hat per Code-Verifikation (bbolt v1.4.3) und
+Benchmark drei Plan-Annahmen widerlegt. Die folgenden Abschnitte 1–6 sind der
+ursprüngliche Plan; hier steht, was davon **tatsächlich** gilt:
+
+1. **`Options.InitialSize` gibt es in bbolt nicht** (§3.1, Option C). Der
+   wirksame Hebel ist **`Options.InitialMmapSize`** — er dimensioniert die Mmap
+   vorab. Wurzel des Durchsatz-Einbruchs ist nicht primär B+Tree-Rebalancing,
+   sondern der **Mmap-Remap** in `db.allocate()`: überschreitet der Schreib-
+   Highwater-Mark die Mmap-Grenze, ruft bbolt `db.mmap()` (munmap+mmap), nimmt
+   dabei `mmaplock` exklusiv und **wartet auf das Freigeben aller
+   Lese-Transaktionen** → Schreib-Latenzspitzen unter Leselast. Zusätzlich wird
+   die Datei per `os.Truncate` real vorbelegt (sparse).
+
+2. **Auto-Up-Allocation per `ftruncate` wirkt nicht wie geplant** (§3.3).
+   `db.allocate()` recycelt freie Seiten **ausschließlich aus der bbolt-Freelist**;
+   externes Vergrößern der Datei liefert bbolt keine wiederverwendbaren Seiten
+   und senkt den (Freelist-basierten) Füllgrad nicht. Statt „Auto-Grow der Datei"
+   ist der wirksame Ansatz die **vorab große Mmap** (Etappe 1) plus ein
+   **Headroom-Monitor** (Etappe 2), der warnt, bevor der genutzte Umfang die
+   vorbelegte Grenze erreicht. `CLIO_DB_AUTO_GROW`/`CLIO_DB_GROW_FACTOR` aus §4
+   wurden **nicht** umgesetzt (wirkungslos).
+
+3. **Online-Compaction ist keine reine `Compact()`-Erweiterung** (§3.4).
+   `Compact()` braucht die Datei exklusiv. Online realisiert über einen **Reopen
+   hinter einem `sync.RWMutex`** (Etappe 3): jeder DB-Zugriff hält RLock, der
+   Reopen nimmt Lock exklusiv, wartet bis alle Transaktionen fertig sind, schließt
+   → defragmentiert → öffnet neu. Kurze Downtime pro Lauf statt „online ohne
+   Blockieren".
+
+Zusätzlich behoben: `Stats()` las die Seitengröße live über `db.Info()`, das ohne
+`mmaplock` auf den Mmap-Pointer zugreift und gegen remap-auslösende Writes racet
+(über `/info` und `/metrics` unter Last erreichbar — vorbestehender latenter Bug).
+Die Seitengröße wird jetzt beim Open/Reopen gecached.
+
+### Tatsächlich implementierte Konfiguration
+
+| Variable | Default | Etappe | Wirkung |
+|---|---|---|---|
+| `CLIO_DB_INITIAL_MB` | `0` (aus) | 1 | Vorab-Mmap (`InitialMmapSize`) + reale Dateivorbelegung; strikt grow-only |
+| `CLIO_DB_MONITOR_INTERVAL` | `60s` | 2 | Intervall des Headroom-Monitors (`0` = aus) |
+| `CLIO_DB_GROW_THRESHOLD_PCT` | `80` | 2 | Warn-Schwelle (% der vorbelegten Größe) |
+| `CLIO_DB_COMPACT_ENABLED` | `false` | 3 | Online-Hintergrund-Kompaktierung |
+| `CLIO_DB_COMPACT_INTERVAL_H` | `6` | 3 | Intervall der Hintergrund-Kompaktierung (Stunden) |
+
+Neue Beobachtbarkeit: `/info` und die Prometheus-Metriken weisen jetzt
+`DataBytes` (genutzter Umfang/Highwater-Mark) getrennt von `FileBytes` aus; der
+Füllgrad bezieht sich auf den genutzten Umfang (sonst läse eine frisch
+vorbelegte, leere DB ~100 %).
 
 ---
 
@@ -164,9 +217,70 @@ func startBackgroundMaintenance(st *store.Store, cfg config.Config, logger *slog
 5. **Backward-Compatibility** — Ohne `CLIO_DB_INITIAL_MB` verhält sich clio genau wie heute (1 GB Default).
 6. **Tests** — Unit-Test für `PreAllocate` und `Grow`; Integrationstest mit gefüllter DB.
 
+### 5.1 Reformuliert nach Umsetzung (verbindlich)
+
+Die obige Liste stammt aus dem Plan; nach den Korrekturen (§0.5) gilt:
+
+1. **Konfiguration ✅** — `CLIO_DB_INITIAL_MB=2048` dimensioniert die Mmap vorab
+   und belegt die Datei real auf 2 GiB vor. (`os.Truncate` erzeugt eine
+   **sparse** Datei — reale Blöcke erst beim Schreiben; echte Block-Reservierung
+   gegen ENOSPC bliebe `fallocate`, bewusst zurückgestellt.)
+2. **Headroom statt Auto-Grow ✅** — Der Monitor warnt ab
+   `CLIO_DB_GROW_THRESHOLD_PCT` (Default 80 %) der vorbelegten Grenze. Automatisches
+   Vergrößern per `ftruncate` entfällt (wirkungslos, §0.5).
+3. **Performance ✅ (präzisiert)** — Pre-Sizing **eliminiert die Remap-bedingten
+   Latenzspitzen** (Store-Benchmark §6: max 210 ms → 112 ms, p99 ~150 ms → ~70 ms)
+   und hebt den Durchsatz ~25–35 %. Der **graduelle** Durchsatz-Abfall mit
+   wachsender DB (B+Tree-Tiefe, Working-Set > RAM) ist inhärent und wird durch
+   Mmap-Dimensionierung **nicht** beseitigt — die ursprüngliche pauschale
+   „> 900 ev/s"-Forderung war zu grob.
+4. **Online-Compaction ✅ (präzisiert)** — `CLIO_DB_COMPACT_ENABLED=true`
+   defragmentiert periodisch im Betrieb (Reopen unter RWMutex). Die Rückgewinnung
+   zeigt sich im gesunkenen **`DataBytes`**; bei vorbelegter Datei bleibt die
+   **Dateigröße** per Design auf der reservierten Größe (Vorbelegung wird nach dem
+   Compact wiederhergestellt). Die „Datei schrumpft ≥ 20 %"-Forderung gilt nur
+   **ohne** Vorbelegung.
+5. **Backward-Compatibility ✅** — Ohne `CLIO_DB_INITIAL_MB` (Default 0) verhält
+   sich clio byte-identisch wie zuvor.
+6. **Tests ✅** — Unit-Tests für Vorbelegung/Stats/Reopen/Compaction; der
+   Nebenläufigkeitstest fährt Schreiben+Lesen parallel zu mehrfacher
+   Online-Compaction unter `-race`. Die End-to-End-Validierung steht als
+   On-Demand-Test bereit (§6).
+
 ---
 
-## 6. Appendix: Referenz-Werte für Benchmark-Replikation
+## 6. Benchmark-Ergebnisse der Umsetzung
+
+Zwei Messungen bestätigen den Mechanismus. fsync ist jeweils abgeschaltet, damit
+der **einzige** Unterschied der Mmap-Remap ist; vier Leser erzeugen Kontention.
+
+**Etappe 0 — Roh-bbolt-Spike** (isoliert den Remap; 6 Mio. Keys, → ~3,7 GB):
+
+| Phase | Baseline ev/s | Presize ev/s | Baseline max-Latenz | Presize max-Latenz |
+|---|---|---|---|---|
+| 1 Mio | 113k | **194k** | 154 ms | 61 ms |
+| 3,5 Mio | 73k | **108k** | **438 ms** ⚡ | 94 ms |
+| 5 Mio | 60k | **83k** | **589 ms** ⚡ | 91 ms |
+
+**Etappe 4 — durch die echte Store-API** (`Append` inkl. Hash-Kette + Indizes;
+1,5 Mio. Events, presize = 2048 MiB):
+
+| Phase | Baseline ev/s | Presize ev/s | Baseline max-Latenz | Presize max-Latenz | Datei |
+|---|---|---|---|---|---|
+| 250k | 18.064 | **22.888** | 133 ms | 82 ms | 292 MB → fix 2048 MB |
+| 750k | 15.968 | **20.433** | **210 ms** ⚡ | 87 ms | 860 MB → fix 2048 MB |
+| 1,5 Mio | 17.809 | **23.873** | 173 ms | 79 ms | 1710 MB → fix 2048 MB |
+
+**Fazit:** Pre-Sizing entfernt die Remap-Latenzspitzen und stabilisiert den
+Durchsatz (~25–35 % höher). Reproduktion:
+
+```bash
+CLIO_SCALING_BENCH=1 go test ./internal/store/ -run TestScalingValidation -v -timeout 30m
+```
+
+---
+
+## 7. Appendix: Referenz-Werte für Benchmark-Replikation
 
 Um den Fix zu validieren, soll der AI-Agent den folgenden Benchmark erneut durchführen:
 

@@ -87,9 +87,16 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 		s.logger.Error("info: db-statistik fehlgeschlagen", "err", err)
 	} else {
 		body["databaseFileBytes"] = st.FileBytes
+		body["databaseDataBytes"] = st.DataBytes
 		body["databaseUsedBytes"] = st.UsedBytes
 		body["databaseFreeBytes"] = st.FreeBytes
 		body["databaseFillPercent"] = math.Round(st.FillPercent*10) / 10
+		// Vorbelegte Grenze (CLIO_DB_INITIAL_MB) und wie weit der genutzte Umfang
+		// daran heranreicht — der Remap-Headroom. Nur wenn vorbelegt.
+		if initial := int64(s.cfg.DBInitialMB) << 20; initial > 0 {
+			body["databaseInitialBytes"] = initial
+			body["databaseInitialFillPercent"] = math.Round(float64(st.DataBytes)/float64(initial)*1000) / 10
+		}
 	}
 
 	writeJSON(w, http.StatusOK, body)
@@ -422,12 +429,13 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.logger.Error("events zählen fehlgeschlagen", "err", err)
 	}
-	size, used, free := int64(-1), int64(-1), int64(-1)
+	size, data, used, free := int64(-1), int64(-1), int64(-1), int64(-1)
 	if st, err := s.store.Stats(); err != nil {
 		s.logger.Error("db-größe ermitteln fehlgeschlagen", "err", err)
 	} else {
-		size, used, free = st.FileBytes, st.UsedBytes, st.FreeBytes
+		size, data, used, free = st.FileBytes, st.DataBytes, st.UsedBytes, st.FreeBytes
 	}
+	initial := int64(s.cfg.DBInitialMB) << 20
 	diskFree, diskTotal, err := s.store.DiskUsage()
 	if err != nil {
 		s.logger.Error("disk-usage ermitteln fehlgeschlagen", "err", err)
@@ -439,6 +447,8 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		ActiveObservers: s.broker.SubscriberCount(),
 		EventsTotal:     count,
 		DBSizeBytes:     size,
+		DBDataBytes:     data,
+		DBInitialBytes:  initial,
 		DBUsedBytes:     used,
 		DBFreeBytes:     free,
 		DiskFreeBytes:   diskFree,

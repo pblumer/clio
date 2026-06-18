@@ -1,6 +1,7 @@
 package config
 
 import (
+	"strconv"
 	"testing"
 	"time"
 )
@@ -73,6 +74,134 @@ func TestFromEnvAuthMaterialOptional(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestFromEnvDBInitialMB(t *testing.T) {
+	cases := []struct {
+		name string
+		val  string
+		want int
+	}{
+		{"default leer", "", 0},
+		{"gesetzt", "4096", 4096},
+		{"unlesbar -> default", "viel", 0},
+		{"negativ -> auf 0 geklemmt", "-5", 0},
+		{"über max -> auf max geklemmt", strconv.Itoa(maxInitMB + 1), maxInitMB},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(envToken, "tok")
+			t.Setenv(envDBInitMB, tc.val)
+			cfg, err := FromEnv()
+			if err != nil {
+				t.Fatalf("unerwarteter fehler: %v", err)
+			}
+			if cfg.DBInitialMB != tc.want {
+				t.Errorf("DBInitialMB = %d, want %d", cfg.DBInitialMB, tc.want)
+			}
+		})
+	}
+}
+
+func TestFromEnvDBMonitorInterval(t *testing.T) {
+	t.Run("default", func(t *testing.T) {
+		t.Setenv(envToken, "tok")
+		t.Setenv(envDBMonInt, "")
+		cfg, err := FromEnv()
+		if err != nil {
+			t.Fatalf("unerwarteter fehler: %v", err)
+		}
+		if cfg.DBMonitorInterval != defaultMonInterval {
+			t.Errorf("DBMonitorInterval = %v, want %v", cfg.DBMonitorInterval, defaultMonInterval)
+		}
+	})
+	t.Run("gesetzt", func(t *testing.T) {
+		t.Setenv(envToken, "tok")
+		t.Setenv(envDBMonInt, "30s")
+		cfg, err := FromEnv()
+		if err != nil {
+			t.Fatalf("unerwarteter fehler: %v", err)
+		}
+		if cfg.DBMonitorInterval != 30*time.Second {
+			t.Errorf("DBMonitorInterval = %v, want 30s", cfg.DBMonitorInterval)
+		}
+	})
+	t.Run("unlesbar -> fehler", func(t *testing.T) {
+		t.Setenv(envToken, "tok")
+		t.Setenv(envDBMonInt, "bald")
+		if _, err := FromEnv(); err == nil {
+			t.Fatal("erwartete fehler bei ungültigem CLIO_DB_MONITOR_INTERVAL")
+		}
+	})
+}
+
+func TestFromEnvDBGrowThresholdPct(t *testing.T) {
+	cases := []struct {
+		val  string
+		want int
+	}{
+		{"", defaultGrowPct},
+		{"75", 75},
+		{"0", 1},    // auf min geklemmt
+		{"150", 99}, // auf max geklemmt
+	}
+	for _, tc := range cases {
+		t.Run(tc.val, func(t *testing.T) {
+			t.Setenv(envToken, "tok")
+			t.Setenv(envDBGrowPct, tc.val)
+			cfg, err := FromEnv()
+			if err != nil {
+				t.Fatalf("unerwarteter fehler: %v", err)
+			}
+			if cfg.DBGrowThresholdPct != tc.want {
+				t.Errorf("DBGrowThresholdPct = %d, want %d", cfg.DBGrowThresholdPct, tc.want)
+			}
+		})
+	}
+}
+
+func TestFromEnvDBCompaction(t *testing.T) {
+	t.Run("defaults", func(t *testing.T) {
+		t.Setenv(envToken, "tok")
+		t.Setenv(envDBCompact, "")
+		t.Setenv(envDBCompInt, "")
+		cfg, err := FromEnv()
+		if err != nil {
+			t.Fatalf("unerwarteter fehler: %v", err)
+		}
+		if cfg.DBCompactEnabled {
+			t.Error("DBCompactEnabled = true, want false (Default aus)")
+		}
+		if cfg.DBCompactIntervalH != defaultCompactH {
+			t.Errorf("DBCompactIntervalH = %d, want %d", cfg.DBCompactIntervalH, defaultCompactH)
+		}
+	})
+	t.Run("aktiviert mit Intervall", func(t *testing.T) {
+		t.Setenv(envToken, "tok")
+		t.Setenv(envDBCompact, "true")
+		t.Setenv(envDBCompInt, "12")
+		cfg, err := FromEnv()
+		if err != nil {
+			t.Fatalf("unerwarteter fehler: %v", err)
+		}
+		if !cfg.DBCompactEnabled {
+			t.Error("DBCompactEnabled = false, want true")
+		}
+		if cfg.DBCompactIntervalH != 12 {
+			t.Errorf("DBCompactIntervalH = %d, want 12", cfg.DBCompactIntervalH)
+		}
+	})
+	t.Run("Intervall geklemmt", func(t *testing.T) {
+		t.Setenv(envToken, "tok")
+		t.Setenv(envDBCompInt, "0")
+		cfg, err := FromEnv()
+		if err != nil {
+			t.Fatalf("unerwarteter fehler: %v", err)
+		}
+		if cfg.DBCompactIntervalH != 1 {
+			t.Errorf("DBCompactIntervalH = %d, want 1 (min)", cfg.DBCompactIntervalH)
+		}
+	})
 }
 
 func TestFromEnvSyncDefault(t *testing.T) {
