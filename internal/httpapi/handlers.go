@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"math"
@@ -24,6 +25,16 @@ import (
 // die nie endende Antwort zurückzuhalten. Der Client ignoriert Leerzeilen.
 // Variable (nicht const), damit Tests das Intervall verkürzen können.
 var observeHeartbeat = 15 * time.Second
+
+// queryHeartbeat ist das Intervall, in dem ein laufender run-query-Scan eine
+// Leerzeile sendet, solange noch kein Treffer geflossen ist. Ein selektives
+// Prädikat über einen breiten Scope kann lange scannen, bevor (wenn überhaupt)
+// der erste Treffer kommt; ohne ein Lebenszeichen erreichen weder Header noch
+// Body den Reverse-Proxy, der die Upstream-Verbindung dann nach seinem
+// Read-Timeout zurücksetzt (502 am Ingress). Die Leerzeile hält die Verbindung
+// offen und stupst puffernde Proxies an. Der Client ignoriert Leerzeilen (wie
+// beim observe-Stream). Variable (nicht const), damit Tests sie verkürzen können.
+var queryHeartbeat = 15 * time.Second
 
 // defaultReadLimit ist die Obergrenze an Events, die read-events / GET-events
 // ohne explizites `limit` zurückgeben. Sie schützt vor versehentlich breiten
@@ -1018,6 +1029,31 @@ func (s *Server) handleRunQuery(w http.ResponseWriter, r *http.Request) {
 		reqTypes, typeBounded = pred.RequiredTypes()
 	}
 
+	// Eine Query ohne Typ-Constraint kann den Typ-Index nicht nutzen und scannt
+	// den gesamten Scope; referenziert das Prädikat zusätzlich event.data, wird pro
+	// Event der Payload deserialisiert (teuerster Pfad — genau der gemeldete 502-
+	// Fall, ADR-028). Das melden wir als Warn-Header, damit Clients/das Dashboard auf den
+	// fehlenden Index hinweisen und einen engeren Scope bzw. ein `event.type ==`
+	// empfehlen können. Nur ein Hinweis — die Query läuft weiterhin (Kompatibilität).
+	if pred != nil && !typeBounded {
+		warn := "prädikat nutzt keinen typ-index (event.type-constraint fehlt) → vollständiger scan über den scope"
+		if pred.UsesData() {
+			warn += "; data-zugriff deserialisiert jedes event"
+		}
+		w.Header().Set("X-Clio-Query-Warning", warn)
+	}
+
+	// Query-Deadline (ADR-028): begrenzt die Scan-Dauer und damit die Haltezeit der
+	// bbolt-Lesetransaktion (ein langer Read unter Schreiblast blockiert die Wieder-
+	// verwendung freier Seiten → DB-/Speicherwachstum). 0 = aus (rückwärts-
+	// kompatibel). Der Scan-Loop prüft ctx in `guard` und bricht sauber ab.
+	ctx := r.Context()
+	if s.cfg.QueryTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, s.cfg.QueryTimeout)
+		defer cancel()
+	}
+
 	// Ab hier wird gestreamt: Header senden, Schreib-Deadline aufheben (ein Scan
 	// über einen breiten Scope mit selektivem Prädikat kann lange dauern und darf
 	// nicht von der Server-WriteTimeout gekappt werden), dann jeden Treffer direkt
@@ -1025,6 +1061,10 @@ func (s *Server) handleRunQuery(w http.ResponseWriter, r *http.Request) {
 	// gesammelt (konstanter Speicher, auch bei Millionen Events). Das Limit
 	// begrenzt zusätzlich die Ausgabe und bricht den Scan früh ab.
 	w.Header().Set("Content-Type", ndjsonContentType)
+	// Reverse-Proxies nicht puffern lassen — sonst hält der Proxy Header und
+	// Heartbeats zurück, bis genug Body geflossen ist (wie beim observe-Stream).
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.Header().Set("Cache-Control", "no-store, no-transform")
 	if limit > 0 {
 		w.Header().Set("X-Clio-Result-Limit", strconv.Itoa(limit))
 	}
@@ -1033,10 +1073,42 @@ func (s *Server) handleRunQuery(w http.ResponseWriter, r *http.Request) {
 
 	enc := json.NewEncoder(w)
 	flusher, _ := w.(http.Flusher)
+
+	// Sofort ein erstes Lebenszeichen flushen, damit die Header umgehend den Proxy
+	// erreichen (Time-to-first-byte ≈ 0 statt = Scan-Dauer). Ohne diesen Anstoß hält
+	// ein puffernder Reverse-Proxy die reine Header-Antwort zurück, bis das erste
+	// Body-Byte kommt — bei einem selektiven Prädikat erst am Scan-Ende. Leerzeile =
+	// Heartbeat, vom Client ignoriert (wie beim observe-Stream).
+	if flusher != nil {
+		_, _ = w.Write([]byte("\n"))
+		flusher.Flush()
+	}
+
 	var (
-		n       int
-		emitErr error
+		n         int
+		emitErr   error
+		aborted   bool // Scan per Deadline/Client-Abbruch beendet
+		lastWrite = time.Now()
 	)
+
+	// guard läuft vor jedem gescannten Event: prüft die Deadline/den Client-Abbruch
+	// und sendet bei Bedarf einen Heartbeat, solange noch kein Treffer geflossen ist.
+	// Rückgabe false bricht den Scan sauber ab.
+	guard := func() bool {
+		if ctx.Err() != nil {
+			aborted = true
+			return false
+		}
+		if flusher != nil && time.Since(lastWrite) >= queryHeartbeat {
+			if _, err := w.Write([]byte("\n")); err != nil {
+				emitErr = err
+				return false
+			}
+			flusher.Flush()
+			lastWrite = time.Now()
+		}
+		return true
+	}
 
 	// emit wendet das Prädikat an und schreibt jeden Treffer (ggf. projiziert)
 	// direkt heraus. Rückgabe true = weiter scannen, false = genug/Abbruch.
@@ -1060,10 +1132,20 @@ func (s *Server) handleRunQuery(w http.ResponseWriter, r *http.Request) {
 			return false
 		}
 		n++
+		lastWrite = time.Now()
 		if flusher != nil && n%512 == 0 {
 			flusher.Flush()
 		}
 		return limit == 0 || n < limit
+	}
+
+	// scan koppelt den Heartbeat-/Deadline-guard vor jeden Treffer-Versuch. Der
+	// Typ-Index-Pfad ruft guard selbst auf (auch für übersprungene Subjects).
+	scan := func(ev event.Event) bool {
+		if !guard() {
+			return false
+		}
+		return emit(ev)
 	}
 
 	var scanErr error
@@ -1080,11 +1162,14 @@ func (s *Server) handleRunQuery(w http.ResponseWriter, r *http.Request) {
 			// Subject-Index günstiger: Teilbaum scannen, Typ-Filter einschieben.
 			optsT := opts
 			optsT.Types = reqTypes
-			scanErr = s.store.ReadFunc(req.Subject, req.Recursive, optsT, emit)
+			scanErr = s.store.ReadFunc(req.Subject, req.Recursive, optsT, scan)
 		} else {
 			// Typ-Index günstiger (oder Kostenschätzung fehlgeschlagen → sicherer
 			// Default): nur die geforderten Typen laden, Subject nachfiltern.
 			scanErr = s.store.ReadByTypesFunc(reqTypes, opts, func(ev event.Event) bool {
+				if !guard() {
+					return false
+				}
 				if !store.MatchSubject(ev.Subject, req.Subject, req.Recursive) {
 					return true
 				}
@@ -1094,14 +1179,20 @@ func (s *Server) handleRunQuery(w http.ResponseWriter, r *http.Request) {
 	default:
 		// Kein sicherer Typ-Filter → vollständiger Scan des Scopes (streamend,
 		// bricht bei erreichtem Limit ab — kein Materialisieren des ganzen Scopes).
-		scanErr = s.store.ReadFunc(req.Subject, req.Recursive, opts, emit)
+		scanErr = s.store.ReadFunc(req.Subject, req.Recursive, opts, scan)
 	}
 
 	if flusher != nil {
 		flusher.Flush()
 	}
-	// Header/200 sind bereits gesendet — etwaige Fehler nur noch loggen.
+	// Header/200 sind bereits gesendet — etwaige Fehler nur noch loggen. Ein
+	// Deadline-/Abbruch-Treffer beendet den Stream bewusst (der Client erhält ein
+	// definiertes, ggf. unvollständiges Ergebnis statt einer hängenden Verbindung);
+	// der Status bleibt 200, weil bereits gestreamt wurde.
 	switch {
+	case aborted:
+		s.logger.Warn("run-query abgebrochen (deadline/client, stream bereits begonnen)",
+			"err", ctx.Err(), "subject", req.Subject, "treffer", n)
 	case emitErr != nil:
 		s.logger.Error("run-query ausgabe fehlgeschlagen (stream bereits begonnen)", "err", emitErr)
 	case scanErr != nil:

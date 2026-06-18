@@ -399,6 +399,7 @@
       <label class="inline">Limit <input id="q-limit" class="short" type="number" min="0" value="100" title="0 = unbegrenzt"></label>
       <input id="q-select" placeholder="select (Projektion, Komma) — z. B. id, data.amount" spellcheck="false" style="min-width:240px">
       <span class="spacer"></span>
+      <span id="q-index-warn" class="q-error" style="display:none" title="Diese Abfrage kann keinen Index nutzen und scannt den gesamten Scope."></span>
       <span id="q-status" class="badge">bereit</span>
     </div>
     <div class="adv-row">

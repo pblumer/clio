@@ -73,6 +73,15 @@ curl http://127.0.0.1:3000/api/v1/ping
 # -> {"status":"ok"}
 ```
 
+> **Liveness/Readiness:** Für Container-/Orchestrator-Probes `GET /api/v1/ping`
+> verwenden (auth-frei, ohne Store-Zugriff, eigene Goroutine je Request). So
+> bleibt die Probe von langlaufenden Lese-/Query-Scans **entkoppelt** und schlägt
+> nicht fälschlich an, nur weil gerade eine breite `run-query` läuft. Lese-/
+> Query-Routen (`read-events`, `run-query`, `observe-events`) eignen sich nicht
+> als Probe. RAM-Headroom einplanen: ein breiter Scan deserialisiert pro Event den
+> Payload und hält eine bbolt-Lesetransaktion offen — unter hoher Schreiblast
+> wächst der Speicher-/DB-Bedarf; ggf. `CLIO_QUERY_TIMEOUT` setzen.
+
 ### Interaktive API-Doku (OpenAPI / Swagger UI)
 
 Die laufende Instanz liefert ihre eigene Dokumentation aus — alles ins Binary
@@ -261,6 +270,7 @@ Build lokal mit `make package` proben.
 | `CLIO_EVENT_AUTHORSHIP` | nein | `false` | Übernimmt (truthy) den `kid` des authentifizierten Schreibers als CloudEvents-Extension `clioauthkid` in jedes neu geschriebene Event (Urheberschaft, ADR-025). Append-only-konform, in Hash/Signatur gebunden; wirkt nur auf neue Events, Default aus = byte-identisch zum bisherigen Verhalten. |
 | `CLIO_DEV_MODE`   | nein    | `false`    | Dev-Mode (truthy, z. B. `1`/`true`): schaltet die destruktiven Dev-Routen (`POST /api/v1/dev/reset-database`, `POST /api/v1/dev/bulk-import-events`, `POST /api/v1/dev/close-bulk-import`) und die „Dev-Zone" im Dashboard frei. **Nicht in Produktion** (siehe ADR-022). |
 | `CLIO_OBSERVE_PREAMBLE_BYTES` | nein | `4096` | Größe des Anti-Buffering-Polsters (Whitespace), das ein `observe`-Stream beim Verbindungsaufbau einmalig sendet. Manche puffernden Reverse-Proxies/Security-Gateways geben einen Stream erst weiter, wenn genug Bytes geflossen sind. Hochdrehen (z. B. `16384`/`65536`), falls Live-Events hinter einem Firmen-Proxy nicht durchkommen; `0` schaltet es ab. Vom Client als Leerzeile ignoriert. |
+| `CLIO_QUERY_TIMEOUT` | nein | `0` (aus) | Maximale Laufzeit einer einzelnen `run-query`-Auswertung als Go-Dauer (z. B. `30s`, `2m`). Ein selektives Prädikat ohne `event.type ==`-Constraint scannt den gesamten Scope und hält dabei eine bbolt-Lesetransaktion — unter Schreiblast blockiert das die Wiederverwendung freier Seiten (DB-/Speicherwachstum). Die Deadline bricht solche Scans sauber ab. `0` (Default) = unbegrenzt (rückwärtskompatibel). Der `run-query`-Stream sendet unabhängig davon ein sofortiges Lebenszeichen plus periodische Heartbeats, die die Proxy-Verbindung während langer Scans offen halten. |
 
 \* **Auth-Material beim Start:** Ist der Schlüsselbund leer (frische DB), muss
 **eines** von `CLIO_BOOTSTRAP_ADMIN_KEY` oder `CLIO_API_TOKEN` gesetzt sein —
@@ -544,6 +554,24 @@ Events gilt als „kein Treffer".
 > `X-Clio-Result-Limit`). Das schützt vor breiten Queries mit vielen Treffern;
 > ein höheres Limit setzt man explizit. Ein selektives Prädikat über einen großen
 > Scope kann lange scannen — die Server-`WriteTimeout` greift hier bewusst nicht.
+
+> **Hinter einem Reverse-Proxy / Firmennetz:** Wie der `observe`-Stream sendet
+> `run-query` sofort beim Verbindungsaufbau ein Lebenszeichen (Leerzeile, vom
+> Client ignoriert) und danach periodische Heartbeats, und setzt
+> `X-Accel-Buffering: no` plus `Cache-Control: no-store, no-transform`. Das hält
+> die Verbindung offen, auch wenn ein selektives Prädikat lange scannt, bevor der
+> erste Treffer kommt — sonst erreichten weder Header noch Body den Proxy und der
+> setzt die Upstream-Verbindung nach seinem Read-Timeout zurück (**502 am
+> Ingress**). Bei nginx ggf. `proxy_buffering off;` bzw. `proxy_read_timeout`
+> erhöhen. Optional begrenzt `CLIO_QUERY_TIMEOUT` die Scan-Dauer serverseitig.
+
+> **Index nutzbar?** Kann ein Prädikat keinen Typ-Index nutzen (kein
+> `event.type ==`-Constraint), scannt es den gesamten Scope; der Server meldet das
+> im Antwort-Header `X-Clio-Query-Warning` (das Dashboard zeigt dann einen
+> Hinweis). Referenziert das Prädikat zusätzlich `event.data`, wird pro Event der
+> Payload deserialisiert — der teuerste Fall. Abhilfe: `event.type == '…'`
+> voranstellen (aktiviert den Typ-Index), engerer `subject`-Scope, kleineres
+> `limit`, oder Payload-Suchen nicht zeitgleich mit hoher Schreiblast fahren.
 
 > **Performance:** Schränkt das Prädikat den `event.type` zwingend ein
 > (`event.type == 'x'`, `event.type in [...]`, auch als `&&`-Teil), nutzt
