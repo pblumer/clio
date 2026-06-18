@@ -168,6 +168,12 @@ type Store struct {
 	// (Open/Reopen), lesbar ohne Lock, weil unveränderlich.
 	pageSize int
 
+	// lastCompact hält den zuletzt im laufenden Betrieb durchgeführten
+	// Online-Compact (CompactInPlace), für die Anzeige im Dashboard/Betrieb.
+	// nil = in dieser Laufzeit noch keiner.
+	lastCompactMu sync.Mutex
+	lastCompact   *CompactionInfo
+
 	now      func() time.Time
 	syncMode SyncMode
 

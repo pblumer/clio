@@ -99,6 +99,21 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Storage-Betriebsstatus (für Dashboard/Betrieb): Auto-Compaction- und
+	// Monitor-Konfiguration sowie der letzte Online-Compact dieser Laufzeit.
+	body["dbCompactEnabled"] = s.cfg.DBCompactEnabled
+	if s.cfg.DBCompactEnabled {
+		body["dbCompactIntervalH"] = s.cfg.DBCompactIntervalH
+	}
+	body["dbGrowThresholdPct"] = s.cfg.DBGrowThresholdPct
+	if lc, ok := s.store.LastCompaction(); ok {
+		body["databaseLastCompaction"] = map[string]any{
+			"at":       lc.At.Format(time.RFC3339Nano),
+			"oldBytes": lc.OldBytes,
+			"newBytes": lc.NewBytes,
+		}
+	}
+
 	writeJSON(w, http.StatusOK, body)
 }
 

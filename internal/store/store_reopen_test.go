@@ -45,6 +45,28 @@ func TestCompactInPlacePreservesData(t *testing.T) {
 	}
 }
 
+// TestLastCompactionTracking prüft, dass CompactInPlace den letzten Online-Compact
+// festhält (für die Dashboard-Anzeige) und vorher nichts gemeldet wird.
+func TestLastCompactionTracking(t *testing.T) {
+	st := openTemp(t)
+	if _, ok := st.LastCompaction(); ok {
+		t.Fatal("vor jedem Compact sollte LastCompaction ok=false liefern")
+	}
+	for i := 0; i < 50; i++ {
+		appendAll(t, st, event.Candidate{Source: "s", Subject: "/s", Type: "t"})
+	}
+	if _, _, err := st.CompactInPlace(); err != nil {
+		t.Fatalf("CompactInPlace: %v", err)
+	}
+	lc, ok := st.LastCompaction()
+	if !ok {
+		t.Fatal("nach CompactInPlace sollte LastCompaction ok=true liefern")
+	}
+	if lc.At.IsZero() || lc.OldBytes <= 0 || lc.NewBytes <= 0 {
+		t.Fatalf("CompactionInfo unplausibel: %+v", lc)
+	}
+}
+
 // TestCompactInPlacePreservesPreallocation stellt sicher, dass der Reopen nach
 // der Kompaktierung die Vorbelegung wiederherstellt — sonst schrumpfte die Datei
 // auf Datengröße und die Remap-Stalls kehrten zurück.
