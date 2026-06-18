@@ -78,11 +78,17 @@ Streaming-Endpunkt.
 
 ### Stufe 3 — Subject-Browser  ✅ umgesetzt
 Dritter Tab „Explorer" im `/ui`. Read-only: navigierbarer, ein-/ausklappbarer
-Subject-Baum aus `read-subjects?tree=true` (Klick auf ein Subject lädt dessen
-Events via `…/events/<subject>?recursive=false`), Event-Typen mit Anzahl und
-aufklappbaren JSON-Schemas (`read-event-types` / `read-event-schema`) sowie ein
-Integritäts-Panel (`verify` / `public-key`). Erneut kein neuer Server-Code —
-alle Endpunkte existierten bereits.
+Subject-Baum, der seine Knoten **lazy und seitenweise** über
+`read-subjects?children=<pfad>&after=…&limit=…` nachlädt (Klick auf ein Subject
+lädt dessen Events via `…/events/<subject>?recursive=false`), Event-Typen mit
+Anzahl und aufklappbaren JSON-Schemas (`read-event-types` / `read-event-schema`)
+sowie ein Integritäts-Panel (`verify` / `public-key`).
+
+> Skalierung: Der ursprüngliche `read-subjects?tree=true` materialisierte den
+> ganzen Baum auf einmal und blockierte den Browser bei Millionen Subjects. Der
+> `children`-Modus (gestützt auf den `subj_count`-Index) lädt pro Aufklappen nur
+> eine Seite direkter Kinder; „… mehr laden" holt die nächste. `tree=true` bleibt
+> für kleine/programmatische Nutzung erhalten.
 
 ### Stufe 5 — Query-Konsole &amp; Hilfe  ✅ umgesetzt
 Vierter Tab „Query" im `/ui`: eine `run-query`-Konsole mit einem leichtgewichtigen

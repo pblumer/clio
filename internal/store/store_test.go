@@ -432,6 +432,102 @@ func TestSubjects(t *testing.T) {
 	}
 }
 
+func TestChildren(t *testing.T) {
+	st := openTemp(t)
+	appendAll(t, st,
+		event.Candidate{Source: "s", Subject: "/books/42", Type: "acquired"},
+		event.Candidate{Source: "s", Subject: "/books/99", Type: "acquired"},
+		event.Candidate{Source: "s", Subject: "/books/42", Type: "borrowed"},
+		event.Candidate{Source: "s", Subject: "/books", Type: "meta"},   // Events direkt auf dem Eltern-Subject
+		event.Candidate{Source: "s", Subject: "/booksstore", Type: "x"}, // Prefix-Geschwister zu /books
+		event.Candidate{Source: "s", Subject: "/movies/7", Type: "y"},
+	)
+
+	// Wurzel: direkte Kinder /books, /booksstore, /movies (alphabetisch).
+	root, more, err := st.Children("/", "", 0)
+	if err != nil {
+		t.Fatalf("Children(/): %v", err)
+	}
+	if more {
+		t.Fatalf("Children(/) more = true, want false")
+	}
+	wantRoot := []ChildInfo{
+		{Subject: "/books", Count: 1, Total: 4, HasChildren: true},
+		{Subject: "/booksstore", Count: 1, Total: 1, HasChildren: false},
+		{Subject: "/movies", Count: 0, Total: 1, HasChildren: true},
+	}
+	if len(root) != len(wantRoot) {
+		t.Fatalf("Children(/) = %+v, want %+v", root, wantRoot)
+	}
+	for i, w := range wantRoot {
+		if root[i] != w {
+			t.Fatalf("Children(/)[%d] = %+v, want %+v", i, root[i], w)
+		}
+	}
+
+	// /books: nur direkte Kinder /books/42, /books/99 — NICHT /booksstore und
+	// nicht das Eltern-Subject /books selbst.
+	books, _, err := st.Children("/books", "", 0)
+	if err != nil {
+		t.Fatalf("Children(/books): %v", err)
+	}
+	wantBooks := []ChildInfo{
+		{Subject: "/books/42", Count: 2, Total: 2},
+		{Subject: "/books/99", Count: 1, Total: 1},
+	}
+	if len(books) != len(wantBooks) {
+		t.Fatalf("Children(/books) = %+v, want %+v", books, wantBooks)
+	}
+	for i, w := range wantBooks {
+		if books[i] != w {
+			t.Fatalf("Children(/books)[%d] = %+v, want %+v", i, books[i], w)
+		}
+	}
+
+	// Blatt ohne Kinder.
+	leaf, more, err := st.Children("/books/42", "", 0)
+	if err != nil || more || len(leaf) != 0 {
+		t.Fatalf("Children(/books/42) = %+v, more=%v err=%v, want leer", leaf, more, err)
+	}
+}
+
+func TestChildrenPagination(t *testing.T) {
+	st := openTemp(t)
+	appendAll(t, st,
+		event.Candidate{Source: "s", Subject: "/x/a", Type: "t"},
+		event.Candidate{Source: "s", Subject: "/x/b", Type: "t"},
+		event.Candidate{Source: "s", Subject: "/x/c", Type: "t"},
+		event.Candidate{Source: "s", Subject: "/x/d", Type: "t"},
+	)
+
+	// Seite 1: limit=2 → /x/a, /x/b und more=true.
+	p1, more, err := st.Children("/x", "", 2)
+	if err != nil {
+		t.Fatalf("Children(/x): %v", err)
+	}
+	if !more || len(p1) != 2 || p1[0].Subject != "/x/a" || p1[1].Subject != "/x/b" {
+		t.Fatalf("Seite1 = %+v, more=%v, want /x/a,/x/b more=true", p1, more)
+	}
+
+	// Seite 2: after = letztes Kind aus Seite 1 → /x/c, /x/d, danach Schluss.
+	p2, more, err := st.Children("/x", p1[1].Subject, 2)
+	if err != nil {
+		t.Fatalf("Children(/x, after): %v", err)
+	}
+	if more || len(p2) != 2 || p2[0].Subject != "/x/c" || p2[1].Subject != "/x/d" {
+		t.Fatalf("Seite2 = %+v, more=%v, want /x/c,/x/d more=false", p2, more)
+	}
+
+	// after = letztes Kind überhaupt → leer.
+	p3, more, err := st.Children("/x", p2[1].Subject, 2)
+	if err != nil {
+		t.Fatalf("Children(/x, after2): %v", err)
+	}
+	if more || len(p3) != 0 {
+		t.Fatalf("Seite3 = %+v, more=%v, want leer more=false", p3, more)
+	}
+}
+
 func TestSubjectsEmptyStore(t *testing.T) {
 	st := openTemp(t)
 	subs, err := st.Subjects("")
