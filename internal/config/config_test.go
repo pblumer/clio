@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestFromEnvDefaults(t *testing.T) {
 	t.Setenv(envToken, "tok")
@@ -105,6 +108,42 @@ func TestFromEnvSyncInvalid(t *testing.T) {
 
 	if _, err := FromEnv(); err == nil {
 		t.Fatal("erwartete fehler bei ungültigem CLIO_SYNC, bekam nil")
+	}
+}
+
+func TestFromEnvQueryTimeoutDefaultOff(t *testing.T) {
+	t.Setenv(envToken, "tok")
+	t.Setenv(envQueryTO, "")
+
+	cfg, err := FromEnv()
+	if err != nil {
+		t.Fatalf("unerwarteter fehler: %v", err)
+	}
+	if cfg.QueryTimeout != 0 {
+		t.Errorf("QueryTimeout = %v, want 0 (aus) ohne %s", cfg.QueryTimeout, envQueryTO)
+	}
+}
+
+func TestFromEnvQueryTimeoutValid(t *testing.T) {
+	t.Setenv(envToken, "tok")
+	t.Setenv(envQueryTO, "90s")
+
+	cfg, err := FromEnv()
+	if err != nil {
+		t.Fatalf("unerwarteter fehler: %v", err)
+	}
+	if cfg.QueryTimeout != 90*time.Second {
+		t.Errorf("QueryTimeout = %v, want 90s", cfg.QueryTimeout)
+	}
+}
+
+func TestFromEnvQueryTimeoutInvalid(t *testing.T) {
+	for _, v := range []string{"schnell", "-5s"} {
+		t.Setenv(envToken, "tok")
+		t.Setenv(envQueryTO, v)
+		if _, err := FromEnv(); err == nil {
+			t.Errorf("erwartete fehler bei %s=%q, bekam nil", envQueryTO, v)
+		}
 	}
 }
 

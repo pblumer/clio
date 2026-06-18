@@ -40,6 +40,12 @@ type Predicate struct {
 // Expr liefert den ursprünglichen Ausdruck (für Logging/Fehlermeldungen).
 func (p *Predicate) Expr() string { return p.expr }
 
+// UsesData meldet, ob das Prädikat auf `event.data` Bezug nimmt und daher pro
+// Event den (teuren) Payload deserialisieren muss. Zusammen mit RequiredTypes
+// erlaubt das dem Aufrufer zu erkennen, ob eine Query ohne nutzbaren Index über
+// den gesamten Scope scannt (Daten-Prädikat ohne Typ-Constraint).
+func (p *Predicate) UsesData() bool { return p.usesData }
+
 // RequiredTypes liefert die Menge der event.type-Werte, auf die das Prädikat
 // notwendigerweise eingeschränkt ist (z. B. {„order-placed"} für
 // `event.type == 'order-placed' && …`). Das zweite Resultat ist false, wenn sich

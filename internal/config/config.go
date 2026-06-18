@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"time"
 )
 
 // Config bündelt alle Laufzeit-Einstellungen des Servers.
@@ -60,6 +61,17 @@ type Config struct {
 	// den Streaming-Modus. Per CLIO_OBSERVE_PREAMBLE_BYTES einstellbar; 0 schaltet
 	// das Polster ab. Vom Client als Leerzeile ignoriert.
 	ObservePreambleBytes int
+
+	// QueryTimeout begrenzt die Laufzeit einer einzelnen run-query-Auswertung
+	// (Scan + Prädikat). Ein selektives Prädikat ohne Typ-Constraint scannt den
+	// gesamten Scope und hält dabei eine bbolt-Lesetransaktion — unter Schreiblast
+	// blockiert das die Wiederverwendung freier Seiten (DB-/Speicherwachstum). Die
+	// Deadline bricht solche Scans sauber ab, statt die Verbindung hängen zu
+	// lassen. Per CLIO_QUERY_TIMEOUT als Go-Dauer (z. B. "30s", "2m") einstellbar;
+	// 0 (Default) schaltet die Deadline ab — rückwärtskompatibel zum bisherigen,
+	// unbegrenzten Verhalten. Der run-query-Stream sendet unabhängig davon einen
+	// Heartbeat, der die Proxy-Verbindung während langer Scans offen hält.
+	QueryTimeout time.Duration
 }
 
 // Environment-Variablen, aus denen die Konfiguration gelesen wird.
@@ -74,6 +86,7 @@ const (
 	envCompress  = "CLIO_COMPRESS"
 	envEventAuth = "CLIO_EVENT_AUTHORSHIP"
 	envObsvPre   = "CLIO_OBSERVE_PREAMBLE_BYTES"
+	envQueryTO   = "CLIO_QUERY_TIMEOUT"
 
 	defaultAddr    = ":3000"
 	defaultDBPath  = "clio.db"
@@ -109,7 +122,31 @@ func FromEnv() (Config, error) {
 		return Config{}, fmt.Errorf("%s muss group, always oder off sein, war %q", envSync, cfg.Sync)
 	}
 
+	to, err := parseDurationDefault(envQueryTO, 0)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.QueryTimeout = to
+
 	return cfg, nil
+}
+
+// parseDurationDefault liest eine Go-Dauer (z. B. "30s", "2m") aus der Umgebung.
+// Leer ergibt fallback; ein unlesbarer oder negativer Wert ist ein Fehler (lieber
+// laut scheitern als still eine kaputte Deadline übernehmen).
+func parseDurationDefault(key string, fallback time.Duration) (time.Duration, error) {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback, nil
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return 0, fmt.Errorf("%s muss eine Go-Dauer sein (z. B. \"30s\"), war %q", key, v)
+	}
+	if d < 0 {
+		return 0, fmt.Errorf("%s darf nicht negativ sein, war %q", key, v)
+	}
+	return d, nil
 }
 
 // parseIntDefault liest eine nicht-negative Ganzzahl aus der Umgebung und

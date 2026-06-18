@@ -1595,6 +1595,13 @@ function setQErr(msg) {
   if (!msg) { el.style.display = "none"; return; }
   el.textContent = msg; el.style.display = "inline-block";
 }
+function setQIndexWarn(msg) {
+  const el = $("q-index-warn");
+  if (!msg) { el.style.display = "none"; return; }
+  el.textContent = "⚠ kein Index — voller Scan";
+  el.title = msg + "\n\nTipp: ein `event.type == '…'`-Constraint aktiviert den Typ-Index; engerer Subject-Scope und kleineres Limit helfen zusätzlich.";
+  el.style.display = "inline-block";
+}
 function looksLikeEvent(o) { return o && typeof o === "object" && "id" in o && "type" in o && "subject" in o; }
 function renderJSON(o) {
   const pre = document.createElement("pre");
@@ -1608,7 +1615,7 @@ async function runQuery() {
   sessionStorage.setItem("clioToken", token);
   const subject = $("q-subject").value.trim();
   if (!subject || subject[0] !== "/") { setQErr('subject muss mit "/" beginnen'); return; }
-  setQErr("");
+  setQErr(""); setQIndexWarn("");
   const req = { subject, recursive: $("q-recursive").checked };
   const where = qEditor.value.trim();
   if (where) req.where = where;
@@ -1627,6 +1634,9 @@ async function runQuery() {
       method: "POST", headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
       body: JSON.stringify(req), cache: "no-store",
     });
+    // Hinweis des Servers, wenn die Abfrage keinen Index nutzen kann (voller
+    // Scan über den Scope) — z. B. ein Daten-Prädikat ohne event.type-Constraint.
+    setQIndexWarn(r.headers.get("X-Clio-Query-Warning") || "");
     if (r.status === 401) { setQErr("Token ungültig (401)."); $("q-status").textContent = "401"; return; }
     if (!r.ok) {
       let detail = "HTTP " + r.status;
@@ -1663,7 +1673,7 @@ function persistQuery() {
 }
 $("q-run").addEventListener("click", runQuery);
 $("q-clear").addEventListener("click", () => {
-  qEditor.value = ""; setQErr(""); syncEditor(); persistQuery();
+  qEditor.value = ""; setQErr(""); setQIndexWarn(""); syncEditor(); persistQuery();
   qLastRows = []; $("q-result-bar").style.display = "none";
   $("q-result").innerHTML = '<div class="empty">Geleert.</div>';
 });

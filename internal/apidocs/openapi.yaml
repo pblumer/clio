@@ -474,6 +474,23 @@ paths:
           description: |
             Passende Events als NDJSON. Bei gesetztem `select` enthält jede Zeile
             nur die projizierten Felder statt des vollen Events.
+
+            Der Stream sendet beim Verbindungsaufbau sofort eine Leerzeile und
+            danach periodische Heartbeat-Leerzeilen, solange noch kein Treffer
+            fließt (vom Client ignoriert). Das hält die Verbindung hinter
+            puffernden Reverse-Proxies offen, auch wenn ein selektives Prädikat
+            lange scannt.
+          headers:
+            X-Clio-Result-Limit:
+              description: Wirksame Treffer-Obergrenze (nur bei limit > 0 gesetzt).
+              schema: { type: integer }
+            X-Clio-Query-Warning:
+              description: |
+                Gesetzt, wenn das Prädikat keinen Typ-Index nutzen kann (kein
+                `event.type ==`-Constraint) und daher den gesamten Scope scannt;
+                referenziert es zusätzlich `event.data`, wird pro Event der Payload
+                deserialisiert. Hinweis zur Optimierung — die Query läuft dennoch.
+              schema: { type: string }
           content:
             application/x-ndjson:
               schema: { $ref: "#/components/schemas/EventStream" }

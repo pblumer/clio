@@ -102,6 +102,31 @@ func TestPredicateExpr(t *testing.T) {
 	}
 }
 
+func TestPredicateUsesData(t *testing.T) {
+	c := mustCompiler(t)
+	tests := []struct {
+		expr string
+		want bool
+	}{
+		{"event.type == 'x'", false},
+		{"event.subject == '/a'", false},
+		{"has(event.data.amount) && event.data.amount > 100", true},
+		{"event.data.lastName == 'User25199'", true},
+		// Falsch-positiv ist unkritisch (data wird dann nur geparst): das Token
+		// 'data' im String-Literal genügt dem konservativen Muster.
+		{"event.type == 'data'", true},
+	}
+	for _, tc := range tests {
+		p, err := c.Compile(tc.expr)
+		if err != nil {
+			t.Fatalf("compile %q: %v", tc.expr, err)
+		}
+		if got := p.UsesData(); got != tc.want {
+			t.Errorf("UsesData(%q) = %v, want %v", tc.expr, got, tc.want)
+		}
+	}
+}
+
 func TestValidateFields(t *testing.T) {
 	tests := []struct {
 		name    string
