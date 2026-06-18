@@ -95,22 +95,42 @@ func New(cfg config.Config, st *store.Store, logger *slog.Logger, opts ...Option
 			opt(s)
 		}
 	}
-	// Eventmengen-Histogramm aus der bestehenden Historie aufbauen (nach
-	// Event-Zeit), damit das Dashboard auch ohne neue Writes zeigt, wann wie
-	// viele Events gesendet wurden. origin = früheste (erste) Eventzeit.
-	var hist *eventstats.Histogram
-	if err := st.ForEachEventTimeSource(func(t time.Time, source string) {
-		if hist == nil {
-			hist = eventstats.New(t)
-		}
-		hist.AddSource(1, t, source)
-	}); err != nil {
-		s.logger.Error("event-stats: seeding aus der historie fehlgeschlagen", "err", err)
+
+	// Eventmengen-Histogramm für das Dashboard. Der Origin (Beginn von Bucket 0)
+	// ist die Zeit des ersten Events — günstig per FirstEventTime (O(1)) ermittelt,
+	// damit historische Events korrekt über die Zeitachse verteilt werden.
+	//
+	// WICHTIG: Das eigentliche Befüllen aus der Historie scannt JEDES Event und
+	// lief früher SYNCHRON im Konstruktor — bei Millionen Events blockierte das den
+	// Start des HTTP-Listeners um Sekunden (→ 502 vom vorgelagerten Proxy bei jedem
+	// (Neu-)Start). Es läuft jetzt asynchron im Hintergrund: der Server ist sofort
+	// erreichbar, der Eventstrom-Chart füllt sich nach.
+	origin := s.startedAt
+	if t, ok, err := st.FirstEventTime(); err != nil {
+		s.logger.Error("event-stats: erste eventzeit ermitteln fehlgeschlagen", "err", err)
+	} else if ok {
+		origin = t
 	}
-	if hist == nil {
-		hist = eventstats.New(s.startedAt)
+	s.events = eventstats.New(origin)
+
+	// Saubere Grenze gegen Doppelzählung: nur Events bis zum aktuell höchsten Seq
+	// werden im Hintergrund geseedet; alle danach geschriebenen Events zählt der
+	// Write-Pfad (recordEventStats) selbst. Da der Listener erst nach New() startet,
+	// sind zur Aufnahme dieser Grenze noch keine neuen Writes dieses Prozesses möglich.
+	seedUpTo, err := st.Count()
+	if err != nil {
+		s.logger.Error("event-stats: seed-grenze ermitteln fehlgeschlagen", "err", err)
 	}
-	s.events = hist
+	if seedUpTo > 0 {
+		go func() {
+			if err := st.ForEachEventTimeSource(seedUpTo, func(t time.Time, source string) {
+				s.events.AddSource(1, t, source)
+			}); err != nil {
+				s.logger.Error("event-stats: seeding aus der historie fehlgeschlagen", "err", err)
+			}
+		}()
+	}
+
 	s.routes()
 	return s
 }

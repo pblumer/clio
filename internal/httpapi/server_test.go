@@ -1151,21 +1151,34 @@ func TestEventStatsSeededFromHistory(t *testing.T) {
 		`{"events":[{"source":"s","subject":"/a","type":"t"},{"source":"s","subject":"/a","type":"t"},{"source":"s","subject":"/b","type":"t"}]}`)
 
 	// … dann einen NEUEN Server auf demselben Store erzeugen (wie ein Neustart):
-	// das Histogramm muss aus der bestehenden Historie aufgebaut werden.
+	// das Histogramm muss aus der bestehenden Historie aufgebaut werden. Das
+	// Seeding läuft seit Fix gegen die Start-Blockade ASYNCHRON im Hintergrund
+	// (der Listener darf nicht warten), daher hier kurz pollen, bis es greift.
 	srv2 := New(cfg, st, nil)
-	rec := do(t, srv2, http.MethodGet, "/api/v1/event-stats", adminToken, "")
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", rec.Code)
-	}
 	var got struct {
 		Counts []uint64 `json:"counts"`
 		Total  uint64   `json:"total"`
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
-		t.Fatalf("dekodieren: %v", err)
-	}
-	if got.Total != 3 {
-		t.Fatalf("total nach Neustart = %d, want 3 (Seeding aus Historie)", got.Total)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		rec := do(t, srv2, http.MethodGet, "/api/v1/event-stats", adminToken, "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", rec.Code)
+		}
+		got = struct {
+			Counts []uint64 `json:"counts"`
+			Total  uint64   `json:"total"`
+		}{}
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatalf("dekodieren: %v", err)
+		}
+		if got.Total == 3 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("total nach Neustart = %d, want 3 (asynchrones Seeding aus Historie)", got.Total)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 	var sum uint64
 	for _, c := range got.Counts {
@@ -1173,6 +1186,56 @@ func TestEventStatsSeededFromHistory(t *testing.T) {
 	}
 	if sum != 3 {
 		t.Fatalf("bucket-summe = %d, want 3", sum)
+	}
+}
+
+func TestReadEventsLimit(t *testing.T) {
+	srv := newTestServer(t)
+	do(t, srv, http.MethodPost, "/api/v1/write-events", adminToken,
+		`{"events":[{"source":"s","subject":"/a","type":"t"},{"source":"s","subject":"/a","type":"t"},`+
+			`{"source":"s","subject":"/a","type":"t"},{"source":"s","subject":"/a","type":"t"},{"source":"s","subject":"/a","type":"t"}]}`)
+
+	countLines := func(rec *httptest.ResponseRecorder) int {
+		n := 0
+		for _, ln := range strings.Split(strings.TrimSpace(rec.Body.String()), "\n") {
+			if strings.TrimSpace(ln) != "" {
+				n++
+			}
+		}
+		return n
+	}
+
+	// Explizites Limit kappt die Ausgabe und meldet die Obergrenze im Header.
+	rec := do(t, srv, http.MethodPost, "/api/v1/read-events", adminToken, `{"subject":"/a","limit":2}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if got := countLines(rec); got != 2 {
+		t.Fatalf("zeilen = %d, want 2 (limit)", got)
+	}
+	if h := rec.Header().Get("X-Clio-Result-Limit"); h != "2" {
+		t.Fatalf("X-Clio-Result-Limit = %q, want \"2\"", h)
+	}
+
+	// Ohne Limit greift der Default (hier > 5) → alle 5 Events, Default-Header.
+	rec = do(t, srv, http.MethodPost, "/api/v1/read-events", adminToken, `{"subject":"/a"}`)
+	if got := countLines(rec); got != 5 {
+		t.Fatalf("zeilen ohne limit = %d, want 5", got)
+	}
+	if h := rec.Header().Get("X-Clio-Result-Limit"); h != strconv.Itoa(defaultReadLimit) {
+		t.Fatalf("X-Clio-Result-Limit = %q, want default %d", h, defaultReadLimit)
+	}
+
+	// GET-Pfad: limit-Query-Param wirkt ebenso.
+	rec = do(t, srv, http.MethodGet, "/api/v1/events/a?limit=1", adminToken, "")
+	if got := countLines(rec); got != 1 {
+		t.Fatalf("GET-pfad zeilen = %d, want 1 (limit)", got)
+	}
+
+	// Negatives Limit → 400.
+	rec = do(t, srv, http.MethodPost, "/api/v1/read-events", adminToken, `{"subject":"/a","limit":-1}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status bei negativem limit = %d, want 400", rec.Code)
 	}
 }
 

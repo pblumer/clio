@@ -386,6 +386,14 @@ curl -X POST http://127.0.0.1:3000/api/v1/read-events \
 Der optionale `types`-Filter ist mit `recursive` und `lowerBound`/`upperBound`
 kombinierbar und gilt ebenso für `observe-events`. Leer/weggelassen = alle Typen.
 
+> **Streaming & `limit`:** `read-events` streamt die Treffer als NDJSON
+> (konstanter Server-Speicher, unabhängig von der Treffermenge) und kappt die
+> Ausgabe ohne explizites `limit` bei einer **Default-Obergrenze** (Schutz vor
+> versehentlich breiten Reads wie `/` über die gesamte Historie). Die geltende
+> Obergrenze steht im Antwort-Header `X-Clio-Result-Limit`; ein höheres Limit
+> setzt man explizit (`{"subject":"/","limit":1000000}` bzw. `?limit=…` auf dem
+> GET-Pfad). Da gestreamt wird, ist auch ein großes Limit speicherschonend.
+
 ### Bequemer lesen per GET-Pfad
 
 Für `curl`/Tools gibt es eine schreibgeschützte Komfortroute, bei der das Subject
