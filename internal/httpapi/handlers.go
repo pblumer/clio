@@ -939,6 +939,29 @@ func (s *Server) doObserve(w http.ResponseWriter, r *http.Request, subject strin
 	beat := time.NewTicker(observeHeartbeat)
 	defer beat.Stop()
 
+	// encodeIfMatch kodiert ev in den Stream, sofern es im Scope/Typ-Filter liegt
+	// und neuer als lastID ist — ohne zu flushen. Liefert false nur bei einem
+	// Schreibfehler (Client weg); der Aufrufer beendet dann den Stream.
+	encodeIfMatch := func(ev event.Event) bool {
+		id, perr := strconv.ParseUint(ev.ID, 10, 64)
+		if perr != nil || id <= lastID {
+			return true
+		}
+		if !store.MatchSubject(ev.Subject, subject, recursive) {
+			return true
+		}
+		if typeFilter != nil {
+			if _, ok := typeFilter[ev.Type]; !ok {
+				return true
+			}
+		}
+		if err := enc.Encode(ev); err != nil {
+			return false
+		}
+		lastID = id
+		return true
+	}
+
 	ctx := r.Context()
 	for {
 		select {
@@ -952,23 +975,24 @@ func (s *Server) doObserve(w http.ResponseWriter, r *http.Request, subject strin
 			}
 			flusher.Flush()
 		case ev := <-sub.Events:
-			id, perr := strconv.ParseUint(ev.ID, 10, 64)
-			if perr != nil || id <= lastID {
-				continue
-			}
-			if !store.MatchSubject(ev.Subject, subject, recursive) {
-				continue
-			}
-			if typeFilter != nil {
-				if _, ok := typeFilter[ev.Type]; !ok {
-					continue
-				}
-			}
-			if err := enc.Encode(ev); err != nil {
+			if !encodeIfMatch(ev) {
 				return
 			}
+			// Burst zusammenfassen: alle bereits gepufferten Events kodieren und
+			// erst danach EINMAL flushen. Ein Flush pro Event hält bei hoher
+			// Event-Rate (~1000/s) nicht Schritt — der Subscriber-Puffer liefe über
+			// und der Subscriber würde abgehängt (sichtbar als Reconnect-Flattern).
+			for drained := false; !drained; {
+				select {
+				case ev2 := <-sub.Events:
+					if !encodeIfMatch(ev2) {
+						return
+					}
+				default:
+					drained = true
+				}
+			}
 			flusher.Flush()
-			lastID = id
 		}
 	}
 }

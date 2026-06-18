@@ -14,8 +14,12 @@ import (
 	"github.com/pblumer/clio/internal/event"
 )
 
-// defaultBuffer ist die Kanal-Puffergröße pro Subscriber.
-const defaultBuffer = 256
+// defaultBuffer ist die Kanal-Puffergröße pro Subscriber. Großzügig bemessen,
+// damit kurze Konsum-Stockungen (GC-Pause, langsames TCP-Flush) eine hohe
+// Event-Rate (~1000/s) überbrücken, ohne den Subscriber gleich abzuhängen. Der
+// Consumer fasst Bursts zu einem Flush zusammen; bleibt er dennoch zurück,
+// greift weiterhin der verlustfreie Reconnect via lowerBound.
+const defaultBuffer = 1024
 
 // Subscription ist das Abonnement einer Observe-Verbindung.
 type Subscription struct {

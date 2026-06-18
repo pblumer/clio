@@ -194,6 +194,96 @@ func jsonString(s string) string {
 	return `"` + strings.ReplaceAll(s, `"`, `\"`) + `"`
 }
 
+// TestObserveWatchKeepsUpWithBurst deckt das gemeldete Reconnect-Flattern ab: bei
+// hoher Schreibrate (~1000 ev/s) lief der Subscriber-Puffer über, weil der
+// observe-Consumer nach JEDEM Event flushte und so nicht Schritt hielt — der
+// Broker hängte den Subscriber ab, der Stream brach ab und der Client verband sich
+// neu („VERBINDUNG UNTERBROCHEN …"). Der Consumer fasst Bursts nun zu einem Flush
+// zusammen, sodass ein Burst weit über der Puffergröße verlustfrei durchläuft,
+// ohne dass die Verbindung mittendrin abreißt.
+func TestObserveWatchKeepsUpWithBurst(t *testing.T) {
+	if testing.Short() {
+		t.Skip("lasttest in -short übersprungen")
+	}
+	old := observeHeartbeat
+	observeHeartbeat = time.Hour // keine Heartbeats im Test
+	defer func() { observeHeartbeat = old }()
+
+	srv := newTestServer(t)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Watch-Stream ab jetzt öffnen (Store leer → keine History). Sobald der Client
+	// die 200-Antwort hat, ist der Broker-Subscriber registriert; erst danach wird
+	// geschrieben, sodass jedes Event live über den Kanal kommt.
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL+"/api/v1/events?watch=true&recursive=true", nil)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("watch öffnen: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	const total = 5000 // deutlich über defaultBuffer → erzwingt anhaltenden Durchsatz
+	got := make(chan string, total)
+	readErr := make(chan error, 1)
+	go func() {
+		sc := bufio.NewScanner(resp.Body)
+		sc.Buffer(make([]byte, 0, 1<<20), 1<<20)
+		for sc.Scan() {
+			line := strings.TrimSpace(sc.Text())
+			if line == "" {
+				continue // führende Leerzeile / Heartbeat
+			}
+			var ev event.Event
+			if err := json.Unmarshal([]byte(line), &ev); err != nil {
+				readErr <- err
+				return
+			}
+			got <- ev.ID
+		}
+		readErr <- sc.Err() // EOF: Stream wurde geschlossen (ggf. abgehängt)
+	}()
+
+	// Burst so schnell wie möglich über den HTTP-Schreibpfad (löst broker.Publish aus).
+	go func() {
+		const batch = 200
+		for n := 0; n < total; n += batch {
+			var b strings.Builder
+			b.WriteString(`{"events":[`)
+			for i := 0; i < batch; i++ {
+				if i > 0 {
+					b.WriteString(",")
+				}
+				fmt.Fprintf(&b, `{"source":"load","subject":"/load/%d","type":"t"}`, n+i)
+			}
+			b.WriteString(`]}`)
+			if rec := do(t, srv, http.MethodPost, "/api/v1/write-events", adminToken, b.String()); rec.Code != http.StatusOK {
+				return
+			}
+		}
+	}()
+
+	seen := make(map[string]bool, total)
+	deadline := time.After(25 * time.Second)
+	for len(seen) < total {
+		select {
+		case id := <-got:
+			seen[id] = true
+		case err := <-readErr:
+			t.Fatalf("stream endete vorzeitig nach %d/%d events (subscriber abgehängt?): %v", len(seen), total, err)
+		case <-deadline:
+			t.Fatalf("timeout: nur %d/%d events empfangen", len(seen), total)
+		}
+	}
+}
+
 // TestRunQueryUnderConcurrentWriteLoad reproduziert den gemeldeten Fall über einen
 // echten HTTP-Server: ein voller Daten-Prädikat-Scan über /employees/ läuft,
 // während parallel weiter Events geschrieben werden. Erwartet wird ein definiertes
