@@ -171,7 +171,7 @@ Jede Stufe ist für sich lauffähig. Statusmarkierungen: `⬜ offen` · `🟡 in
 ### Stufe 2 — Observe / Live-Streaming `✅`
 *Schätzung: 1–2 Wochen*
 - [x] `observe-events`: erst History, dann offene Verbindung (Dedup neuer Events via ID)
-- [x] Pub/Sub via Channels (`internal/pubsub`), `http.Flusher` pro Zeile; langsame Subscriber werden abgehängt (→ Reconnect) statt den Schreibpfad zu blockieren
+- [x] Pub/Sub via Channels (`internal/pubsub`); der observe-Consumer fasst Bursts zu einem `http.Flusher`-Flush zusammen (hält ~1000 ev/s Schritt); langsame Subscriber werden abgehängt (→ Reconnect) statt den Schreibpfad zu blockieren
 - [x] Reconnect via `lowerBound`
 - [x] `recursive`-Flag + Subject-Prefix-Matching (`store.MatchSubject`) — auch für `read-events`; rekursive Reads laufen über den globalen `events`-Bucket und bewahren so die globale Ordnung
 - **Ergebnis:** Live-Beobachtung von Streams inkl. rekursiver Subjects. ✅
