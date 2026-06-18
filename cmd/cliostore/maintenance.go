@@ -50,26 +50,38 @@ func startHeadroomMonitor(ctx context.Context, st *store.Store, cfg config.Confi
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				stats, err := st.Stats()
-				if err != nil {
-					logger.Error("db-monitor: statistik fehlgeschlagen", "err", err)
-					continue
-				}
-				pct, warn := remapWarning(stats.DataBytes, initialBytes, cfg.DBGrowThresholdPct)
-				switch {
-				case warn && !warned:
-					logger.Warn("DB nähert sich der vorbelegten Grenze — Remap-Latenzspitzen drohen; CLIO_DB_INITIAL_MB erhöhen und neu starten",
-						"dataBytes", stats.DataBytes, "initialBytes", initialBytes,
-						"fillPercent", math.Round(pct*10)/10, "thresholdPct", cfg.DBGrowThresholdPct)
-					warned = true
-				case warned && pct < float64(cfg.DBGrowThresholdPct)-5:
-					// Hysterese: erst deutlich unter der Schwelle wieder entwarnen.
-					logger.Info("DB-Füllstand wieder unter der Warn-Schwelle", "fillPercent", math.Round(pct*10)/10)
-					warned = false
-				}
+				warned = headroomTick(st, initialBytes, cfg, logger, warned)
 			}
 		}
 	}()
+}
+
+// headroomTick verarbeitet einen einzelnen Monitor-Tick: Es liest den
+// Daten-Füllstand und meldet — mit Hysterese gegen Flattern — das Über- bzw.
+// Unterschreiten der Warn-Schwelle. Zurückgegeben wird der fortgeschriebene
+// warned-Zustand (true = es wurde bereits gewarnt, noch nicht entwarnt), den der
+// Aufrufer in den nächsten Tick mitnimmt. Ein Statistik-Fehler lässt den Zustand
+// unverändert (nur Log), damit ein transienter Fehler keine falsche Entwarnung
+// auslöst.
+func headroomTick(st *store.Store, initialBytes int64, cfg config.Config, logger *slog.Logger, warned bool) bool {
+	stats, err := st.Stats()
+	if err != nil {
+		logger.Error("db-monitor: statistik fehlgeschlagen", "err", err)
+		return warned
+	}
+	pct, warn := remapWarning(stats.DataBytes, initialBytes, cfg.DBGrowThresholdPct)
+	switch {
+	case warn && !warned:
+		logger.Warn("DB nähert sich der vorbelegten Grenze — Remap-Latenzspitzen drohen; CLIO_DB_INITIAL_MB erhöhen und neu starten",
+			"dataBytes", stats.DataBytes, "initialBytes", initialBytes,
+			"fillPercent", math.Round(pct*10)/10, "thresholdPct", cfg.DBGrowThresholdPct)
+		return true
+	case warned && pct < float64(cfg.DBGrowThresholdPct)-5:
+		// Hysterese: erst deutlich unter der Schwelle wieder entwarnen.
+		logger.Info("DB-Füllstand wieder unter der Warn-Schwelle", "fillPercent", math.Round(pct*10)/10)
+		return false
+	}
+	return warned
 }
 
 // startCompactScheduler kompaktiert die DB periodisch online (CompactInPlace,
@@ -90,18 +102,26 @@ func startCompactScheduler(ctx context.Context, st *store.Store, cfg config.Conf
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				old, neu, err := st.CompactInPlace()
-				if err != nil {
-					logger.Error("hintergrund-compact fehlgeschlagen", "err", err)
-					continue
-				}
-				var pct float64
-				if old > 0 {
-					pct = 100 * (1 - float64(neu)/float64(old))
-				}
-				logger.Info("hintergrund-compact abgeschlossen",
-					"oldBytes", old, "newBytes", neu, "kleinerProzent", math.Round(pct*10)/10)
+				runCompaction(st, logger)
 			}
 		}
 	}()
+}
+
+// runCompaction führt eine einzelne Online-Kompaktierung aus und protokolliert
+// das Ergebnis — die erreichte Verkleinerung in Prozent — bzw. den Fehler. Bei
+// einem Fehler bleibt die DB nutzbar (CompactInPlace stellt das sicher); hier
+// wird nur geloggt, damit der Scheduler weiterläuft.
+func runCompaction(st *store.Store, logger *slog.Logger) {
+	old, neu, err := st.CompactInPlace()
+	if err != nil {
+		logger.Error("hintergrund-compact fehlgeschlagen", "err", err)
+		return
+	}
+	var pct float64
+	if old > 0 {
+		pct = 100 * (1 - float64(neu)/float64(old))
+	}
+	logger.Info("hintergrund-compact abgeschlossen",
+		"oldBytes", old, "newBytes", neu, "kleinerProzent", math.Round(pct*10)/10)
 }
