@@ -183,5 +183,31 @@ func (s *Store) CompactInPlace() (oldSize, newSize int64, err error) {
 	if rerr != nil {
 		return 0, 0, rerr
 	}
+	s.lastCompactMu.Lock()
+	s.lastCompact = &CompactionInfo{At: s.now().UTC(), OldBytes: oldSize, NewBytes: newSize}
+	s.lastCompactMu.Unlock()
 	return oldSize, newSize, nil
+}
+
+// CompactionInfo beschreibt einen im laufenden Betrieb durchgeführten
+// Online-Compact (CompactInPlace). OldBytes/NewBytes sind die Dateigrößen vor
+// und nach der Defragmentierung; bei vorbelegter Datei wird NewBytes anschließend
+// wieder auf die reservierte Größe gebracht (NewBytes spiegelt die echte
+// Rückgewinnung, nicht die finale Dateigröße).
+type CompactionInfo struct {
+	At       time.Time `json:"at"`
+	OldBytes int64     `json:"oldBytes"`
+	NewBytes int64     `json:"newBytes"`
+}
+
+// LastCompaction liefert den letzten Online-Compact dieser Laufzeit. ok ist
+// false, wenn in dieser Laufzeit noch keiner lief (offline-Compacts laufen in
+// einem separaten Prozess und sind hier nicht sichtbar).
+func (s *Store) LastCompaction() (CompactionInfo, bool) {
+	s.lastCompactMu.Lock()
+	defer s.lastCompactMu.Unlock()
+	if s.lastCompact == nil {
+		return CompactionInfo{}, false
+	}
+	return *s.lastCompact, true
 }

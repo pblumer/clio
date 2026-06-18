@@ -118,6 +118,10 @@
         <div class="label">DB-Größe</div><div id="m-dbsize" class="value">–</div>
         <div class="dbbar"><div id="m-dbfill" class="dbbar-fill"></div></div>
         <div id="m-dbsub" class="sub">Datenbankdatei</div></div>
+      <div class="card" title="Genutzter Umfang (bbolt-Highwater-Mark) im Verhältnis zur vorbelegten Grenze (CLIO_DB_INITIAL_MB). Nähert sich der genutzte Umfang der Grenze, mappt bbolt die Datei beim Weiterwachsen neu (Remap) und erzeugt unter Leselast Schreib-Latenzspitzen — dann CLIO_DB_INITIAL_MB erhöhen und neu starten. Ohne Vorbelegung ('aus') gilt diese Reserve nicht.">
+        <div class="label">Speicher-Headroom</div><div id="m-headroom" class="value">–</div>
+        <div class="dbbar"><div id="m-headroom-fill" class="dbbar-fill"></div></div>
+        <div id="m-headroom-sub" class="sub">genutzt vs. vorbelegt</div></div>
       <div class="card"><div class="label">Aktive Observer</div><div id="m-observers" class="value">–</div><div class="sub">offene Streams</div></div>
       <div class="card"><div class="label">Uptime</div><div id="m-uptime" class="value">–</div><div id="m-started" class="sub">seit Start</div></div>
       <div class="card"><div class="label">HTTP-Anfragen</div><div id="m-requests" class="value">–</div><div id="m-rate" class="sub">gesamt</div></div>
@@ -133,6 +137,9 @@
         <dt>Sync-Modus</dt><dd id="i-sync">–</dd>
         <dt>Listen-Adresse</dt><dd id="i-addr">–</dd>
         <dt>Datenbankpfad</dt><dd id="i-db">–</dd>
+        <dt>Vorbelegung</dt><dd id="i-prealloc">–</dd>
+        <dt>Auto-Compaction</dt><dd id="i-compact">–</dd>
+        <dt>Letzte Kompaktierung</dt><dd id="i-lastcompact">–</dd>
         <dt>Serverzeit</dt><dd id="i-time">–</dd>
       </dl>
     </section>

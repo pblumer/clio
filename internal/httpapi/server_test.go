@@ -172,6 +172,13 @@ func TestInfoEndpoint(t *testing.T) {
 	if !ok || fill < 0 || fill > 100 {
 		t.Fatalf("databaseFillPercent fehlt/außerhalb [0,100]: %v", body["databaseFillPercent"])
 	}
+	// Storage-Betriebsstatus für das Dashboard.
+	if _, ok := body["dbCompactEnabled"].(bool); !ok {
+		t.Errorf("dbCompactEnabled fehlt/kein bool: %v", body["dbCompactEnabled"])
+	}
+	if _, ok := body["dbGrowThresholdPct"].(float64); !ok {
+		t.Errorf("dbGrowThresholdPct fehlt: %v", body["dbGrowThresholdPct"])
+	}
 }
 
 func TestWriteEventsAuth(t *testing.T) {

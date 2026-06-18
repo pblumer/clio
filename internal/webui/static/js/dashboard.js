@@ -814,9 +814,38 @@ function renderDbUsage(info, m) {
   $("m-dbsub").textContent = sub;
 }
 
+// renderHeadroom visualisiert den Remap-Headroom: den genutzten Umfang
+// (Highwater-Mark) gegen die vorbelegte Grenze (CLIO_DB_INITIAL_MB). Nähert er
+// sich der Grenze, drohen Schreib-Latenzspitzen durch bbolt-Remaps. Ohne
+// Vorbelegung gibt es keine Grenze — die Karte zeigt dann "aus".
+function renderHeadroom(info, m) {
+  const data = pickNum(info.databaseDataBytes, gauge(m, "clio_db_data_bytes"));
+  const initial = pickNum(info.databaseInitialBytes, gauge(m, "clio_db_initial_bytes"));
+  const bar = $("m-headroom-fill"), val = $("m-headroom"), sub = $("m-headroom-sub");
+  if (!Number.isFinite(initial) || initial <= 0) {
+    val.textContent = "aus";
+    bar.style.width = "0"; bar.classList.remove("warn", "crit");
+    sub.textContent = "nicht vorbelegt (CLIO_DB_INITIAL_MB)";
+    return;
+  }
+  let pct = pickNum(info.databaseInitialFillPercent);
+  if (!Number.isFinite(pct) && Number.isFinite(data)) pct = data / initial * 100;
+  pct = Math.max(0, Math.min(100, pct));
+  const thr = pickNum(info.dbGrowThresholdPct);
+  const warnAt = Number.isFinite(thr) ? thr : 80;
+  val.textContent = (pct < 10 ? pct.toFixed(1) : Math.round(pct)) + " %";
+  bar.style.width = Math.max(2, pct) + "%";
+  bar.classList.toggle("warn", pct >= warnAt && pct < 95);
+  bar.classList.toggle("crit", pct >= 95);
+  let s = (Number.isFinite(data) ? fmtBytes(data) : "?") + " von " + fmtBytes(initial) + " genutzt";
+  if (pct >= warnAt) s += " · Grenze nah — CLIO_DB_INITIAL_MB erhöhen";
+  sub.textContent = s;
+}
+
 function render(info, m) {
   $("m-events").textContent = fmtInt(gauge(m, "clio_events_total") ?? info.eventsTotal);
   renderDbUsage(info, m);
+  renderHeadroom(info, m);
   $("m-observers").textContent = fmtInt(gauge(m, "clio_active_observers"));
   $("m-uptime").textContent = fmtDuration(info.uptimeSeconds);
   $("m-started").textContent = info.startedAt ? "seit " + new Date(info.startedAt).toLocaleString("de-CH") : "seit Start";
@@ -841,6 +870,21 @@ function render(info, m) {
   $("i-sync").textContent = info.syncMode ?? "–";
   $("i-addr").textContent = info.httpListenAddr ?? "–";
   $("i-db").textContent = info.databaseFilePath ?? "–";
+  // Storage-Betriebsstatus: Vorbelegung, Auto-Compaction, letzter Online-Compact.
+  const initialB = pickNum(info.databaseInitialBytes, gauge(m, "clio_db_initial_bytes"));
+  $("i-prealloc").textContent = (Number.isFinite(initialB) && initialB > 0) ? fmtBytes(initialB) + " vorbelegt" : "aus";
+  $("i-compact").textContent = info.dbCompactEnabled ? ("alle " + (info.dbCompactIntervalH ?? "?") + " h") : "aus";
+  const lc = info.databaseLastCompaction;
+  if (lc && lc.at) {
+    let txt = new Date(lc.at).toLocaleString("de-CH");
+    if (Number.isFinite(lc.oldBytes) && lc.oldBytes > 0 && Number.isFinite(lc.newBytes)) {
+      const red = Math.max(0, (1 - lc.newBytes / lc.oldBytes) * 100);
+      txt += " · " + fmtBytes(lc.oldBytes) + " → " + fmtBytes(lc.newBytes) + " (−" + red.toFixed(0) + " %)";
+    }
+    $("i-lastcompact").textContent = txt;
+  } else {
+    $("i-lastcompact").textContent = "—";
+  }
   $("i-time").textContent = info.serverTime ? new Date(info.serverTime).toLocaleString("de-CH") : "–";
 
   // Dev-Zone nur einblenden, wenn der Server im Dev-Mode läuft.
