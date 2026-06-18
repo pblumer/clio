@@ -313,6 +313,29 @@ paths:
             application/problem+json:
               schema: { $ref: "#/components/schemas/ProblemDetails" }
 
+  /api/v1/backup:
+    get:
+      tags: [Admin]
+      summary: Konsistenter Online-Snapshot der gesamten DB (Scope admin)
+      description: |
+        Streamt einen konsistenten Punkt-in-der-Zeit-Snapshot der gesamten
+        Datenbank als bbolt-Datei (`application/octet-stream`). Der Snapshot läuft
+        in einer Read-Transaktion und blockiert keine Schreiber (echtes
+        Hot-Backup, ADR-026). Das Artefakt ist selbst eine eigenständig öffenbare,
+        per `cliostore verify` prüfbare DB. Es enthält die gesamte Historie samt
+        Schlüsselbund (nur Secret-Hashes, nie Klartext) — daher admin-scoped.
+        Spiegelt das CLI-Kommando `cliostore backup` für den Fall, dass der Server
+        die DB-Datei hält (exklusiver Lock).
+      responses:
+        "200":
+          description: Snapshot-Stream (bbolt-Datei)
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
   /api/v1/keys:
     post:
       tags: [Admin]

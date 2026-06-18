@@ -729,6 +729,30 @@ CLIO_DB_PATH=clio.db ./cliostore compact
 # -> kompaktiert: clio.db — 2097152 -> 1048576 bytes (50.0% kleiner)
 ```
 
+### Backup, Restore & Verify
+
+Clio sichert sich über **konsistente Snapshots** der bbolt-Datei (ADR-030). Ein
+Snapshot ist selbst eine gültige, per Hash-Kette prüfbare `.clio`-Datei:
+
+```bash
+# Hot-Backup im laufenden Betrieb (admin-scoped HTTP-Endpunkt, blockiert keine Schreiber)
+curl -fsS -H "Authorization: Bearer $TOKEN" \
+  http://127.0.0.1:3000/api/v1/backup -o clio-$(date +%F).clio
+
+# Cold-Backup über CLI (Server gestoppt) — schreibt + verifiziert in einem Schritt
+./cliostore backup --db clio.db --output clio-$(date +%F).clio --verify
+
+# Restore (offline) an einen Zielpfad, dann prüfen
+./cliostore restore --input clio-2026-06-18.clio --db /data/clio.db
+./cliostore verify  --db /data/clio.db   # Exit 0 = Kette intakt, 1 = Bruch
+```
+
+`verify` ist read-only und skriptbar (Exit-Code); ist `CLIO_SIGNING_KEY` gesetzt,
+prüft es auch die Event-Signaturen mit. **Wichtig:** Das CLI-`backup` kann eine
+*laufende* Instanz nicht öffnen (bbolt-Datei-Lock) — dafür ist der HTTP-Endpunkt
+da. Vollständige Anleitung samt Garantien, Fehlerfällen und RPO/RTO:
+[`docs/backup-restore.md`](docs/backup-restore.md).
+
 ## Performance & Durability
 
 Writes laufen standardmäßig über **Group Commit** (`CLIO_SYNC=group`): viele

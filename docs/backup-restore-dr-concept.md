@@ -4,8 +4,14 @@
 > Backup-/Restore-/DR-Story von `cliostore`. **Stufe 1** (Snapshot/Restore) ist
 > das committete Zielbild und vollständig ausspezifiziert; **Stufe 2**
 > (Continuous Archiving / PITR) ist eine bewusst abgegrenzte, optionale
-> Ausbaustufe und nur skizziert. Die zugehörige Entscheidung ist **ADR-026**
-> (siehe §6), gedacht zur Übernahme in den ADR-Abschnitt der `ARCHITECTURE.md`.
+> Ausbaustufe und nur skizziert. Die zugehörige Entscheidung ist **ADR-030**
+> (siehe §6) und in `ARCHITECTURE.md` §7 übernommen. *(Stufe 1 ist umgesetzt;
+> die Betriebsanleitung steht in [`backup-restore.md`](backup-restore.md).)*
+>
+> **Hinweis Nummerierung:** Dieses Dokument wurde verfasst, als die nächste freie
+> ADR-Nummer 026 war; bei der Umsetzung war 026 bereits durch die Event-Herkunft
+> belegt, daher trägt die Entscheidung final die Nummer **ADR-030**. Ältere
+> „ADR-026"-Erwähnungen unten meinen dieselbe Entscheidung.
 
 ---
 
@@ -274,7 +280,7 @@ spec:
 
 Jeder Meilenstein ist für sich lauffähig und abnehmbar. ✅/🟡/⬜ = Status.
 
-### M0 — `verify` als eigenständiges CLI-Kommando 🟡
+### M0 — `verify` als eigenständiges CLI-Kommando ✅
 *Schätzung: < 0,5 Tag*
 - `Store.Verify()` existiert bereits und wird über `GET /api/v1/verify`
   exponiert; M0 hebt es zusätzlich auf die **Offline-CLI** (`verify --db`).
@@ -282,7 +288,7 @@ Jeder Meilenstein ist für sich lauffähig und abnehmbar. ✅/🟡/⬜ = Status.
   bei intakt, `1` bei Bruch (mit `brokenAt`); `--json` liefert `VerifyResult`.
   Read-only (INV-V1). Optionaler `CLIO_SIGNING_KEY` prüft Signaturen mit.
 
-### M1 — Online-Backup 🟡
+### M1 — Online-Backup ✅
 *Schätzung: 0,5–1 Tag*
 - `Store.Backup(io.Writer)` über `Tx.WriteTo` in einer View-Tx; `BackupToFile`
   mit temp + fsync + atomarem Rename. CLI `backup --output [--db] [--json]`.
@@ -291,7 +297,7 @@ Jeder Meilenstein ist für sich lauffähig und abnehmbar. ✅/🟡/⬜ = Status.
   Test `TestBackupConsistentSnapshot` (Count/Head aus einer Tx, Snapshot
   intakt).
 
-### M2 — Restore + End-to-End-Testfall ⬜
+### M2 — Restore + End-to-End-Testfall ✅
 *Schätzung: 1 Tag*
 - `store.Restore(input, dbPath, overwrite)`: ReadOnly-Open + Bucket-Validierung
   + defragmentierte Kopie (`bolt.Compact`) + fsync + atomarer Rename;
@@ -302,7 +308,7 @@ Jeder Meilenstein ist für sich lauffähig und abnehmbar. ✅/🟡/⬜ = Status.
 - **Akzeptanz:** erfüllt INV-R1/R2/R3. Restore ohne `--force` auf existierende
   DB schlägt fehl. Nach Restore: `head`/`count` == Backup; Replay bit-identisch.
 
-### M3 — HTTP-`backup`-Endpoint + Doku ⬜
+### M3 — HTTP-`backup`-Endpoint + Doku ✅
 *Schätzung: 0,5–1 Tag*
 - `GET /api/v1/backup` (admin-scoped) streamt den Snapshot; OpenAPI-Spec +
   Swagger (ADR-011) ergänzen.

@@ -1346,56 +1346,75 @@ type VerifyResult struct {
 // die erste Bruchstelle. Eine intakte Kette beweist, dass kein historisches
 // Event nachträglich verändert wurde (Tamper-Evidence).
 func (s *Store) Verify() (VerifyResult, error) {
-	res := VerifyResult{OK: true, Head: event.GenesisHash}
-	prev := event.GenesisHash
-
+	var res VerifyResult
 	err := s.view(func(tx *bolt.Tx) error {
-		c := tx.Bucket(bucketEvents).Cursor()
-		for k, v := c.First(); k != nil; k, v = c.Next() {
-			var ev event.Event
-			if err := unmarshalStored(v, &ev); err != nil {
-				return fmt.Errorf("event dekodieren: %w", err)
-			}
-			res.Count++
-
-			if ev.PredecessorHash != prev {
-				res.OK = false
-				res.BrokenAt = ev.ID
-				res.Reason = "predecessorhash passt nicht zum Vorgänger"
-				return nil
-			}
-			if want := event.ComputeHash(ev); ev.Hash != want {
-				res.OK = false
-				res.BrokenAt = ev.ID
-				res.Reason = "hash stimmt nicht mit dem Inhalt überein"
-				return nil
-			}
-			// Signatur prüfen, sofern vorhanden und ein Schlüssel konfiguriert ist.
-			if s.verifyKey != nil && ev.Signature != nil {
-				if err := verifySignature(s.verifyKey, ev.Hash, *ev.Signature); err != nil {
-					res.OK = false
-					res.BrokenAt = ev.ID
-					res.Reason = "signatur ungültig: " + err.Error()
-					return nil
-				}
-			}
-			prev = ev.Hash
-		}
-
-		res.Head = prev
-		// Gespeicherter Ketten-Kopf muss zum letzten Event passen.
-		storedHead := event.GenesisHash
-		if h := tx.Bucket(bucketMeta).Get(metaChainHead); len(h) > 0 {
-			storedHead = string(h)
-		}
-		if storedHead != prev {
-			res.OK = false
-			res.Reason = "gespeicherter Ketten-Kopf passt nicht zum letzten Event"
-		}
-		return nil
+		r, e := verifyChain(tx, s.verifyKey)
+		res = r
+		return e
 	})
 	if err != nil {
 		return VerifyResult{}, err
+	}
+	return res, nil
+}
+
+// verifyChain rechnet die Hash-Kette über die Events einer (Lese-)Transaktion
+// nach. Gemeinsame Grundlage für die Online-Prüfung (Store.Verify) und die
+// Offline-Prüfung einer beliebigen DB-/Backup-Datei (VerifyFile, ADR-026). Ist
+// verifyKey gesetzt, werden vorhandene Signaturen mitgeprüft. Ein
+// Dekodier-Fehler eines Events wird als Fehler zurückgegeben (interner Fehler),
+// ein inhaltlicher Bruch der Kette als VerifyResult{OK:false}.
+func verifyChain(tx *bolt.Tx, verifyKey ed25519.PublicKey) (VerifyResult, error) {
+	res := VerifyResult{OK: true, Head: event.GenesisHash}
+	prev := event.GenesisHash
+
+	eb := tx.Bucket(bucketEvents)
+	if eb == nil {
+		return res, nil
+	}
+	c := eb.Cursor()
+	for k, v := c.First(); k != nil; k, v = c.Next() {
+		var ev event.Event
+		if err := unmarshalStored(v, &ev); err != nil {
+			return VerifyResult{}, fmt.Errorf("event dekodieren: %w", err)
+		}
+		res.Count++
+
+		if ev.PredecessorHash != prev {
+			res.OK = false
+			res.BrokenAt = ev.ID
+			res.Reason = "predecessorhash passt nicht zum Vorgänger"
+			return res, nil
+		}
+		if want := event.ComputeHash(ev); ev.Hash != want {
+			res.OK = false
+			res.BrokenAt = ev.ID
+			res.Reason = "hash stimmt nicht mit dem Inhalt überein"
+			return res, nil
+		}
+		// Signatur prüfen, sofern vorhanden und ein Schlüssel konfiguriert ist.
+		if verifyKey != nil && ev.Signature != nil {
+			if err := verifySignature(verifyKey, ev.Hash, *ev.Signature); err != nil {
+				res.OK = false
+				res.BrokenAt = ev.ID
+				res.Reason = "signatur ungültig: " + err.Error()
+				return res, nil
+			}
+		}
+		prev = ev.Hash
+	}
+
+	res.Head = prev
+	// Gespeicherter Ketten-Kopf muss zum letzten Event passen.
+	storedHead := event.GenesisHash
+	if mb := tx.Bucket(bucketMeta); mb != nil {
+		if h := mb.Get(metaChainHead); len(h) > 0 {
+			storedHead = string(h)
+		}
+	}
+	if storedHead != prev {
+		res.OK = false
+		res.Reason = "gespeicherter Ketten-Kopf passt nicht zum letzten Event"
 	}
 	return res, nil
 }

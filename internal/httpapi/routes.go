@@ -30,6 +30,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/register-event-schema", s.requireScope(auth.ScopeWrite, s.handleRegisterEventSchema))
 	s.mux.HandleFunc("GET /api/v1/read-event-schema", s.requireScope(auth.ScopeRead, s.handleReadEventSchema))
 
+	// Konsistenter Online-Snapshot der gesamten DB (ADR-026). Admin-scoped: das
+	// Artefakt enthält die gesamte Historie samt Schlüsselbund-Hashes.
+	s.mux.HandleFunc("GET /api/v1/backup", s.requireScope(auth.ScopeAdmin, s.handleBackup))
+
 	// Schlüsselverwaltung zur Laufzeit (ADR-025) — ausschließlich Scope admin.
 	s.mux.HandleFunc("POST /api/v1/keys", s.requireScope(auth.ScopeAdmin, s.handleCreateKey))
 	s.mux.HandleFunc("GET /api/v1/keys", s.requireScope(auth.ScopeAdmin, s.handleListKeys))

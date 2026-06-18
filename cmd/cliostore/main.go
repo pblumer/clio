@@ -39,6 +39,24 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "backup":
+			if err := runBackup(os.Args[2:], os.Stdout); err != nil {
+				fmt.Fprintln(os.Stderr, "backup:", err)
+				os.Exit(1)
+			}
+			return
+		case "restore":
+			if err := runRestore(os.Args[2:], os.Stdout); err != nil {
+				fmt.Fprintln(os.Stderr, "restore:", err)
+				os.Exit(1)
+			}
+			return
+		case "verify":
+			if err := runVerify(os.Args[2:], os.Stdout); err != nil {
+				fmt.Fprintln(os.Stderr, "verify:", err)
+				os.Exit(1)
+			}
+			return
 		}
 	}
 
