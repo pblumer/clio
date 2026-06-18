@@ -90,6 +90,86 @@ func TestReadFuncStreamsAndStopsEarly(t *testing.T) {
 	}
 }
 
+func TestReadRecursiveOverflowFallbackMatchesIndexPath(t *testing.T) {
+	st := openTemp(t)
+	// Events über mehrere Subjects unterhalb von /a streuen (plus ein Geschwister
+	// /ab, das NICHT zum Teilbaum /a gehört → Prefix-Sibling-Ausschluss prüfen).
+	var cands []event.Candidate
+	for i := 0; i < 40; i++ {
+		sub := "/a/" + strconv.Itoa(i%5)
+		cands = append(cands, event.Candidate{Source: "s", Subject: sub, Type: "t"})
+		if i%7 == 0 {
+			cands = append(cands, event.Candidate{Source: "s", Subject: "/ab/x", Type: "t"})
+		}
+	}
+	appendAll(t, st, cands...)
+
+	// Referenz: index-begrenzter Pfad (Default-Schwelle, alle Treffer gesammelt).
+	want, err := st.Read("/a", true, ReadOptions{})
+	if err != nil {
+		t.Fatalf("read referenz: %v", err)
+	}
+	ids := func(evs []event.Event) []string {
+		out := make([]string, len(evs))
+		for i, e := range evs {
+			out[i] = e.ID
+		}
+		return out
+	}
+	wantIDs := ids(want)
+	// Plausibilität: globale Ordnung = aufsteigende IDs, keine /ab-Events dabei.
+	for i, e := range want {
+		if e.Subject == "/ab/x" {
+			t.Fatalf("prefix-sibling /ab/x fälschlich im /a-Teilbaum")
+		}
+		if i > 0 {
+			a, _ := strconv.Atoi(want[i-1].ID)
+			b, _ := strconv.Atoi(e.ID)
+			if a >= b {
+				t.Fatalf("ergebnis nicht global geordnet: %s vor %s", want[i-1].ID, e.ID)
+			}
+		}
+	}
+
+	// Schwelle herabsetzen, sodass der Fallback (globaler Scan) greift.
+	orig := maxRecursiveSeqBuffer
+	maxRecursiveSeqBuffer = 4
+	defer func() { maxRecursiveSeqBuffer = orig }()
+
+	got, err := st.Read("/a", true, ReadOptions{})
+	if err != nil {
+		t.Fatalf("read fallback: %v", err)
+	}
+	if gotIDs := ids(got); !equalStrings(gotIDs, wantIDs) {
+		t.Fatalf("fallback-ergebnis weicht ab:\n got %v\nwant %v", gotIDs, wantIDs)
+	}
+
+	// Früher Abbruch (Limit) über den Fallback: erste 3 in globaler Ordnung.
+	var first []string
+	err = st.ReadFunc("/a", true, ReadOptions{}, func(e event.Event) bool {
+		first = append(first, e.ID)
+		return len(first) < 3
+	})
+	if err != nil {
+		t.Fatalf("readfunc fallback: %v", err)
+	}
+	if !equalStrings(first, wantIDs[:3]) {
+		t.Fatalf("fallback früh-abbruch: got %v, want %v", first, wantIDs[:3])
+	}
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func TestReadSubjectFiltersAndOrders(t *testing.T) {
 	st := openTemp(t)
 	appendAll(t, st,

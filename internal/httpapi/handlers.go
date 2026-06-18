@@ -969,7 +969,7 @@ type runQueryRequest struct {
 	Where      string   `json:"where"` // CEL-Prädikat; leer = alle im Scope
 	LowerBound string   `json:"lowerBound"`
 	UpperBound string   `json:"upperBound"`
-	Limit      int      `json:"limit"`  // 0 = unbegrenzt
+	Limit      int      `json:"limit"`  // 0 = Default-Obergrenze (defaultReadLimit)
 	Select     []string `json:"select"` // Feldpfade für Projektion; leer = volles Event
 }
 
@@ -1025,28 +1025,70 @@ func (s *Server) handleRunQuery(w http.ResponseWriter, r *http.Request) {
 	}
 
 	opts := store.ReadOptions{LowerBound: lower, UpperBound: upper}
-	var result []event.Event
 
-	// collect wendet das Prädikat an und sammelt Treffer bis zum Limit. Rückgabe
-	// true = weiter scannen, false = genug (Limit erreicht).
-	collect := func(ev event.Event) bool {
-		if pred != nil {
-			ok, err := pred.Eval(ev)
-			if err != nil || !ok {
-				return true
-			}
-		}
-		result = append(result, ev)
-		return req.Limit == 0 || len(result) < req.Limit
+	// limit==0 → Default-Obergrenze (wie read-events). Schützt vor breiten Queries
+	// mit vielen Treffern. req.Limit<0 ist oben bereits als 400 abgefangen.
+	limit, err := effectiveReadLimit(req.Limit)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
 	}
 
 	// Typ-Constraint aus dem Prädikat ableiten: Schränkt es den event.type
 	// zwingend ein, laden wir nur die Events dieser Typen über den Typ-Index —
-	// statt den ganzen Scope zu scannen (ADR-021).
+	// statt den ganzen Scope zu scannen (ADR-021). Vor dem Senden der Header.
 	var reqTypes []string
 	typeBounded := false
 	if pred != nil {
 		reqTypes, typeBounded = pred.RequiredTypes()
+	}
+
+	// Ab hier wird gestreamt: Header senden, Schreib-Deadline aufheben (ein Scan
+	// über einen breiten Scope mit selektivem Prädikat kann lange dauern und darf
+	// nicht von der Server-WriteTimeout gekappt werden), dann jeden Treffer direkt
+	// herausschreiben — die Treffermenge wird NICHT mehr komplett im Speicher
+	// gesammelt (konstanter Speicher, auch bei Millionen Events). Das Limit
+	// begrenzt zusätzlich die Ausgabe und bricht den Scan früh ab.
+	w.Header().Set("Content-Type", ndjsonContentType)
+	if limit > 0 {
+		w.Header().Set("X-Clio-Result-Limit", strconv.Itoa(limit))
+	}
+	w.WriteHeader(http.StatusOK)
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
+
+	enc := json.NewEncoder(w)
+	flusher, _ := w.(http.Flusher)
+	var (
+		n       int
+		emitErr error
+	)
+
+	// emit wendet das Prädikat an und schreibt jeden Treffer (ggf. projiziert)
+	// direkt heraus. Rückgabe true = weiter scannen, false = genug/Abbruch.
+	emit := func(ev event.Event) bool {
+		if pred != nil {
+			ok, perr := pred.Eval(ev)
+			if perr != nil || !ok {
+				return true
+			}
+		}
+		var out any = ev
+		if len(req.Select) > 0 {
+			obj, perr := query.Project(ev, req.Select)
+			if perr != nil {
+				emitErr = perr
+				return false
+			}
+			out = obj
+		}
+		if emitErr = enc.Encode(out); emitErr != nil {
+			return false
+		}
+		n++
+		if flusher != nil && n%512 == 0 {
+			flusher.Flush()
+		}
+		return limit == 0 || n < limit
 	}
 
 	var scanErr error
@@ -1063,7 +1105,7 @@ func (s *Server) handleRunQuery(w http.ResponseWriter, r *http.Request) {
 			// Subject-Index günstiger: Teilbaum scannen, Typ-Filter einschieben.
 			optsT := opts
 			optsT.Types = reqTypes
-			scanErr = s.store.ReadFunc(req.Subject, req.Recursive, optsT, collect)
+			scanErr = s.store.ReadFunc(req.Subject, req.Recursive, optsT, emit)
 		} else {
 			// Typ-Index günstiger (oder Kostenschätzung fehlgeschlagen → sicherer
 			// Default): nur die geforderten Typen laden, Subject nachfiltern.
@@ -1071,35 +1113,23 @@ func (s *Server) handleRunQuery(w http.ResponseWriter, r *http.Request) {
 				if !store.MatchSubject(ev.Subject, req.Subject, req.Recursive) {
 					return true
 				}
-				return collect(ev)
+				return emit(ev)
 			})
 		}
 	default:
 		// Kein sicherer Typ-Filter → vollständiger Scan des Scopes (streamend,
 		// bricht bei erreichtem Limit ab — kein Materialisieren des ganzen Scopes).
-		scanErr = s.store.ReadFunc(req.Subject, req.Recursive, opts, collect)
-	}
-	if scanErr != nil {
-		s.logger.Error("run-query fehlgeschlagen", "err", scanErr)
-		writeError(w, http.StatusInternalServerError, "interner fehler beim lesen")
-		return
+		scanErr = s.store.ReadFunc(req.Subject, req.Recursive, opts, emit)
 	}
 
-	if len(req.Select) == 0 {
-		writeNDJSON(w, s.logger, result)
-		return
+	if flusher != nil {
+		flusher.Flush()
 	}
-
-	// Projektion: jedes Treffer-Event auf die gewählten Feldpfade reduzieren.
-	projected := make([]map[string]any, 0, len(result))
-	for _, ev := range result {
-		obj, err := query.Project(ev, req.Select)
-		if err != nil {
-			s.logger.Error("run-query projektion fehlgeschlagen", "err", err)
-			writeError(w, http.StatusInternalServerError, "interner fehler bei der projektion")
-			return
-		}
-		projected = append(projected, obj)
+	// Header/200 sind bereits gesendet — etwaige Fehler nur noch loggen.
+	switch {
+	case emitErr != nil:
+		s.logger.Error("run-query ausgabe fehlgeschlagen (stream bereits begonnen)", "err", emitErr)
+	case scanErr != nil:
+		s.logger.Error("run-query fehlgeschlagen (stream bereits begonnen)", "err", scanErr)
 	}
-	writeNDJSON(w, s.logger, projected)
 }
