@@ -54,13 +54,13 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/events", s.requireScope(auth.ScopeRead, s.handleEventsPath))
 	s.mux.HandleFunc("GET /api/v1/events/{subject...}", s.requireScope(auth.ScopeRead, s.handleEventsPath))
 
-	// Betriebs-Dashboard (ADR-020): statische, eingebettete Seite unter /ui.
+	// Betriebs-Dashboard (ADR-020): statische, eingebettete Seite unter /ui plus
+	// ausgelagerte Assets (z. B. /ui/css/dashboard.css) unter /ui/<pfad>.
 	// Wie /docs bewusst ohne Auth (nicht sensibel); die Daten holt die Seite
-	// clientseitig von /api/v1/info (Bearer-Token) und /metrics.
+	// clientseitig von /api/v1/info (Bearer-Token) und /metrics. Das nackte /ui/
+	// leitet weiterhin auf die kanonische /ui um (im AssetHandler).
 	s.mux.Handle("GET /ui", webui.Handler())
-	s.mux.HandleFunc("GET /ui/", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/ui", http.StatusMovedPermanently)
-	})
+	s.mux.Handle("GET /ui/{path...}", webui.AssetHandler())
 
 	// API-Doku: OpenAPI-Spec + interaktive UI. Bewusst ohne Auth (nicht
 	// sensibel); „Try it out" nutzt das Bearer-Token, das der Nutzer eingibt.
