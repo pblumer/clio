@@ -9,6 +9,24 @@ import (
 	bolt "go.etcd.io/bbolt"
 )
 
+// ensureFileSize belegt die Datei unter path auf mindestens size Bytes vor.
+// Strikt grow-only: ist die Datei bereits >= size, passiert nichts (eine schon
+// größere Datenbank darf niemals verkleinert werden — das würde bbolt-Seiten
+// abschneiden und die DB zerstören). os.Truncate erzeugt eine sparse-Datei;
+// echte Blöcke werden erst beim Schreiben belegt — für das Ziel (große Mmap,
+// keine Remaps) genügt das, da bbolt die Mmap unabhängig von belegten Blöcken
+// dimensioniert.
+func ensureFileSize(path string, size int64) error {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if fi.Size() >= size {
+		return nil
+	}
+	return os.Truncate(path, size)
+}
+
 // Size liefert die aktuelle Größe der Datenbankdatei in Bytes.
 func (s *Store) Size() (int64, error) {
 	info, err := os.Stat(s.db.Path())

@@ -135,6 +135,15 @@ type Options struct {
 	// byte-identisch zum bisherigen Verhalten). An = neue Werte werden komprimiert;
 	// das Lesen erkennt beide Formen, sodass gemischte Datenbanken funktionieren.
 	Compress bool
+
+	// InitialMmapSize dimensioniert die bbolt-Mmap (in Bytes) vorab. bbolt mappt
+	// die Datei beim Überschreiten der Mmap-Grenze neu (allocate → db.mmap), hält
+	// dabei kurz den mmaplock exklusiv und wartet auf das Freigeben aller
+	// Lese-Transaktionen — unter Leselast erzeugt das Schreib-Latenzspitzen. Eine
+	// vorab große Mmap verschiebt diese Remaps weit nach hinten. Zusätzlich wird
+	// die Datei real auf diese Größe vorbelegt (grow-only, siehe ensureFileSize).
+	// 0 = aus (bisheriges Verhalten).
+	InitialMmapSize int
 }
 
 // Store kapselt die bbolt-Datenbank.
@@ -166,9 +175,26 @@ func Open(path string) (*Store, error) {
 // OpenWithOptions öffnet die Datenbank mit expliziten Optionen und legt die
 // nötigen Buckets an.
 func OpenWithOptions(path string, opts Options) (*Store, error) {
-	db, err := bolt.Open(path, 0o600, &bolt.Options{Timeout: time.Second})
+	boltOpts := &bolt.Options{Timeout: time.Second}
+	if opts.InitialMmapSize > 0 {
+		boltOpts.InitialMmapSize = opts.InitialMmapSize
+	}
+	db, err := bolt.Open(path, 0o600, boltOpts)
 	if err != nil {
 		return nil, fmt.Errorf("bbolt öffnen: %w", err)
+	}
+
+	// Datei real auf die gewünschte Initialgröße bringen. Auf Nicht-Windows lässt
+	// bbolt die Datei trotz InitialMmapSize dynamisch wachsen (nur die Mmap ist
+	// vorab groß) — wir belegen sie hier einmalig nach dem (korrekt
+	// initialisierten) Open vor. Strikt grow-only: eine bereits größere DB bleibt
+	// unangetastet, niemals verkleinern. Der Bereich liegt innerhalb der bereits
+	// gemappten Region, und es läuft noch keine Transaktion — daher sicher.
+	if opts.InitialMmapSize > 0 {
+		if err := ensureFileSize(db.Path(), int64(opts.InitialMmapSize)); err != nil {
+			_ = db.Close()
+			return nil, fmt.Errorf("datei vorbelegen: %w", err)
+		}
 	}
 
 	// SyncOff: bbolt fsync'd nicht mehr beim Commit.

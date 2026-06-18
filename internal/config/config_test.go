@@ -1,6 +1,7 @@
 package config
 
 import (
+	"strconv"
 	"testing"
 	"time"
 )
@@ -70,6 +71,33 @@ func TestFromEnvAuthMaterialOptional(t *testing.T) {
 			}
 			if cfg.BootstrapAdminKey != tc.bootstrap {
 				t.Errorf("BootstrapAdminKey = %q, want %q", cfg.BootstrapAdminKey, tc.bootstrap)
+			}
+		})
+	}
+}
+
+func TestFromEnvDBInitialMB(t *testing.T) {
+	cases := []struct {
+		name string
+		val  string
+		want int
+	}{
+		{"default leer", "", 0},
+		{"gesetzt", "4096", 4096},
+		{"unlesbar -> default", "viel", 0},
+		{"negativ -> auf 0 geklemmt", "-5", 0},
+		{"über max -> auf max geklemmt", strconv.Itoa(maxInitMB + 1), maxInitMB},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(envToken, "tok")
+			t.Setenv(envDBInitMB, tc.val)
+			cfg, err := FromEnv()
+			if err != nil {
+				t.Fatalf("unerwarteter fehler: %v", err)
+			}
+			if cfg.DBInitialMB != tc.want {
+				t.Errorf("DBInitialMB = %d, want %d", cfg.DBInitialMB, tc.want)
 			}
 		})
 	}

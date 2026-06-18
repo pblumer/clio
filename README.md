@@ -264,6 +264,7 @@ Build lokal mit `make package` proben.
 | `CLIO_API_TOKEN`  | nein*   | —          | **Deprecated** (ADR-008 → ADR-025): bootet bei leerem Bund einen `legacy-token`-Admin-Key. Der Leitungswert ist danach `kid.secret` — das alte `Bearer <token>` ohne `kid`-Präfix wird nicht mehr akzeptiert. |
 | `CLIO_ADDR`       | nein    | `:3000`    | Listen-Adresse des HTTP-Servers    |
 | `CLIO_DB_PATH`    | nein    | `clio.db`  | Pfad zur bbolt-Datenbankdatei      |
+| `CLIO_DB_INITIAL_MB` | nein | `0` (aus) | Anfängliche Mmap-/Dateigröße in MiB. bbolt mappt die Datei beim Wachsen neu und hält dabei kurz einen exklusiven Lock — bei großen, gefüllten Datenbanken unter Leselast erzeugt das Schreib-Latenzspitzen. Vorab-Dimensionierung (z. B. `4096` für 4 GiB) verschiebt diese Remaps weit nach hinten und belegt die Datei real vor. Strikt grow-only: eine bereits größere DB bleibt unangetastet. `0` (Default) = bisheriges Verhalten. |
 | `CLIO_SYNC`       | nein    | `group`    | Schreibstrategie: `group`/`always`/`off` (siehe Performance) |
 | `CLIO_SIGNING_KEY`| nein    | —          | base64-Ed25519-Schlüssel; aktiviert Event-Signaturen        |
 | `CLIO_COMPRESS`   | nein    | `false`    | Transparente DEFLATE-Kompression der gespeicherten Event-Werte (truthy, z. B. `1`/`true`). Spart ~45–50 % Ablage je Event; wirkt nur auf neu geschriebene Events, bestehende bleiben lesbar (ADR-024). |

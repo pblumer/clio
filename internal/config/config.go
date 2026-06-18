@@ -27,6 +27,16 @@ type Config struct {
 	// DBPath ist der Pfad zur bbolt-Datenbankdatei (ADR-006).
 	DBPath string
 
+	// DBInitialMB legt die anfängliche Mmap-Größe der bbolt-Datei in MiB fest
+	// (CLIO_DB_INITIAL_MB). bbolt mappt die Datei beim Wachsen neu und hält dabei
+	// kurz einen exklusiven Lock — bei großen, gefüllten Datenbanken unter Leselast
+	// erzeugt das spürbare Schreib-Latenzspitzen. Wird die Mmap vorab groß genug
+	// dimensioniert, entfallen diese Remaps. Zusätzlich wird die Datei real auf
+	// diese Größe vorbelegt. 0 (Default) = bisheriges Verhalten (dynamisches
+	// Wachsen ab winziger Datei). Niemals verkleinernd: ist die DB schon größer,
+	// bleibt sie unangetastet.
+	DBInitialMB int
+
 	// Sync steuert die Durability-/Performance-Abwägung beim Schreiben:
 	// "group" (Default, Group Commit), "always" (fsync pro Write) oder
 	// "off" (kein fsync, maximaler Durchsatz).
@@ -80,6 +90,7 @@ const (
 	envToken     = "CLIO_API_TOKEN"
 	envBootstrap = "CLIO_BOOTSTRAP_ADMIN_KEY"
 	envDBPath    = "CLIO_DB_PATH"
+	envDBInitMB  = "CLIO_DB_INITIAL_MB"
 	envSync      = "CLIO_SYNC"
 	envSignKey   = "CLIO_SIGNING_KEY"
 	envDevMode   = "CLIO_DEV_MODE"
@@ -93,6 +104,10 @@ const (
 	defaultSync    = "group"
 	defaultObsvPre = 4096 // Anti-Buffering-Polster für observe (siehe Config-Feld)
 	maxObsvPre     = 1 << 20
+
+	// maxInitMB deckelt CLIO_DB_INITIAL_MB auf 64 TiB — großzügig genug für jede
+	// reale Platte, schützt aber vor versehentlichen Tippfehlern (und Overflow).
+	maxInitMB = 64 << 20
 )
 
 // validSync enthält die erlaubten Werte für CLIO_SYNC.
@@ -110,6 +125,7 @@ func FromEnv() (Config, error) {
 		APIToken:             os.Getenv(envToken),
 		BootstrapAdminKey:    os.Getenv(envBootstrap),
 		DBPath:               getenvDefault(envDBPath, defaultDBPath),
+		DBInitialMB:          parseIntDefault(envDBInitMB, 0, 0, maxInitMB),
 		Sync:                 getenvDefault(envSync, defaultSync),
 		SigningKey:           os.Getenv(envSignKey),
 		DevMode:              parseBoolDefault(envDevMode, false),
