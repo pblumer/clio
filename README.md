@@ -538,6 +538,13 @@ curl -X POST http://127.0.0.1:3000/api/v1/run-query \
 `has(event.data.x)` schützt vor fehlenden Feldern; ein Auswertungsfehler eines
 Events gilt als „kein Treffer".
 
+> **Streaming & `limit`:** `run-query` streamt die Treffer als NDJSON (konstanter
+> Server-Speicher) und kappt ohne explizites `limit` bei derselben
+> **Default-Obergrenze** wie `read-events` (gemeldet im Header
+> `X-Clio-Result-Limit`). Das schützt vor breiten Queries mit vielen Treffern;
+> ein höheres Limit setzt man explizit. Ein selektives Prädikat über einen großen
+> Scope kann lange scannen — die Server-`WriteTimeout` greift hier bewusst nicht.
+
 > **Performance:** Schränkt das Prädikat den `event.type` zwingend ein
 > (`event.type == 'x'`, `event.type in [...]`, auch als `&&`-Teil), nutzt
 > `run-query` einen **Typ-Index** und lädt nur die passenden Events statt den

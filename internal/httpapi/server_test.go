@@ -1239,6 +1239,60 @@ func TestReadEventsLimit(t *testing.T) {
 	}
 }
 
+func TestRunQueryLimit(t *testing.T) {
+	srv := newTestServer(t)
+	do(t, srv, http.MethodPost, "/api/v1/write-events", adminToken,
+		`{"events":[{"source":"s","subject":"/a","type":"t"},{"source":"s","subject":"/a","type":"t"},`+
+			`{"source":"s","subject":"/a","type":"t"},{"source":"s","subject":"/a","type":"t"},{"source":"s","subject":"/a","type":"t"}]}`)
+
+	countLines := func(rec *httptest.ResponseRecorder) int {
+		n := 0
+		for _, ln := range strings.Split(strings.TrimSpace(rec.Body.String()), "\n") {
+			if strings.TrimSpace(ln) != "" {
+				n++
+			}
+		}
+		return n
+	}
+
+	// Explizites Limit kappt die gestreamte Ausgabe + Header.
+	rec := do(t, srv, http.MethodPost, "/api/v1/run-query", adminToken, `{"subject":"/a","limit":2}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if got := countLines(rec); got != 2 {
+		t.Fatalf("zeilen = %d, want 2 (limit)", got)
+	}
+	if h := rec.Header().Get("X-Clio-Result-Limit"); h != "2" {
+		t.Fatalf("X-Clio-Result-Limit = %q, want \"2\"", h)
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "application/x-ndjson") {
+		t.Fatalf("Content-Type = %q, want x-ndjson", ct)
+	}
+
+	// limit:0 → Default-Obergrenze greift (hier > 5) → alle 5 Treffer.
+	rec = do(t, srv, http.MethodPost, "/api/v1/run-query", adminToken, `{"subject":"/a"}`)
+	if got := countLines(rec); got != 5 {
+		t.Fatalf("zeilen ohne limit = %d, want 5", got)
+	}
+	if h := rec.Header().Get("X-Clio-Result-Limit"); h != strconv.Itoa(defaultReadLimit) {
+		t.Fatalf("X-Clio-Result-Limit = %q, want default %d", h, defaultReadLimit)
+	}
+
+	// Projektion + Limit gemeinsam: gestreamte, projizierte Ausgabe, gekappt.
+	rec = do(t, srv, http.MethodPost, "/api/v1/run-query", adminToken,
+		`{"subject":"/a","limit":1,"select":["id","type"]}`)
+	if got := countLines(rec); got != 1 {
+		t.Fatalf("projektion+limit zeilen = %d, want 1", got)
+	}
+
+	// Negatives Limit → 400 (vor dem Senden der Header).
+	rec = do(t, srv, http.MethodPost, "/api/v1/run-query", adminToken, `{"subject":"/a","limit":-1}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status bei negativem limit = %d, want 400", rec.Code)
+	}
+}
+
 func TestMetricsEndpoint(t *testing.T) {
 	srv := newTestServer(t)
 	do(t, srv, http.MethodPost, "/api/v1/write-events", adminToken,

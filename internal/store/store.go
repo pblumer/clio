@@ -1098,6 +1098,14 @@ func readSubjectIndex(tx *bolt.Tx, subject string, opts ReadOptions, fn func(eve
 	return nil
 }
 
+// maxRecursiveSeqBuffer deckelt, wie viele Treffer-Sequenzen ein rekursiver
+// Nicht-Wurzel-Read im Speicher sammelt, bevor er auf den streamenden globalen
+// Scan zurückfällt. So bleibt der Speicher eines einzelnen breiten Reads
+// beschränkt (≈ 8 Byte je Eintrag → hier ~512 KB), statt bei einem Teilbaum mit
+// Millionen Events eine entsprechend riesige Seq-Liste zu allokieren. Variable
+// (nicht const), damit Tests den Schwellwert herabsetzen können.
+var maxRecursiveSeqBuffer = 1 << 16
+
 func readRecursive(tx *bolt.Tx, query string, opts ReadOptions, fn func(event.Event) bool) error {
 	// Wurzel: das Subtree ist „alles" — der nach Sequenz geordnete events-Bucket
 	// ist hier optimal (eine Index-Umleitung wäre nur teurer).
@@ -1109,12 +1117,18 @@ func readRecursive(tx *bolt.Tx, query string, opts ReadOptions, fn func(event.Ev
 	// events-Bucket zu scannen. Index-Schlüssel sind subject + sep + seq; wir
 	// betrachten nur Schlüssel mit dem literalen Prefix `query`, sammeln die
 	// passenden Sequenzen, sortieren sie (globale Ordnung) und laden gezielt.
+	//
+	// Speicherschutz (Skalierung auf Millionen Events): Übersteigt die Treffermenge
+	// maxRecursiveSeqBuffer, wird die Teil-Sammlung verworfen und stattdessen der
+	// streamende globale Scan genutzt (O(1) Speicher, identische globale Ordnung,
+	// per fn früh abbrechbar). Bis zu diesem Schwellwert bleibt der schnelle,
+	// index-begrenzte Pfad für kleine/mittlere Teilbäume erhalten.
 	idx := tx.Bucket(bucketSubjectIdx)
 	evts := tx.Bucket(bucketEvents)
 	types := opts.typeSet()
 	prefix := []byte(query)
 
-	var seqs []uint64
+	seqs := make([]uint64, 0, 1024)
 	cur := idx.Cursor()
 	for k, evKey := cur.Seek(prefix); k != nil && hasPrefix(k, prefix); k, evKey = cur.Next() {
 		sep := bytes.IndexByte(k, subjectSep)
@@ -1122,9 +1136,15 @@ func readRecursive(tx *bolt.Tx, query string, opts ReadOptions, fn func(event.Ev
 			continue
 		}
 		seq := binary.BigEndian.Uint64(evKey)
-		if inBounds(seq, opts) {
-			seqs = append(seqs, seq)
+		if !inBounds(seq, opts) {
+			continue
 		}
+		if len(seqs) >= maxRecursiveSeqBuffer {
+			// Großer Teilbaum: speicherschonend global scannen statt alle Seqs zu
+			// halten. Es wurde noch nichts emittiert → kein Doppel-/Teil-Output.
+			return scanEventsRecursive(tx, query, opts, fn)
+		}
+		seqs = append(seqs, seq)
 	}
 	sort.Slice(seqs, func(i, j int) bool { return seqs[i] < seqs[j] })
 
