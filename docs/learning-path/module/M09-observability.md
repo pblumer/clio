@@ -42,6 +42,8 @@ curl http://127.0.0.1:3000/metrics
 | `clio_active_observers` | Gauge | aktuell offene Observe-Verbindungen |
 | `clio_events_total` | Gauge | Gesamtzahl Events |
 | `clio_db_size_bytes` | Gauge | DB-Dateigröße (→ wann `compact`?) |
+| `clio_db_data_bytes` | Gauge | tatsächlich genutzter Umfang (Highwater-Mark); bei vorbelegter Datei kleiner als `clio_db_size_bytes` |
+| `clio_db_initial_bytes` | Gauge | vorbelegte Grenze (`CLIO_DB_INITIAL_MB`); nur gesetzt, wenn vorbelegt |
 
 ### Woraus du Alarme baust
 
@@ -51,6 +53,9 @@ curl http://127.0.0.1:3000/metrics
   auf heiße Streams / zu grobe Aggregat-Grenzen hin.
 - **Plattenwachstum:** `clio_db_size_bytes` als Kapazitäts- und
   `compact`-Indikator.
+- **Remap-Headroom:** Nähert sich `clio_db_data_bytes` der Grenze
+  `clio_db_initial_bytes`, drohen Schreib-Latenzspitzen — `CLIO_DB_INITIAL_MB`
+  erhöhen und neu starten (der Server warnt zusätzlich im Log).
 - **Observer-Lecks:** dauerhaft wachsende `clio_active_observers`.
 
 ### Health/Deploy-Check

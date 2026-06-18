@@ -25,6 +25,11 @@
 | `CLIO_API_TOKEN` | nein* | — | **Deprecated** (ADR-008 → ADR-025): bootet bei leerem Bund einen `legacy-token`-Admin-Key. Leitungswert ist danach ebenfalls `kid.secret`. |
 | `CLIO_ADDR` | nein | `:3000` | Listen-Adresse |
 | `CLIO_DB_PATH` | nein | `clio.db` | Pfad zur bbolt-Datei |
+| `CLIO_DB_INITIAL_MB` | nein | `0` (aus) | Vorab-Dimensionierung der Mmap/Datei in MiB (z. B. `4096`); gegen Latenzspitzen bei wachsender DB. Strikt grow-only. |
+| `CLIO_DB_MONITOR_INTERVAL` | nein | `60s` | Intervall des Headroom-Monitors (warnt vor Erreichen der vorbelegten Grenze); `0` = aus. |
+| `CLIO_DB_GROW_THRESHOLD_PCT` | nein | `80` | Warn-Schwelle des Monitors (% der vorbelegten Größe). |
+| `CLIO_DB_COMPACT_ENABLED` | nein | `false` | Online-Hintergrund-Kompaktierung im laufenden Betrieb (kurze Downtime je Lauf). |
+| `CLIO_DB_COMPACT_INTERVAL_H` | nein | `6` | Intervall der Hintergrund-Kompaktierung in Stunden. |
 | `CLIO_SYNC` | nein | `group` | Schreibstrategie (`group`/`always`/`off`) |
 | `CLIO_SIGNING_KEY` | nein | — | base64-Ed25519-Seed; aktiviert Signaturen |
 
@@ -110,6 +115,22 @@ CLIO_DB_PATH=/var/lib/clio/clio.db ./cliostore compact
 
 Die Größe ist als Metrik `clio_db_size_bytes` beobachtbar
 ([M09](M09-observability.md)).
+
+**Online statt offline:** Mit `CLIO_DB_COMPACT_ENABLED=true` defragmentiert Clio
+periodisch (`CLIO_DB_COMPACT_INTERVAL_H`, Default 6h) **im laufenden Betrieb** —
+ohne den Server zu stoppen. Pro Lauf gibt es eine kurze Downtime, in der alle
+Zugriffe blockieren, bis die DB geschlossen, defragmentiert und neu geöffnet ist.
+
+### Wachstum & Latenz: Vorab-Dimensionierung
+
+bbolt mappt die Datei beim Wachsen neu (Remap) und hält dabei kurz einen
+exklusiven Lock — bei großen Datenbanken unter Leselast erzeugt das spürbare
+**Schreib-Latenzspitzen**. `CLIO_DB_INITIAL_MB` dimensioniert die Mmap vorab
+(z. B. `4096` für 4 GiB) und verschiebt diese Remaps weit nach hinten; der
+Headroom-Monitor warnt rechtzeitig, falls der genutzte Umfang die vorbelegte
+Grenze erreicht. Der **genutzte** Umfang (getrennt von der ggf. vorbelegten
+Dateigröße) ist als `clio_db_data_bytes` beobachtbar, die Grenze als
+`clio_db_initial_bytes`. Details: [ADR / Storage-Scaling-Plan](../../adr/storage-scaling-plan.md).
 
 ## Hands-on
 
