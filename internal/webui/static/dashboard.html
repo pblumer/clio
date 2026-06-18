@@ -409,6 +409,30 @@
       <span id="q-index-warn" class="q-error" style="display:none" title="Diese Abfrage kann keinen Index nutzen und scannt den gesamten Scope."></span>
       <span id="q-status" class="badge">bereit</span>
     </div>
+    <!-- Zeitraum: der häufigste Filter — ein Ausschnitt aus dem Zeitstrahl.
+         Ein Klick erzeugt das passende CEL-Zeitprädikat (über event.time) und
+         kombiniert es mit dem Editor-Prädikat. Von/Bis lassen sich frei
+         feinjustieren; „Bis" ist exklusiv (< obere Grenze). -->
+    <div class="q-period">
+      <span class="q-period-label">⏱ Zeitraum</span>
+      <div class="q-period-chips" id="q-period-chips">
+        <button class="evs-mode" data-period="today" title="Seit Mitternacht heute">Heute</button>
+        <button class="evs-mode" data-period="yesterday" title="Der gestrige Tag">Gestern</button>
+        <button class="evs-mode" data-period="week" title="Laufende Kalenderwoche (Mo–So)">Diese Woche</button>
+        <button class="evs-mode" data-period="month" title="Laufender Kalendermonat">Dieser Monat</button>
+        <button class="evs-mode" data-period="quarter" title="Laufendes Quartal (Q1–Q4)">Dieses Quartal</button>
+        <button class="evs-mode" data-period="h1" title="1. Halbjahr (Jan–Jun)">1. Halbjahr</button>
+        <button class="evs-mode" data-period="h2" title="2. Halbjahr (Jul–Dez)">2. Halbjahr</button>
+        <button class="evs-mode" data-period="year" title="Laufendes Kalenderjahr">Dieses Jahr</button>
+        <span class="evs-sep"></span>
+        <button class="evs-mode" data-period="last7" title="Die letzten 7 Tage">Letzte 7 Tage</button>
+        <button class="evs-mode" data-period="last30" title="Die letzten 30 Tage">Letzte 30 Tage</button>
+      </div>
+      <label class="inline">von <input id="q-from" type="datetime-local" title="Untere Grenze (inklusive)"></label>
+      <label class="inline">bis<span class="q-excl" title="Obere Grenze exklusiv (&lt;)">&nbsp;(exkl.)</span> <input id="q-to" type="datetime-local" title="Obere Grenze (exklusiv)"></label>
+      <button id="q-period-clear" class="link-btn" title="Zeitfilter entfernen">zurücksetzen</button>
+      <span id="q-period-info" class="hint"></span>
+    </div>
     <div class="adv-row">
       <label class="inline">lowerBound <input id="q-lower" class="short" placeholder="ID" spellcheck="false"></label>
       <label class="inline">upperBound <input id="q-upper" class="short" placeholder="ID" spellcheck="false"></label>
@@ -467,7 +491,9 @@
         <dt><code>event.type</code></dt><dd>Event-Typ, z. B. <code>"order-placed"</code></dd>
         <dt><code>event.subject</code></dt><dd>Stream-Pfad, z. B. <code>"/orders/42"</code></dd>
         <dt><code>event.source</code></dt><dd>Herkunft (URI-artig)</dd>
-        <dt><code>event.time</code></dt><dd>Zeitstempel als String (RFC 3339) — für Zeitvergleiche <code>timestamp(event.time)</code></dd>
+        <dt><code>event.time</code></dt><dd>Zeitstempel als String (RFC 3339) — für Zeitvergleiche <code>timestamp(event.time)</code>.
+          Tipp: Die <strong>⏱ Zeitraum</strong>-Leiste über dem Editor erzeugt solche Zeitprädikate per Klick
+          (Heute, Diese Woche, Dieses Quartal, 1./2. Halbjahr, Dieses Jahr …) und kombiniert sie mit dem Prädikat.</dd>
         <dt><code>event.data</code></dt><dd>die Nutzdaten (dynamisch). Felder defensiv mit <code>has(event.data.x)</code> prüfen, bevor du sie verwendest.</dd>
       </dl>
     </section>
@@ -492,6 +518,9 @@
       <dl class="kv">
         <dt>Subject</dt><dd>Pflicht, beginnt mit <code>/</code>. Mit <strong>rekursiv</strong> alles darunter.</dd>
         <dt>lowerBound / upperBound</dt><dd>inklusive Event-ID-Grenzen, schränken den gelesenen Bereich ein.</dd>
+        <dt>⏱ Zeitraum</dt><dd>Schnellfilter über den Zeitstrahl (Von/Bis): Presets oder eigene Grenzen erzeugen ein
+          <code>timestamp(event.time)</code>-Prädikat und werden mit dem Editor-Prädikat <code>&amp;&amp;</code>-verknüpft.
+          <em>Bis</em> ist exklusiv. Ohne <code>event.type ==</code> scannt ein reiner Zeitfilter den ganzen Scope (Index-Hinweis erscheint).</dd>
         <dt>Limit</dt><dd>max. Treffer (0 = unbegrenzt).</dd>
         <dt>select</dt><dd>punktseparierte Feldpfade (z. B. <code>id, data.amount</code>) → nur diese Felder pro Zeile, Verschachtelung bleibt erhalten.</dd>
       </dl>
