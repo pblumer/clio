@@ -32,9 +32,10 @@ var dataRefRe = regexp.MustCompile(`\bdata\b`)
 type Predicate struct {
 	expr        string
 	prg         cel.Program
-	usesData    bool     // referenziert der Ausdruck event.data?
-	reqTypes    []string // geforderte event.type-Werte (sortiert), falls einschränkbar
-	typeBounded bool     // ist die Menge der erlaubten Typen sicher bestimmbar?
+	usesData    bool           // referenziert der Ausdruck event.data?
+	reqTypes    []string       // geforderte event.type-Werte (sortiert), falls einschränkbar
+	typeBounded bool           // ist die Menge der erlaubten Typen sicher bestimmbar?
+	dataEqs     []DataEquality // notwendige event.data-Feld-Gleichheiten (ADR-029)
 }
 
 // Expr liefert den ursprünglichen Ausdruck (für Logging/Fehlermeldungen).
@@ -113,10 +114,12 @@ func (c *Compiler) Compile(expr string) (*Predicate, error) {
 	}
 
 	p := &Predicate{expr: expr, prg: prg, usesData: dataRefRe.MatchString(expr)}
-	if set, ok := requiredTypes(ast.NativeRep().Expr()); ok {
+	nativeExpr := ast.NativeRep().Expr()
+	if set, ok := requiredTypes(nativeExpr); ok {
 		p.reqTypes = sortedKeys(set)
 		p.typeBounded = true
 	}
+	p.dataEqs = dataEqualities(nativeExpr)
 
 	// FIFO-Eviction: bei erreichter Grenze die ältesten Einträge verdrängen,
 	// bevor der neue aufgenommen wird. Bereits zurückgegebene *Predicate bleiben
@@ -182,6 +185,86 @@ func requiredTypes(e celast.Expr) (map[string]struct{}, bool) {
 		}
 	}
 	return nil, false
+}
+
+// DataEquality ist eine aus dem Prädikat abgeleitete Gleichheits-Bedingung auf
+// einem Top-Level-`event.data`-Feld (z. B. {Field: "department", Value: "support"}
+// für `event.data.department == 'support'`). Sie ermöglicht den Daten-Index in
+// run-query (ADR-029).
+type DataEquality struct {
+	Field string
+	Value string
+}
+
+// DataEqualities liefert die Top-Level-`event.data.<feld> == '<string>'`-
+// Gleichheiten, die das Prädikat NOTWENDIG erfüllt (über UND verknüpft). Eine
+// solche Gleichheit ist eine notwendige Bedingung jedes Treffers und darf daher
+// einen Index-Lookup steuern, ohne Treffer zu verlieren. Unter ODER lässt sich
+// nichts garantieren → solche Zweige liefern keine Gleichheit. Nur String-Werte
+// (v1, ADR-029). Beim Kompilieren einmalig bestimmt.
+func (p *Predicate) DataEqualities() []DataEquality { return p.dataEqs }
+
+// dataEqualities sammelt rekursiv die notwendigen data-Feld-Gleichheiten (nur
+// über UND; ODER/Unbekanntes liefert nichts — konservativ, nie zu viel).
+func dataEqualities(e celast.Expr) []DataEquality {
+	if e.Kind() != celast.CallKind {
+		return nil
+	}
+	call := e.AsCall()
+	args := call.Args()
+	switch call.FunctionName() {
+	case operators.Equals:
+		if len(args) == 2 {
+			if f, v, ok := dataFieldEqString(args[0], args[1]); ok {
+				return []DataEquality{{Field: f, Value: v}}
+			}
+			if f, v, ok := dataFieldEqString(args[1], args[0]); ok {
+				return []DataEquality{{Field: f, Value: v}}
+			}
+		}
+	case operators.LogicalAnd:
+		return append(dataEqualities(args[0]), dataEqualities(args[1])...)
+	}
+	return nil
+}
+
+// dataFieldEqString liefert (feld, wert), falls a der Zugriff `event.data.<feld>`
+// und b ein String-Literal ist.
+func dataFieldEqString(a, b celast.Expr) (string, string, bool) {
+	field, ok := dataField(a)
+	if !ok {
+		return "", "", false
+	}
+	v, ok := stringLiteral(b)
+	if !ok {
+		return "", "", false
+	}
+	return field, v, true
+}
+
+// dataField prüft, ob e der Top-Level-Feldzugriff `event.data.<feld>` ist, und
+// liefert den Feldnamen. Verschachtelte Pfade (`event.data.a.b`) sind v1 nicht
+// abgedeckt (der Operand wäre selbst ein Select auf `event.data`, nicht `event`).
+func dataField(e celast.Expr) (string, bool) {
+	if e.Kind() != celast.SelectKind {
+		return "", false
+	}
+	sel := e.AsSelect()
+	field := sel.FieldName()
+	op := sel.Operand()
+	// op muss exakt `event.data` sein.
+	if op.Kind() != celast.SelectKind {
+		return "", false
+	}
+	inner := op.AsSelect()
+	if inner.FieldName() != "data" {
+		return "", false
+	}
+	base := inner.Operand()
+	if base.Kind() != celast.IdentKind || base.AsIdent() != "event" {
+		return "", false
+	}
+	return field, true
 }
 
 // isEventType prüft, ob ein Ausdruck der Feldzugriff `event.type` ist.

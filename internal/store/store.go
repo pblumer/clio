@@ -37,6 +37,10 @@ var (
 	bucketTypes      = []byte("types")
 	bucketSubjCount  = []byte("subj_count")
 	bucketSchemas    = []byte("schemas")
+	// bucketDataIdx ist der deklarative Sekundärindex auf `event.data`-Felder
+	// (ADR-029): Schlüssel (typ, feld, wert, seq) → Event-Sequenz. Nur explizit
+	// per Options.DataIndexFields deklarierte (typ,feld)-Paare werden gepflegt.
+	bucketDataIdx = []byte("data_idx")
 	// bucketAuthKeys hält den Schlüsselbund (kid → JSON-Key, ADR-025). Bewusst
 	// getrennt vom Event-Strom: es sind mutable Steuerungsdaten und vom Reset
 	// (ADR-022) ausgenommen — siehe Reset().
@@ -46,6 +50,13 @@ var (
 // metaChainHead speichert im meta-Bucket den Hash des zuletzt geschriebenen
 // Events (Kopf der Hash-Kette).
 var metaChainHead = []byte("chain_head")
+
+// metaDataIdxCovered speichert im meta-Bucket die Menge der (typ,feld)-Paare,
+// für die der Daten-Index (ADR-029) bereits über die gesamte Historie aufgebaut
+// wurde (JSON-Array aus "typ\x00feld"-Strings). So wird ein neu deklariertes
+// Feld beim nächsten Öffnen einmalig nachindiziert, ohne bereits abgedeckte
+// Felder erneut zu scannen.
+var metaDataIdxCovered = []byte("data_idx_covered")
 
 // subjectSep trennt im Subject-Index das Subject von der Sequenznummer.
 // 0x00 kommt in Subject-Pfaden nicht vor und ist daher als Separator sicher.
@@ -144,6 +155,12 @@ type Options struct {
 	// die Datei real auf diese Größe vorbelegt (grow-only, siehe ensureFileSize).
 	// 0 = aus (bisheriges Verhalten).
 	InitialMmapSize int
+
+	// DataIndexFields deklariert je Event-Typ die `event.data`-Top-Level-Felder,
+	// die in den Sekundärindex aufgenommen werden (ADR-029). nil/leer = kein Feld
+	// indiziert (Default). Neu deklarierte Felder werden beim Öffnen einmalig über
+	// die vorhandenen Events nachindiziert (siehe backfillDataIdx).
+	DataIndexFields map[string][]string
 }
 
 // Store kapselt die bbolt-Datenbank.
@@ -183,6 +200,11 @@ type Store struct {
 
 	// compress legt fest, ob neue Event-Werte komprimiert abgelegt werden (ADR-024).
 	compress bool
+
+	// dataIdxFields ist die deklarierte (typ → feld-Menge)-Zuordnung des
+	// Sekundärindex (ADR-029). Nach dem Öffnen unveränderlich, daher lock-frei
+	// lesbar. Leer = Index aus.
+	dataIdxFields map[string]map[string]struct{}
 }
 
 // Open öffnet (oder erstellt) die Datenbank unter path mit Standardoptionen
@@ -233,7 +255,7 @@ func OpenWithOptions(path string, opts Options) (*Store, error) {
 	}
 
 	err = db.Update(func(tx *bolt.Tx) error {
-		for _, name := range [][]byte{bucketEvents, bucketSubjectIdx, bucketTypeIdx, bucketMeta, bucketTypes, bucketSubjCount, bucketSchemas, bucketAuthKeys} {
+		for _, name := range [][]byte{bucketEvents, bucketSubjectIdx, bucketTypeIdx, bucketMeta, bucketTypes, bucketSubjCount, bucketSchemas, bucketDataIdx, bucketAuthKeys} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return err
 			}
@@ -254,7 +276,12 @@ func OpenWithOptions(path string, opts Options) (*Store, error) {
 		}
 		// Und die Subject-Zähler (Subject → Anzahl) für die kostenbasierte
 		// Index-Wahl in run-query (ADR-023) — ebenfalls idempotenter Backfill.
-		return backfillSubjCount(tx)
+		if err := backfillSubjCount(tx); err != nil {
+			return err
+		}
+		// Neu deklarierte data-Index-Felder (ADR-029) einmalig über die Historie
+		// nachindizieren — idempotent über den covered-Marker im meta-Bucket.
+		return backfillDataIdx(tx, normalizeDataIdxFields(opts.DataIndexFields))
 	})
 	if err != nil {
 		_ = db.Close()
@@ -268,6 +295,7 @@ func OpenWithOptions(path string, opts Options) (*Store, error) {
 		now:             time.Now,
 		syncMode:        opts.SyncMode,
 		schemaCache:     make(map[string]*jsonschema.Schema),
+		dataIdxFields:   normalizeDataIdxFields(opts.DataIndexFields),
 	}
 	if opts.SigningKey != nil {
 		s.signKey = opts.SigningKey
@@ -388,7 +416,7 @@ func (s *Store) Reset() (uint64, error) {
 		// Bewusst OHNE bucketAuthKeys: der Schlüsselbund (ADR-025) ist mutabler
 		// Steuerungs-State, kein Event-Strom. Würde der Dev-Reset ihn leeren,
 		// sperrte man sich beim Reset selbst aus (kein gültiger Key mehr).
-		for _, name := range [][]byte{bucketEvents, bucketSubjectIdx, bucketTypeIdx, bucketMeta, bucketTypes, bucketSchemas} {
+		for _, name := range [][]byte{bucketEvents, bucketSubjectIdx, bucketTypeIdx, bucketMeta, bucketTypes, bucketSubjCount, bucketSchemas, bucketDataIdx} {
 			if tx.Bucket(name) != nil {
 				if err := tx.DeleteBucket(name); err != nil {
 					return err
@@ -862,6 +890,238 @@ func (s *Store) ReadByTypesFunc(types []string, opts ReadOptions, fn func(event.
 	})
 }
 
+// normalizeDataIdxFields wandelt die deklarierte (typ → feld-Liste)-Konfig in
+// eine (typ → feld-Menge)-Form für O(1)-Mitgliedschaftsprüfungen. Leere/triviale
+// Einträge werden verworfen; ohne Felder ergibt sich nil (Index aus).
+func normalizeDataIdxFields(in map[string][]string) map[string]map[string]struct{} {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]map[string]struct{}, len(in))
+	for typ, fields := range in {
+		if typ == "" {
+			continue
+		}
+		set := make(map[string]struct{}, len(fields))
+		for _, f := range fields {
+			if f != "" {
+				set[f] = struct{}{}
+			}
+		}
+		if len(set) > 0 {
+			out[typ] = set
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// DataFieldIndexed meldet, ob für (typ,feld) ein gepflegter Daten-Index existiert
+// (ADR-029) — die Voraussetzung dafür, dass run-query ein
+// `event.data.<feld> == '<wert>'`-Prädikat per Index statt per Voll-Scan
+// beantworten darf.
+func (s *Store) DataFieldIndexed(typ, field string) bool {
+	fields, ok := s.dataIdxFields[typ]
+	if !ok {
+		return false
+	}
+	_, ok = fields[field]
+	return ok
+}
+
+// dataIdxPrefix bildet den Seek-Prefix typ\x00feld\x00len(wert)\x00wert für eine
+// Gleichheits-Abfrage. Der Wert wird längenpräfigiert, damit ein Wert nie der
+// Präfix eines anderen sein kann (z. B. "a" vs. "ab") — sonst lieferte ein
+// Prefix-Seek falsche Treffer. typ/feld enthalten keinen Separator (0x00).
+func dataIdxPrefix(typ, field string, value []byte) []byte {
+	p := make([]byte, 0, len(typ)+1+len(field)+1+4+len(value))
+	p = append(p, typ...)
+	p = append(p, subjectSep)
+	p = append(p, field...)
+	p = append(p, subjectSep)
+	var lp [4]byte
+	binary.BigEndian.PutUint32(lp[:], uint32(len(value)))
+	p = append(p, lp[:]...)
+	return append(p, value...)
+}
+
+// dataIdxKey bildet den vollständigen Daten-Index-Schlüssel (Prefix + seq).
+func dataIdxKey(typ, field string, value []byte, seq uint64) []byte {
+	return append(dataIdxPrefix(typ, field, value), seqKey(seq)...)
+}
+
+// indexDataFields schreibt für ein Event die Index-Einträge aller für seinen Typ
+// deklarierten Felder. Nur Top-Level-`data`-Felder mit String-Wert werden
+// indiziert (v1, ADR-029); fehlende oder nicht-stringwertige Felder werden
+// übersprungen. data ist die kanonisch kompaktierte Payload (wie gespeichert).
+func indexDataFields(didx *bolt.Bucket, fields map[string]struct{}, typ string, data json.RawMessage, seq uint64) error {
+	if len(fields) == 0 || len(data) == 0 {
+		return nil
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(data, &obj); err != nil {
+		return nil // kein JSON-Objekt → nichts zu indizieren (kein Fehler)
+	}
+	key := seqKey(seq)
+	for field := range fields {
+		raw, ok := obj[field]
+		if !ok {
+			continue
+		}
+		s, ok := decodeJSONString(raw)
+		if !ok {
+			continue // v1: nur String-Werte
+		}
+		if err := didx.Put(dataIdxKey(typ, field, []byte(s), seq), key); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// decodeJSONString liefert den String-Wert eines JSON-RawMessage, falls es ein
+// JSON-String ist (führendes '"'). So bleibt das Indexieren auf String-Felder
+// beschränkt, ohne Zahlen/Objekte teuer zu dekodieren.
+func decodeJSONString(raw json.RawMessage) (string, bool) {
+	if len(raw) == 0 || raw[0] != '"' {
+		return "", false
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return "", false
+	}
+	return s, true
+}
+
+// ReadByDataFieldFunc streamt — über den Daten-Index (ADR-029) — alle Events des
+// Typs typ, deren Top-Level-`data`-Feld field exakt dem String value entspricht,
+// in globaler Sequenzreihenfolge und ruft fn je Event auf. Liefert fn false,
+// bricht der Scan ab (für Limit). lowerBound/upperBound werden respektiert.
+// Subject-Scope und das vollständige Prädikat prüft der Aufrufer — dieser Index
+// liefert eine notwendige Bedingung (Gleichheit), nie ein zu enges Ergebnis.
+func (s *Store) ReadByDataFieldFunc(typ, field, value string, opts ReadOptions, fn func(event.Event) bool) error {
+	return s.view(func(tx *bolt.Tx) error {
+		didx := tx.Bucket(bucketDataIdx)
+		evts := tx.Bucket(bucketEvents)
+		if didx == nil {
+			return nil
+		}
+		prefix := dataIdxPrefix(typ, field, []byte(value))
+		cur := didx.Cursor()
+		for k, v := cur.Seek(prefix); k != nil && hasPrefix(k, prefix); k, v = cur.Next() {
+			if len(k) != len(prefix)+8 {
+				continue // exakter Wert (keine Längen-/Separator-Kollision)
+			}
+			seq := binary.BigEndian.Uint64(v)
+			if !inBounds(seq, opts) {
+				continue
+			}
+			raw := evts.Get(seqKey(seq))
+			if raw == nil {
+				return fmt.Errorf("inkonsistenter data-index: event %d fehlt", seq)
+			}
+			var ev event.Event
+			if err := unmarshalStored(raw, &ev); err != nil {
+				return fmt.Errorf("event dekodieren: %w", err)
+			}
+			if !fn(ev) {
+				return nil
+			}
+		}
+		return nil
+	})
+}
+
+// backfillDataIdx indiziert beim Öffnen die deklarierten (typ,feld)-Paare, die
+// laut covered-Marker im meta-Bucket noch nicht über die gesamte Historie
+// aufgebaut wurden — in einem einzigen Scan über alle Events. Idempotent: bereits
+// abgedeckte Felder werden übersprungen, ein leerer Store/keine offenen Felder
+// kostet nichts. Felder, die aus der Konfig entfernt wurden, bleiben als covered
+// markiert (ihre Alt-Einträge stören nicht; der Planner fragt nur deklarierte
+// Felder ab).
+func backfillDataIdx(tx *bolt.Tx, fields map[string]map[string]struct{}) error {
+	if len(fields) == 0 {
+		return nil
+	}
+	meta := tx.Bucket(bucketMeta)
+	covered := loadCoveredDataIdx(meta)
+
+	// Offene (noch nicht abgedeckte) Felder je Typ bestimmen.
+	pending := make(map[string]map[string]struct{})
+	for typ, set := range fields {
+		for field := range set {
+			if _, done := covered[typ+"\x00"+field]; done {
+				continue
+			}
+			if pending[typ] == nil {
+				pending[typ] = make(map[string]struct{})
+			}
+			pending[typ][field] = struct{}{}
+		}
+	}
+	if len(pending) == 0 {
+		return nil
+	}
+
+	didx := tx.Bucket(bucketDataIdx)
+	evts := tx.Bucket(bucketEvents)
+	c := evts.Cursor()
+	for k, v := c.First(); k != nil; k, v = c.Next() {
+		var ev event.Event
+		if err := unmarshalStored(v, &ev); err != nil {
+			return fmt.Errorf("event für data-index-backfill dekodieren: %w", err)
+		}
+		set := pending[ev.Type]
+		if len(set) == 0 {
+			continue
+		}
+		if err := indexDataFields(didx, set, ev.Type, ev.Data, binary.BigEndian.Uint64(k)); err != nil {
+			return err
+		}
+	}
+
+	for typ, set := range pending {
+		for field := range set {
+			covered[typ+"\x00"+field] = struct{}{}
+		}
+	}
+	return storeCoveredDataIdx(meta, covered)
+}
+
+// loadCoveredDataIdx liest die Menge bereits indizierter (typ,feld)-Paare aus dem
+// meta-Bucket (JSON-Array aus "typ\x00feld"-Strings).
+func loadCoveredDataIdx(meta *bolt.Bucket) map[string]struct{} {
+	out := make(map[string]struct{})
+	raw := meta.Get(metaDataIdxCovered)
+	if len(raw) == 0 {
+		return out
+	}
+	var list []string
+	if err := json.Unmarshal(raw, &list); err != nil {
+		return out // korrupter Marker → als „nichts abgedeckt" behandeln (neu aufbauen)
+	}
+	for _, s := range list {
+		out[s] = struct{}{}
+	}
+	return out
+}
+
+// storeCoveredDataIdx schreibt die covered-Menge zurück in den meta-Bucket.
+func storeCoveredDataIdx(meta *bolt.Bucket, covered map[string]struct{}) error {
+	list := make([]string, 0, len(covered))
+	for s := range covered {
+		list = append(list, s)
+	}
+	sort.Strings(list)
+	raw, err := json.Marshal(list)
+	if err != nil {
+		return err
+	}
+	return meta.Put(metaDataIdxCovered, raw)
+}
+
 // typePrefix bildet den Index-Prefix type + sep (zum Seek je Typ).
 func typePrefix(typ string) []byte {
 	p := make([]byte, 0, len(typ)+1)
@@ -955,6 +1215,7 @@ func (s *Store) AppendAuthored(candidates []event.Candidate, preconditions []Pre
 		meta := tx.Bucket(bucketMeta)
 		types := tx.Bucket(bucketTypes)
 		subjc := tx.Bucket(bucketSubjCount)
+		didx := tx.Bucket(bucketDataIdx)
 
 		// Kopf der Hash-Kette lesen (Genesis, falls leer). Innerhalb einer
 		// (Group-Commit-)Transaktion sehen Folgeschreiber den aktualisierten
@@ -1028,6 +1289,12 @@ func (s *Store) AppendAuthored(candidates []event.Candidate, preconditions []Pre
 				return err
 			}
 			if err := incrSubjectCount(subjc, c.Subject); err != nil {
+				return err
+			}
+			// Sekundärindex auf deklarierte data-Felder pflegen (ADR-029). data ist
+			// hier die kanonisch kompaktierte Form (wie gespeichert) — identisch zur
+			// Backfill-Quelle, damit Schreib- und Backfill-Pfad denselben Wert ablegen.
+			if err := indexDataFields(didx, s.dataIdxFields[c.Type], c.Type, data, seq); err != nil {
 				return err
 			}
 

@@ -108,7 +108,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		return err
 	}
 
-	opts := store.Options{SyncMode: syncMode(cfg.Sync), Compress: cfg.Compress}
+	opts := store.Options{SyncMode: syncMode(cfg.Sync), Compress: cfg.Compress, DataIndexFields: cfg.DataIndexFields}
 	if cfg.DBInitialMB > 0 {
 		opts.InitialMmapSize = cfg.DBInitialMB << 20
 	}

@@ -1158,10 +1158,39 @@ func (s *Server) handleRunQuery(w http.ResponseWriter, r *http.Request) {
 		return emit(ev)
 	}
 
+	// Daten-Index-Wahl (ADR-029): Verlangt das Prädikat genau einen Typ und eine
+	// `event.data.<feld> == '<wert>'`-Gleichheit auf einem für diesen Typ
+	// indizierten Feld, beantwortet ein direkter Wert-Lookup die Query — statt
+	// alle Events des Typs zu laden und jede Payload zu deserialisieren (der teure
+	// Pfad aus ADR-028). Die Gleichheit ist eine notwendige Bedingung, der Lookup
+	// verliert also keine Treffer; Subject und Restprädikat prüft `scan`/`emit`.
+	var diType, diField, diValue string
+	useDataIdx := false
+	if pred != nil && len(reqTypes) == 1 {
+		for _, eq := range pred.DataEqualities() {
+			if s.store.DataFieldIndexed(reqTypes[0], eq.Field) {
+				diType, diField, diValue = reqTypes[0], eq.Field, eq.Value
+				useDataIdx = true
+				break
+			}
+		}
+	}
+
 	var scanErr error
 	switch {
 	case typeBounded && len(reqTypes) == 0:
 		// Kein Typ kann das Prädikat erfüllen → leeres Ergebnis (kein Scan).
+	case useDataIdx:
+		// Direkter Wert-Lookup über den Daten-Index; Subject-Scope nachfiltern.
+		scanErr = s.store.ReadByDataFieldFunc(diType, diField, diValue, opts, func(ev event.Event) bool {
+			if !guard() {
+				return false
+			}
+			if !store.MatchSubject(ev.Subject, req.Subject, req.Recursive) {
+				return true
+			}
+			return emit(ev)
+		})
 	case typeBounded:
 		// Kostenbasierte Index-Wahl (ADR-023): den selektiveren von Typ- und
 		// Subject-Index wählen. Beide Pfade liefern dasselbe Ergebnis; nur die
