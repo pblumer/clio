@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -104,6 +105,18 @@ type Config struct {
 	// unbegrenzten Verhalten. Der run-query-Stream sendet unabhängig davon einen
 	// Heartbeat, der die Proxy-Verbindung während langer Scans offen hält.
 	QueryTimeout time.Duration
+
+	// DataIndexFields deklariert pro Event-Typ die `event.data`-Felder, die in
+	// einen internen Sekundärindex aufgenommen werden (ADR-029). Ein
+	// `event.data.<feld> == '<wert>'`-Prädikat über einen so indizierten Typ wird
+	// dann per Index-Range-Scan beantwortet statt per vollständigem Typ-Scan mit
+	// Payload-Deserialisierung (der teure Pfad aus ADR-028). Per
+	// CLIO_DATA_INDEX_FIELDS als kommagetrennte `typ:feld`-Liste konfigurierbar
+	// (z. B. "identity.employee.new.v2:department,identity.employee.new.v2:lastName").
+	// Leer (Default) = kein Feld indiziert → vollständig rückwärtskompatibel.
+	// Nur Top-Level-Felder mit String-Wert (v1); verschachtelte Pfade und
+	// numerische Werte sind bewusst nicht abgedeckt.
+	DataIndexFields map[string][]string
 }
 
 // Environment-Variablen, aus denen die Konfiguration gelesen wird.
@@ -124,6 +137,7 @@ const (
 	envEventAuth = "CLIO_EVENT_AUTHORSHIP"
 	envObsvPre   = "CLIO_OBSERVE_PREAMBLE_BYTES"
 	envQueryTO   = "CLIO_QUERY_TIMEOUT"
+	envDataIdx   = "CLIO_DATA_INDEX_FIELDS"
 
 	defaultAddr    = ":3000"
 	defaultDBPath  = "clio.db"
@@ -184,7 +198,48 @@ func FromEnv() (Config, error) {
 	}
 	cfg.DBMonitorInterval = mon
 
+	fields, err := parseDataIndexFields(os.Getenv(envDataIdx))
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.DataIndexFields = fields
+
 	return cfg, nil
+}
+
+// parseDataIndexFields liest die kommagetrennte `typ:feld`-Liste aus
+// CLIO_DATA_INDEX_FIELDS (ADR-029) und gruppiert sie je Typ. Leer ergibt nil
+// (kein Feld indiziert). Ein Eintrag ohne genau ein ':' oder mit leerem Typ/Feld
+// ist ein Fehler — lieber laut scheitern als still ein Feld nicht indizieren.
+// Doppelte `typ:feld`-Einträge werden zusammengefasst (idempotent).
+func parseDataIndexFields(v string) (map[string][]string, error) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return nil, nil
+	}
+	out := make(map[string][]string)
+	seen := make(map[string]struct{})
+	for _, entry := range strings.Split(v, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		typ, field, ok := strings.Cut(entry, ":")
+		typ, field = strings.TrimSpace(typ), strings.TrimSpace(field)
+		if !ok || typ == "" || field == "" {
+			return nil, fmt.Errorf("%s: Eintrag %q muss die Form \"typ:feld\" haben", envDataIdx, entry)
+		}
+		key := typ + "\x00" + field
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		seen[key] = struct{}{}
+		out[typ] = append(out[typ], field)
+	}
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return out, nil
 }
 
 // parseDurationDefault liest eine Go-Dauer (z. B. "30s", "2m") aus der Umgebung.
