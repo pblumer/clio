@@ -173,7 +173,8 @@
   .ev-id { color: var(--muted); min-width: 52px; }
   .ev-type { color: #0b1020; background: var(--accent); border-radius: 5px; padding: 1px 7px; font-weight: 600; font-size: 12px; }
   .ev-subject { color: var(--fg); flex: 1; min-width: 0; overflow-wrap: anywhere; }
-  .ev-time { color: var(--muted); font-size: 12px; white-space: nowrap; }
+  .ev-source { color: var(--muted); font-size: 11.5px; opacity: .85; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 200px; }
+  .ev-time { color: var(--muted); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
   .ev-data { margin: 8px 0 0; padding: 9px 11px; background: var(--bg); border: 1px solid var(--border); border-radius: 7px;
              font-family: var(--mono); font-size: 12px; white-space: pre-wrap; word-break: break-word; display: none; }
   .ev.open .ev-data { display: block; }
@@ -203,6 +204,15 @@
   .type-item.open .ev-data { display: block; margin: 0 0 8px; }
   /* Query-Editor */
   .adv-row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin: -4px 0 12px; }
+  /* Zeitraum-Leiste (Query): prominenter Schnellfilter über den Zeitstrahl */
+  .q-period { display: flex; gap: 8px 10px; flex-wrap: wrap; align-items: center;
+    margin: 0 0 12px; padding: 10px 12px; background: var(--panel); border: 1px solid var(--border); border-radius: 9px; }
+  .q-period-label { font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: 1px;
+    color: var(--accent); text-shadow: var(--glow); align-self: center; }
+  .q-period-chips { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; }
+  .q-period input[type="datetime-local"] { min-width: 0; padding: 5px 8px; font-size: 12px; }
+  .q-period .q-excl { font-size: 10px; color: var(--muted); }
+  #q-period-info { font-variant-numeric: tabular-nums; color: var(--accent-2); }
   .hint { color: var(--muted); font-size: 12px; }
   kbd { font-family: var(--mono); font-size: 11px; background: var(--panel-2); border: 1px solid var(--border);
         border-bottom-width: 2px; border-radius: 5px; padding: 1px 5px; color: var(--fg); }

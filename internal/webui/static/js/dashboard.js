@@ -1046,6 +1046,15 @@ function buildPath(watch = true) {
   for (const t of $("live-types").value.split(",").map((s) => s.trim()).filter(Boolean)) p.append("type", t);
   return path + "?" + p.toString();
 }
+// fmtEvTime zeigt Datum + Uhrzeit eines Events kompakt an (de-CH). Heute wird auf
+// die Uhrzeit verkürzt, ältere Events tragen das Datum davor — der exakte
+// ISO-Zeitstempel hängt im title der Zeit-Spalte.
+function fmtEvTime(d) {
+  const t = d.toLocaleTimeString("de-CH");
+  const now = new Date();
+  const sameDay = d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+  return sameDay ? t : d.toLocaleDateString("de-CH") + " " + t;
+}
 function renderEvent(ev) {
   const row = document.createElement("div");
   row.className = "ev";
@@ -1055,10 +1064,19 @@ function renderEvent(ev) {
     `<span class="ev-id">#${ev.id ?? "?"}</span>` +
     `<span class="ev-type"></span>` +
     `<span class="ev-subject"></span>` +
+    `<span class="ev-source"></span>` +
     `<span class="ev-time"></span>`;
   head.children[1].textContent = ev.type ?? "?";
   head.children[2].textContent = ev.subject ?? "";
-  head.children[3].textContent = ev.time ? new Date(ev.time).toLocaleTimeString("de-CH") : "";
+  // Grunddaten: Herkunft (source) und voller Zeitstempel mit Datum. Der exakte
+  // RFC-3339-Wert steht jeweils im title (Tooltip), die Anzeige bleibt kompakt.
+  const src = ev.source ?? "";
+  if (src) { head.children[3].textContent = "src " + src; head.children[3].title = "source: " + src; }
+  if (ev.time) {
+    const d = new Date(ev.time);
+    head.children[4].textContent = fmtEvTime(d);
+    head.children[4].title = ev.time;
+  }
   row.appendChild(head);
   if (ev.data !== undefined) {
     const pre = document.createElement("pre");
@@ -1661,8 +1679,15 @@ async function runQuery() {
   if (!subject || subject[0] !== "/") { setQErr('subject muss mit "/" beginnen'); return; }
   setQErr(""); setQIndexWarn("");
   const req = { subject, recursive: $("q-recursive").checked };
+  // Editor-Prädikat mit dem Zeitraum-Filter (falls gesetzt) zu einem effektiven
+  // CEL-Prädikat verbinden. Der Editor-Teil wird geklammert, damit ein internes
+  // `||` nicht über das per `&&` angehängte Zeitprädikat hinwegbindet.
   const where = qEditor.value.trim();
-  if (where) req.where = where;
+  const tp = timePredicate();
+  let eff = where;
+  if (where && tp) eff = "(" + where + ") && " + tp;
+  else if (tp) eff = tp;
+  if (eff) req.where = eff;
   const limit = parseInt($("q-limit").value, 10);
   if (!isNaN(limit) && limit >= 0) req.limit = limit;
   const lower = $("q-lower").value.trim(), upper = $("q-upper").value.trim();
@@ -1714,6 +1739,8 @@ async function runQuery() {
 function persistQuery() {
   sessionStorage.setItem("clioQuery", qEditor.value);
   sessionStorage.setItem("clioQuerySubject", $("q-subject").value);
+  sessionStorage.setItem("clioQueryFrom", $("q-from").value);
+  sessionStorage.setItem("clioQueryTo", $("q-to").value);
 }
 $("q-run").addEventListener("click", runQuery);
 $("q-clear").addEventListener("click", () => {
@@ -1732,6 +1759,7 @@ function currentQueryState() {
     subject: $("q-subject").value.trim() || "/", recursive: $("q-recursive").checked,
     where: qEditor.value.trim(), select: $("q-select").value.trim(),
     limit: $("q-limit").value.trim(), lower: $("q-lower").value.trim(), upper: $("q-upper").value.trim(),
+    from: $("q-from").value, to: $("q-to").value,
   };
 }
 function applyQueryState(s) {
@@ -1742,6 +1770,9 @@ function applyQueryState(s) {
   $("q-limit").value = (s.limit === undefined || s.limit === "") ? "100" : s.limit;
   $("q-lower").value = s.lower || "";
   $("q-upper").value = s.upper || "";
+  $("q-from").value = s.from || "";
+  $("q-to").value = s.to || "";
+  updatePeriod(null);
   setQErr(""); syncEditor(); persistQuery();
   qSampleLoaded = false;
   switchView("query");
@@ -1751,11 +1782,13 @@ function loadStore(key) { try { return JSON.parse(localStorage.getItem(key)) || 
 function saveStore(key, v) { try { localStorage.setItem(key, JSON.stringify(v)); } catch (_) {} }
 function sameState(a, b) {
   return a.subject === b.subject && a.recursive === b.recursive && a.where === b.where &&
-    a.select === b.select && a.limit === b.limit && a.lower === b.lower && a.upper === b.upper;
+    a.select === b.select && a.limit === b.limit && a.lower === b.lower && a.upper === b.upper &&
+    (a.from || "") === (b.from || "") && (a.to || "") === (b.to || "");
 }
 function scopeLabel(s) {
   let t = s.subject + (s.recursive ? " ·rek" : "");
   if (s.select) t += " · select " + s.select;
+  if (s.from || s.to) t += " · ⏱ " + rangeLabel(s.from, s.to);
   return t;
 }
 function recordHistory(state) {
@@ -1856,7 +1889,85 @@ renderHistory(); renderFavorites();
 // gespeicherte Query wiederherstellen
 qEditor.value = sessionStorage.getItem("clioQuery") || "";
 $("q-subject").value = sessionStorage.getItem("clioQuerySubject") || "/";
+$("q-from").value = sessionStorage.getItem("clioQueryFrom") || "";
+$("q-to").value = sessionStorage.getItem("clioQueryTo") || "";
 syncEditor();
+
+// ---------- Query: Zeitraum-Schnellfilter (Ausschnitt aus dem Zeitstrahl) ----------
+// Die Presets liefern einen [von, bis)-Bereich relativ zu "jetzt"; bis ist immer
+// exklusiv (Beginn der nächsten Periode), damit sich Perioden lückenlos und
+// überlappungsfrei aneinanderreihen. Gerechnet wird in lokaler Zeit, ausgegeben
+// als UTC-ISO fürs CEL-Prädikat (timestamp(event.time)).
+function startOfDay(d) { return new Date(d.getFullYear(), d.getMonth(), d.getDate()); }
+function periodRange(key) {
+  const now = new Date();
+  const y = now.getFullYear(), m = now.getMonth(), day = now.getDate();
+  switch (key) {
+    case "today":     { const a = startOfDay(now); return [a, new Date(y, m, day + 1)]; }
+    case "yesterday": return [new Date(y, m, day - 1), startOfDay(now)];
+    case "week":      { const a = startOfDay(now); a.setDate(a.getDate() - ((a.getDay() + 6) % 7)); return [a, new Date(a.getFullYear(), a.getMonth(), a.getDate() + 7)]; }
+    case "month":     return [new Date(y, m, 1), new Date(y, m + 1, 1)];
+    case "quarter":   { const q = Math.floor(m / 3); return [new Date(y, q * 3, 1), new Date(y, q * 3 + 3, 1)]; }
+    case "h1":        return [new Date(y, 0, 1), new Date(y, 6, 1)];
+    case "h2":        return [new Date(y, 6, 1), new Date(y + 1, 0, 1)];
+    case "year":      return [new Date(y, 0, 1), new Date(y + 1, 0, 1)];
+    case "last7":     return [new Date(y, m, day - 6), new Date(y, m, day + 1)];
+    case "last30":    return [new Date(y, m, day - 29), new Date(y, m, day + 1)];
+  }
+  return null;
+}
+// Date -> "YYYY-MM-DDTHH:mm" in lokaler Zeit für <input type=datetime-local>.
+function toLocalInput(d) {
+  const p = (n) => String(n).padStart(2, "0");
+  return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) + "T" + p(d.getHours()) + ":" + p(d.getMinutes());
+}
+function isoNoMs(d) { return new Date(d).toISOString().replace(/\.\d{3}Z$/, "Z"); }
+// timePredicate baut aus den Von/Bis-Feldern das CEL-Zeitprädikat (oder "").
+function timePredicate() {
+  const f = $("q-from").value, t = $("q-to").value;
+  const parts = [];
+  if (f) parts.push("timestamp(event.time) >= timestamp('" + isoNoMs(new Date(f)) + "')");
+  if (t) parts.push("timestamp(event.time) < timestamp('" + isoNoMs(new Date(t)) + "')");
+  return parts.join(" && ");
+}
+function fmtBound(v) {
+  if (!v) return "…";
+  const d = new Date(v);
+  const hm = d.toLocaleTimeString("de-CH", { hour: "2-digit", minute: "2-digit" });
+  const date = d.toLocaleDateString("de-CH");
+  return hm === "00:00" ? date : date + " " + hm;
+}
+function rangeLabel(from, to) { return fmtBound(from) + " – " + fmtBound(to); }
+// updatePeriod hebt den passenden Chip hervor (oder keinen, wenn manuell
+// justiert wurde) und blendet die lesbare Zeitspanne + das erzeugte CEL ein.
+function updatePeriod(activeKey) {
+  for (const b of $("q-period-chips").querySelectorAll("[data-period]")) {
+    b.classList.toggle("active", b.dataset.period === activeKey);
+  }
+  const info = $("q-period-info");
+  const f = $("q-from").value, t = $("q-to").value;
+  if (!f && !t) { info.textContent = ""; info.title = ""; return; }
+  info.textContent = "Zeitfilter: " + rangeLabel(f, t);
+  info.title = timePredicate();
+}
+function setPeriod(key) {
+  const r = periodRange(key);
+  if (!r) return;
+  $("q-from").value = toLocalInput(r[0]);
+  $("q-to").value = toLocalInput(r[1]);
+  updatePeriod(key);
+  persistQuery();
+}
+for (const b of $("q-period-chips").querySelectorAll("[data-period]")) {
+  b.addEventListener("click", () => setPeriod(b.dataset.period));
+}
+// Manuelles Justieren von Von/Bis löst die Chip-Markierung und aktualisiert die Info.
+$("q-from").addEventListener("input", () => { updatePeriod(null); persistQuery(); });
+$("q-to").addEventListener("input", () => { updatePeriod(null); persistQuery(); });
+$("q-period-clear").addEventListener("click", () => {
+  $("q-from").value = ""; $("q-to").value = ""; updatePeriod(null); persistQuery();
+});
+updatePeriod(null);
 
 // ---------- Hilfe: Beispiele (in den Editor ladbar) ----------
 const HELP_EXAMPLES = [
@@ -1868,6 +1979,10 @@ const HELP_EXAMPLES = [
     where: "has(event.data.title) && event.data.title.contains('Dune')" },
   { desc: "Mehrere Typen via in-Operator", subject: "/orders", recursive: true,
     where: "event.type in ['order-placed', 'order-cancelled']" },
+  { desc: "Zeitraum: dieses Quartal (Zeitfilter-Chip)", subject: "/", recursive: true,
+    where: "", period: "quarter" },
+  { desc: "Zeitraum: ab einem festen Datum (CEL-Zeitprädikat)", subject: "/", recursive: true,
+    where: "timestamp(event.time) >= timestamp('2026-01-01T00:00:00Z')" },
   { desc: "Alle Events eines Streams (leeres Prädikat)", subject: "/books/42", recursive: false, where: "" },
 ];
 function loadExample(ex) {
@@ -1875,6 +1990,10 @@ function loadExample(ex) {
   $("q-recursive").checked = !!ex.recursive;
   $("q-select").value = ex.select || "";
   qEditor.value = ex.where || "";
+  // Zeitfilter passend zum Beispiel setzen (oder zurücksetzen), damit es
+  // vorhersehbar genau das ausführt, was beschrieben ist.
+  if (ex.period) { setPeriod(ex.period); }
+  else { $("q-from").value = ""; $("q-to").value = ""; updatePeriod(null); }
   setQErr(""); syncEditor(); persistQuery();
   qSampleLoaded = false;
   switchView("query");
@@ -1896,7 +2015,8 @@ function loadExample(ex) {
     const code = document.createElement("pre");
     code.className = "ex-code";
     code.textContent = (ex.where || "(leeres Prädikat)") +
-      "\n→ subject " + ex.subject + (ex.recursive ? " (rekursiv)" : "") + (ex.select ? " · select " + ex.select : "");
+      "\n→ subject " + ex.subject + (ex.recursive ? " (rekursiv)" : "") + (ex.select ? " · select " + ex.select : "") +
+      (ex.period ? " · ⏱ Zeitfilter „" + ex.period + "“" : "");
     card.append(head, code);
     host.appendChild(card);
   }
