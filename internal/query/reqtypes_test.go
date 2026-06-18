@@ -34,6 +34,10 @@ func TestRequiredTypes(t *testing.T) {
 		{"event.subject == '/x' || event.type == 'a'", nil, false}, // dito, andere Seite
 		{"has(event.data.x) || event.type == 'a'", nil, false},     // dito
 		{"event.type == 'a' || event.data.amount > 0", nil, false}, // dito
+		// RHS ist kein String-Literal (sondern ein Feldzugriff) -> nicht ableitbar.
+		{"event.type == event.source", nil, false},
+		// in-Liste mit einem Nicht-Literal-Element -> Menge nicht bestimmbar.
+		{"event.type in ['a', event.source]", nil, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.expr, func(t *testing.T) {
