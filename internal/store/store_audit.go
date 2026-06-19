@@ -1,4 +1,4 @@
-// Persistentes Audit-Log administrativer Aktionen (ADR-031).
+// Persistentes Audit-Log administrativer Aktionen (ADR-032).
 //
 // Das Audit-Log lebt in einem eigenen, append-only Bucket (audit_log) — bewusst
 // getrennt vom Event-Strom (events): Audit-Einträge sollen Fach-Events nicht
@@ -22,7 +22,7 @@ const (
 	AuditFailure = "failure"
 )
 
-// Audit-Aktionsnamen (ADR-031), bewusst stabil und punktiert (Bereich.Verb),
+// Audit-Aktionsnamen (ADR-032), bewusst stabil und punktiert (Bereich.Verb),
 // damit sie sich gut filtern lassen. Zentral hier, damit HTTP-Layer und CLI/
 // Maintenance dieselbe Vokabel verwenden.
 const (

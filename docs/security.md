@@ -34,7 +34,7 @@ fehlender/ungültiger Authentifizierung).
 > **Prinzip der geringsten Rechte.** Vergib pro Anwendungsfall einen eigenen Key
 > mit minimalem Scope: ein Reporting-Job bekommt `read`, ein Producer `write`,
 > nur die Betriebsverwaltung `admin`. Subject-/Prefix-basierte Rechte
-> (`read:/orders/*`) sind als Ausbaustufe **entworfen** (ADR-032, Designvorschlag),
+> (`read:/orders/*`) sind als Ausbaustufe **entworfen** (ADR-033, Designvorschlag),
 > aber noch **nicht implementiert** — aktuell ist der Scope global.
 
 ---

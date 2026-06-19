@@ -7,7 +7,7 @@ unter [**docs/windows-server-2022.md**](../../docs/windows-server-2022.md).
 Diese Mappe enthält ergänzend:
 
 - [`clio-backup.ps1`](clio-backup.ps1) — Hot-Backup über den HTTP-Endpunkt
-  (ADR-030) + `verify` + Rotation, für die Windows-Aufgabenplanung.
+  (ADR-031) + `verify` + Rotation, für die Windows-Aufgabenplanung.
 
 Empfohlene Umgebungsvariablen je Betriebsprofil:
 [`docs/operations-profiles.md`](../../docs/operations-profiles.md).

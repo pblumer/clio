@@ -1,6 +1,6 @@
 # Audit-Log
 
-> Praxisleitfaden zum persistenten Audit-Log administrativer Aktionen (ADR-031).
+> Praxisleitfaden zum persistenten Audit-Log administrativer Aktionen (ADR-032).
 > Verwandt: [`security.md`](security.md) (Keys/Scopes) und das geplante
 > `threat-model.md` (Vertrauensgrenzen).
 
@@ -9,7 +9,7 @@ clio führt **zwei** Audit-Spuren, mit unterschiedlichem Zweck:
 | Spur | Wo | Inhalt | Beständigkeit |
 |---|---|---|---|
 | **Authz-Log** (ADR-025) | `slog` (stdout) | *jede* Autorisierungsentscheidung (allow/deny pro Request) | flüchtig, hochvolumig |
-| **Audit-Log** (ADR-031) | bbolt-Bucket `audit_log` | *administrative Aktionen* (Mutationen) | dauerhaft, abfragbar |
+| **Audit-Log** (ADR-032) | bbolt-Bucket `audit_log` | *administrative Aktionen* (Mutationen) | dauerhaft, abfragbar |
 
 Diese Seite beschreibt die zweite Spur — die durable, abfragbare.
 
@@ -106,7 +106,7 @@ cliostore keys create --db clio.db --name auditor --scopes audit
   oder Admin (siehe Threat Model).
 
 > **Folgeschritt (optional):** eine Hash-Verkettung der Audit-Einträge (analog
-> ADR-012) würde das Log tamper-evident machen. Additiv nachrüstbar, in ADR-031
+> ADR-012) würde das Log tamper-evident machen. Additiv nachrüstbar, in ADR-032
 > als Option notiert.
 
 ---

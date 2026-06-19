@@ -4,13 +4,13 @@
 > Backup-/Restore-/DR-Story von `cliostore`. **Stufe 1** (Snapshot/Restore) ist
 > das committete Zielbild und vollständig ausspezifiziert; **Stufe 2**
 > (Continuous Archiving / PITR) ist eine bewusst abgegrenzte, optionale
-> Ausbaustufe und nur skizziert. Die zugehörige Entscheidung ist **ADR-030**
+> Ausbaustufe und nur skizziert. Die zugehörige Entscheidung ist **ADR-031**
 > (siehe §6) und in `ARCHITECTURE.md` §7 übernommen. *(Stufe 1 ist umgesetzt;
 > die Betriebsanleitung steht in [`backup-restore.md`](backup-restore.md).)*
 >
 > **Hinweis Nummerierung:** Dieses Dokument wurde verfasst, als die nächste freie
 > ADR-Nummer 026 war; bei der Umsetzung war 026 bereits durch die Event-Herkunft
-> belegt, daher trägt die Entscheidung final die Nummer **ADR-030**. Ältere
+> belegt, daher trägt die Entscheidung final die Nummer **ADR-031**. Ältere
 > „ADR-026"-Erwähnungen unten meinen dieselbe Entscheidung.
 
 ---

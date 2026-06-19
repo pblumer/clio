@@ -1,4 +1,4 @@
-# Täglicher Hot-Backup gegen den HTTP-Endpunkt des Service (ADR-030). Schreibt auf
+# Täglicher Hot-Backup gegen den HTTP-Endpunkt des Service (ADR-031). Schreibt auf
 # das clio-backups-PVC und verifiziert das frische Artefakt. Öffnet bewusst NICHT
 # die DB-Datei direkt (die laufende Instanz hält den Lock).
 apiVersion: batch/v1

@@ -36,7 +36,7 @@ kubectl -n clio apply -f backup-cronjob.yaml
 ```
 
 > **Backup-Hinweis:** Der CronJob ruft `GET /api/v1/backup` über den Service auf
-> (in-Process Hot-Backup, ADR-030) — er öffnet **nicht** die DB-Datei direkt
+> (in-Process Hot-Backup, ADR-031) — er öffnet **nicht** die DB-Datei direkt
 > (das ginge wegen des Locks der laufenden Instanz schief). Ein roher
 > CSI-`VolumeSnapshot` ist wegen bbolts Copy-on-Write meist konsistent, aber
 > `GET /api/v1/backup` ist die garantiert konsistente, plattformunabhängige Variante.

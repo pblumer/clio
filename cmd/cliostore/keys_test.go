@@ -86,7 +86,7 @@ func TestKeysCreateValidation(t *testing.T) {
 }
 
 // TestKeysCLIWritesAudit: Offline-Key-Aktionen schreiben Audit-Einträge (Actor
-// "cli", ADR-031).
+// "cli", ADR-032).
 func TestKeysCLIWritesAudit(t *testing.T) {
 	db := filepath.Join(t.TempDir(), "clio.db")
 	var out bytes.Buffer

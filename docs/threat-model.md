@@ -35,7 +35,7 @@
   Historie!), im Dev-Mode zurücksetzen. Ein kompromittierter Admin ist innerhalb
   von clio die **höchste Eskalation**.
 - **Schutz:** wenige, getrennte Admin-Keys; Auditor liest mit eigenem `audit`-Scope
-  (least privilege); Admin-Aktionen landen im **persistenten Audit-Log** (ADR-031).
+  (least privilege); Admin-Aktionen landen im **persistenten Audit-Log** (ADR-032).
 - **Restrisiko (ehrlich):** Das Audit-Log ist v1 **nicht kryptografisch
   fälschungssicher** — ein kompromittierter Admin (oder Host) kann es manipulieren
   (siehe [`audit.md`](audit.md) §4). clio schützt **nicht** gegen einen

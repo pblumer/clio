@@ -2,7 +2,7 @@
 
 > Praktische Anleitung für den Betrieb. Das **Warum** und die
 > Architekturentscheidung stehen in [`backup-restore-dr-concept.md`](backup-restore-dr-concept.md)
-> und **ADR-030** ([`ARCHITECTURE.md`](../ARCHITECTURE.md) §7). Diese Seite zeigt
+> und **ADR-031** ([`ARCHITECTURE.md`](../ARCHITECTURE.md) §7). Diese Seite zeigt
 > die Kommandos, die Garantien und die Fehlerfälle.
 
 Clio sichert sich über **konsistente Snapshots** der bbolt-Datei — nicht über
@@ -113,7 +113,7 @@ ein Event-für-Event-Replay liefert bit-identische Hashes, und der nächste
 
 - **Kein automatisches Failover / keine Replikation.** Backup ≠ Hochverfügbarkeit.
 - **Kein PITR out-of-the-box.** Der RPO ist das Backup-Intervall (siehe §6). Eine
-  optionale PITR-Ausbaustufe ist in ADR-030 skizziert, aber zurückgestellt.
+  optionale PITR-Ausbaustufe ist in ADR-031 skizziert, aber zurückgestellt.
 - **Keine Verschlüsselung des Artefakts.** Das `.clio` ist eine reine bbolt-Datei;
   Schutz im Ruhezustand/Transport (Volume-Encryption, GPG, Objektspeicher-SSE)
   liegt beim Betreiber — siehe [`threat-model.md`](threat-model.md) (Backup-Diebstahl).

@@ -470,7 +470,7 @@ paths:
       tags: [Admin]
       summary: Audit-Log administrativer Aktionen lesen (Scope audit oder admin)
       description: |
-        Liefert die jüngsten administrativen Audit-Einträge (ADR-031), neueste
+        Liefert die jüngsten administrativen Audit-Einträge (ADR-032), neueste
         zuerst, read-only. Lesbar mit Scope `audit` **oder** `admin`. Es landet
         nie ein Geheimnis im Log. Das Audit-Log ist append-only und kann **nicht**
         über die Write-API verändert werden.
@@ -905,7 +905,7 @@ components:
     AuditEntry:
       type: object
       description: |
-        Ein Eintrag im persistenten Audit-Log administrativer Aktionen (ADR-031).
+        Ein Eintrag im persistenten Audit-Log administrativer Aktionen (ADR-032).
         Enthält nie ein Geheimnis.
       properties:
         seq: { type: integer, description: "Eigene monotone Sequenz des Audit-Logs.", example: 7 }

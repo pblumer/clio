@@ -124,7 +124,7 @@ func (s *Server) requireScope(scope auth.Scope, next http.HandlerFunc) http.Hand
 }
 
 // requireAnyScope wie requireScope, akzeptiert aber jeden Schlüssel, der MINDESTENS
-// einen der scopes trägt (ADR-031: das Audit-Log liest, wer `audit` ODER `admin`
+// einen der scopes trägt (ADR-032: das Audit-Log liest, wer `audit` ODER `admin`
 // hat). Genau ein scope verhält sich identisch zu requireScope.
 func (s *Server) requireAnyScope(scopes []auth.Scope, next http.HandlerFunc) http.HandlerFunc {
 	label := joinScopes(scopes)

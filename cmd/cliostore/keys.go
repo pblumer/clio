@@ -218,7 +218,7 @@ func runKeysRevoke(args []string, out io.Writer) error {
 	return nil
 }
 
-// recordCLIKeyAudit schreibt einen Audit-Eintrag (ADR-031) für eine
+// recordCLIKeyAudit schreibt einen Audit-Eintrag (ADR-032) für eine
 // Offline-CLI-Key-Aktion (Actor "cli"). Best effort: ein Fehler bricht die Aktion
 // nicht ab (auf stderr nicht nötig — die Aktion selbst ist bereits erfolgt).
 func recordCLIKeyAudit(st *store.Store, action, kid string) {

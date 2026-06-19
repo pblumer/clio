@@ -62,7 +62,7 @@ func TestAppendAuditFailure(t *testing.T) {
 }
 
 // TestAuditSurvivesReset: der Dev-Reset (ADR-022) löscht Events, aber NICHT das
-// Audit-Log (ADR-031) — die Spur des Resets bleibt erhalten.
+// Audit-Log (ADR-032) — die Spur des Resets bleibt erhalten.
 func TestAuditSurvivesReset(t *testing.T) {
 	s := openTestStore(t, filepath.Join(t.TempDir(), "audit.db"), Options{})
 

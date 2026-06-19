@@ -342,7 +342,7 @@ Jede Autorisierungsentscheidung (allow/deny) wird strukturiert ins **slog**
 geschrieben — ohne jedes Geheimnis. Zusätzlich führt clio ein **persistentes
 Audit-Log** administrativer Aktionen (Key create/rotate/revoke, Schema-
 Registrierung, Backup, Dev-Reset, Compaction) in einem eigenen, append-only
-bbolt-Bucket (ADR-031). Es ist read-only über `GET /api/v1/audit` lesbar — mit
+bbolt-Bucket (ADR-032). Es ist read-only über `GET /api/v1/audit` lesbar — mit
 Scope `audit` **oder** `admin` — und nicht über die Write-API manipulierbar:
 
 ```bash
@@ -767,7 +767,7 @@ CLIO_DB_PATH=clio.db ./cliostore compact
 
 ### Backup, Restore & Verify
 
-Clio sichert sich über **konsistente Snapshots** der bbolt-Datei (ADR-030). Ein
+Clio sichert sich über **konsistente Snapshots** der bbolt-Datei (ADR-031). Ein
 Snapshot ist selbst eine gültige, per Hash-Kette prüfbare `.clio`-Datei:
 
 ```bash

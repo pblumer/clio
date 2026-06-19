@@ -27,7 +27,7 @@ const (
 	// ScopeAdmin erlaubt die Schlüsselverwaltung und Dev-Routen.
 	ScopeAdmin Scope = "admin"
 	// ScopeAudit erlaubt ausschließlich das read-only Lesen des Audit-Logs
-	// (ADR-031). Bewusst getrennt von admin, damit ein reiner Auditor keine
+	// (ADR-032). Bewusst getrennt von admin, damit ein reiner Auditor keine
 	// administrativen Rechte braucht (Prinzip der geringsten Rechte).
 	ScopeAudit Scope = "audit"
 )

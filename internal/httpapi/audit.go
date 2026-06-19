@@ -38,7 +38,7 @@ func (s *Server) auditDecision(r *http.Request, scope auth.Scope, decision strin
 	s.logger.Info("audit", attrs...)
 }
 
-// recordAudit schreibt einen administrativen Audit-Eintrag (ADR-031) in den
+// recordAudit schreibt einen administrativen Audit-Eintrag (ADR-032) in den
 // persistenten audit_log-Bucket. Der Actor stammt aus der authentifizierten
 // Identität des Requests (leer bei system). Ein leeres errMsg bedeutet Erfolg;
 // ein gesetztes Ergebnis markiert den Eintrag als Misserfolg. Best effort: ein
@@ -61,7 +61,7 @@ func (s *Server) recordAudit(r *http.Request, action, target, errMsg string) {
 	}
 }
 
-// handleAudit liefert die jüngsten administrativen Audit-Einträge (ADR-031),
+// handleAudit liefert die jüngsten administrativen Audit-Einträge (ADR-032),
 // read-only. Scope `audit` oder `admin` (requireAnyScope). Query-Parameter:
 // limit (Default 100, max 1000) und before (Cursor: nur Seq < before).
 func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {

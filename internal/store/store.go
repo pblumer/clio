@@ -46,7 +46,7 @@ var (
 	// (ADR-022) ausgenommen — siehe Reset().
 	bucketAuthKeys = []byte("auth_keys")
 	// bucketAuditLog hält das append-only Audit-Log administrativer Aktionen
-	// (seq → JSON-AuditEntry, ADR-031). Eigener Bucket, getrennt vom Event-Strom,
+	// (seq → JSON-AuditEntry, ADR-032). Eigener Bucket, getrennt vom Event-Strom,
 	// damit Audit-Einträge Fach-Events nicht stören und nicht über die Write-API
 	// erreichbar sind. Wie auth_keys vom Reset (ADR-022) ausgenommen.
 	bucketAuditLog = []byte("audit_log")
@@ -426,7 +426,7 @@ func (s *Store) Reset() (uint64, error) {
 		deleted = tx.Bucket(bucketEvents).Sequence()
 		// Bewusst OHNE bucketAuthKeys und bucketAuditLog: der Schlüsselbund
 		// (ADR-025) ist mutabler Steuerungs-State (würde der Reset ihn leeren,
-		// sperrte man sich aus), und das Audit-Log (ADR-031) muss die Spur des
+		// sperrte man sich aus), und das Audit-Log (ADR-032) muss die Spur des
 		// Resets selbst überleben — beide bleiben erhalten.
 		for _, name := range [][]byte{bucketEvents, bucketSubjectIdx, bucketTypeIdx, bucketMeta, bucketTypes, bucketSubjCount, bucketSchemas, bucketDataIdx} {
 			if tx.Bucket(name) != nil {

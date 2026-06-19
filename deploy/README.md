@@ -28,7 +28,7 @@ Dateien hier (`*.env.example`) entsprechen **small-production**.
 - **Single-Instance bleibt Pflicht** (ADR-002) — nie zwei Prozesse auf derselben
   DB-Datei (Lock-Konflikt/Korruption). In Kubernetes heißt das `replicas: 1`.
 - **Hot-Backup über HTTP**, nicht über das CLI gegen die gehaltene Datei — die
-  laufende Instanz hält den exklusiven bbolt-Lock (ADR-030).
+  laufende Instanz hält den exklusiven bbolt-Lock (ADR-031).
 - **TLS/öffentlicher Zugang über einen Reverse Proxy** — clio bindet nur lokal
   und terminiert kein TLS (siehe Reverse-Proxy-Hinweise in der Production-Readiness-Doku).
 - **Auth-Bootstrap nur einmal** — `CLIO_BOOTSTRAP_ADMIN_KEY` für den Erststart,
