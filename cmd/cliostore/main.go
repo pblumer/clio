@@ -147,14 +147,19 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	// (läuft nur bei gesetztem CLIO_DB_INITIAL_MB). Endet mit ctx beim Shutdown.
 	startBackgroundMaintenance(ctx, st, cfg, logger)
 
+	api := httpapi.New(
+		cfg,
+		st,
+		logger,
+		httpapi.WithBuildInfo(version, time.Now().UTC()),
+	)
+	// Hintergrundaufgaben des API-Layers (Presence-Sweeper, ADR-030) starten; sie
+	// enden mit ctx beim Graceful Shutdown.
+	api.StartBackground(ctx)
+
 	srv := &http.Server{
-		Addr: cfg.Addr,
-		Handler: httpapi.New(
-			cfg,
-			st,
-			logger,
-			httpapi.WithBuildInfo(version, time.Now().UTC()),
-		).Handler(),
+		Addr:    cfg.Addr,
+		Handler: api.Handler(),
 		// ReadHeaderTimeout schützt gegen Slowloris auf den Headern.
 		ReadHeaderTimeout: 5 * time.Second,
 		// WriteTimeout begrenzt hängende/langsame Antworten und gibt so blockierte

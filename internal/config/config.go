@@ -106,6 +106,28 @@ type Config struct {
 	// Heartbeat, der die Proxy-Verbindung während langer Scans offen hält.
 	QueryTimeout time.Duration
 
+	// PresenceWindow ist das gleitende „Online"-Fenster der Aktivitäts-/Presence-
+	// Registry (ADR-030): ein Schlüssel ohne offene Observe-Verbindung gilt als
+	// online, solange seine letzte erfolgreiche Aktivität jünger als dieses Fenster
+	// ist. Per CLIO_PRESENCE_WINDOW als Go-Dauer (Default 60s). 0 schaltet das
+	// zeitbasierte Fenster ab — dann zählt nur eine offene Observe-Verbindung als
+	// online.
+	PresenceWindow time.Duration
+
+	// AuthEvents schaltet die optionalen Auth-Lifecycle-Events ein (ADR-030):
+	// Session-Start/-Ende und Key angelegt/widerrufen werden als CloudEvents in den
+	// reservierten, server-only Subject-Namespace /_clio/auth/… geschrieben
+	// (Dogfooding — mit run-query/observe/UI abfragbar). Per CLIO_AUTH_EVENTS;
+	// Default aus (rückwärtskompatibel, kein Eingriff in den Event-Strom). Bewusst
+	// KEIN Event pro Read/Write.
+	AuthEvents bool
+
+	// AuthDeniedEvents schaltet zusätzlich access-denied-Events ein (ADR-030):
+	// wiederholte 401/403 eines bekannten Schlüssels werden — rate-limitiert gegen
+	// Flutung — als Events unter /_clio/auth/denied/… geschrieben. Per
+	// CLIO_AUTH_DENIED_EVENTS; Default aus. Greift nur, wenn AuthEvents aktiv ist.
+	AuthDeniedEvents bool
+
 	// DataIndexFields deklariert pro Event-Typ die `event.data`-Felder, die in
 	// einen internen Sekundärindex aufgenommen werden (ADR-029). Ein
 	// `event.data.<feld> == '<wert>'`-Prädikat über einen so indizierten Typ wird
@@ -138,6 +160,9 @@ const (
 	envObsvPre   = "CLIO_OBSERVE_PREAMBLE_BYTES"
 	envQueryTO   = "CLIO_QUERY_TIMEOUT"
 	envDataIdx   = "CLIO_DATA_INDEX_FIELDS"
+	envPresence  = "CLIO_PRESENCE_WINDOW"
+	envAuthEv    = "CLIO_AUTH_EVENTS"
+	envAuthDenEv = "CLIO_AUTH_DENIED_EVENTS"
 
 	defaultAddr    = ":3000"
 	defaultDBPath  = "clio.db"
@@ -149,10 +174,11 @@ const (
 	// reale Platte, schützt aber vor versehentlichen Tippfehlern (und Overflow).
 	maxInitMB = 64 << 20
 
-	defaultMonInterval = 60 * time.Second
-	defaultGrowPct     = 80
-	defaultCompactH    = 6
-	maxCompactH        = 168 // eine Woche
+	defaultMonInterval    = 60 * time.Second
+	defaultPresenceWindow = 60 * time.Second
+	defaultGrowPct        = 80
+	defaultCompactH       = 6
+	maxCompactH           = 168 // eine Woche
 )
 
 // validSync enthält die erlaubten Werte für CLIO_SYNC.
@@ -180,6 +206,8 @@ func FromEnv() (Config, error) {
 		Compress:             parseBoolDefault(envCompress, false),
 		EventAuthorship:      parseBoolDefault(envEventAuth, false),
 		ObservePreambleBytes: parseIntDefault(envObsvPre, defaultObsvPre, 0, maxObsvPre),
+		AuthEvents:           parseBoolDefault(envAuthEv, false),
+		AuthDeniedEvents:     parseBoolDefault(envAuthDenEv, false),
 	}
 
 	if !validSync[cfg.Sync] {
@@ -197,6 +225,12 @@ func FromEnv() (Config, error) {
 		return Config{}, err
 	}
 	cfg.DBMonitorInterval = mon
+
+	pw, err := parseDurationDefault(envPresence, defaultPresenceWindow)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.PresenceWindow = pw
 
 	fields, err := parseDataIndexFields(os.Getenv(envDataIdx))
 	if err != nil {

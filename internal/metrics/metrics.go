@@ -24,9 +24,17 @@ type reqKey struct {
 	status int
 }
 
+// authKey identifiziert eine Autorisierungsentscheidung nach Scope und Ausgang
+// (allow/deny) — die Basis des clio_auth_decisions_total-Counters (ADR-030).
+type authKey struct {
+	scope    string
+	decision string
+}
+
 // Gauges sind Momentaufnahmen, die beim Rendern von außen geliefert werden.
 type Gauges struct {
 	ActiveObservers int
+	OnlineKeys      int // aktuell als online geltende Schlüssel (ADR-030)
 	EventsTotal     uint64
 	DBSizeBytes     int64
 	DBDataBytes     int64 // genutzter Umfang (High-Water-Mark; < 0 = unbekannt)
@@ -47,13 +55,15 @@ type Metrics struct {
 	durCount             uint64
 	eventsWritten        uint64
 	preconditionFailures uint64
+	authDecisions        map[authKey]uint64
 }
 
 // New erstellt einen leeren Sammler.
 func New() *Metrics {
 	return &Metrics{
-		requests: make(map[reqKey]uint64),
-		bucket:   make([]uint64, len(durationBuckets)),
+		requests:      make(map[reqKey]uint64),
+		bucket:        make([]uint64, len(durationBuckets)),
+		authDecisions: make(map[authKey]uint64),
 	}
 }
 
@@ -69,6 +79,14 @@ func (m *Metrics) ObserveRequest(method, route string, status int, d time.Durati
 			m.bucket[i]++
 		}
 	}
+	m.mu.Unlock()
+}
+
+// ObserveAuthDecision verbucht eine Autorisierungsentscheidung (ADR-030):
+// scope ist der geforderte Scope der Route, decision "allow" oder "deny".
+func (m *Metrics) ObserveAuthDecision(scope, decision string) {
+	m.mu.Lock()
+	m.authDecisions[authKey{scope, decision}]++
 	m.mu.Unlock()
 }
 
@@ -123,7 +141,26 @@ func (m *Metrics) Write(w io.Writer, g Gauges) {
 	writeCounter(w, "clio_events_written_total", "Anzahl geschriebener Events.", m.eventsWritten)
 	writeCounter(w, "clio_precondition_failures_total", "Fehlgeschlagene Preconditions (HTTP 409).", m.preconditionFailures)
 
+	if len(m.authDecisions) > 0 {
+		fmt.Fprintln(w, "# HELP clio_auth_decisions_total Autorisierungsentscheidungen nach Scope und Ausgang (ADR-030).")
+		fmt.Fprintln(w, "# TYPE clio_auth_decisions_total counter")
+		akeys := make([]authKey, 0, len(m.authDecisions))
+		for k := range m.authDecisions {
+			akeys = append(akeys, k)
+		}
+		sort.Slice(akeys, func(i, j int) bool {
+			if akeys[i].scope != akeys[j].scope {
+				return akeys[i].scope < akeys[j].scope
+			}
+			return akeys[i].decision < akeys[j].decision
+		})
+		for _, k := range akeys {
+			fmt.Fprintf(w, "clio_auth_decisions_total{scope=%q,decision=%q} %d\n", k.scope, k.decision, m.authDecisions[k])
+		}
+	}
+
 	writeGauge(w, "clio_active_observers", "Aktuell offene observe-Verbindungen.", uint64(g.ActiveObservers))
+	writeGauge(w, "clio_online_keys", "Aktuell als online geltende Schlüssel (ADR-030).", uint64(g.OnlineKeys))
 	writeGauge(w, "clio_events_total", "Anzahl gespeicherter Events.", g.EventsTotal)
 	if g.DBSizeBytes >= 0 {
 		writeGauge(w, "clio_db_size_bytes", "Größe der Datenbankdatei in Bytes.", uint64(g.DBSizeBytes))

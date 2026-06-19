@@ -316,3 +316,40 @@ func TestFromEnvDevMode(t *testing.T) {
 		}
 	}
 }
+
+func TestFromEnvPresenceAndAuthEvents(t *testing.T) {
+	t.Setenv(envToken, "tok")
+
+	// Defaults: 60s-Fenster, Auth-Events aus.
+	cfg, err := FromEnv()
+	if err != nil {
+		t.Fatalf("unerwarteter fehler: %v", err)
+	}
+	if cfg.PresenceWindow != defaultPresenceWindow {
+		t.Errorf("PresenceWindow = %v, want default %v", cfg.PresenceWindow, defaultPresenceWindow)
+	}
+	if cfg.AuthEvents || cfg.AuthDeniedEvents {
+		t.Errorf("Auth-Events sollen per Default aus sein, sind %v/%v", cfg.AuthEvents, cfg.AuthDeniedEvents)
+	}
+
+	// Overrides.
+	t.Setenv(envPresence, "30s")
+	t.Setenv(envAuthEv, "true")
+	t.Setenv(envAuthDenEv, "1")
+	cfg, err = FromEnv()
+	if err != nil {
+		t.Fatalf("unerwarteter fehler: %v", err)
+	}
+	if cfg.PresenceWindow != 30*time.Second {
+		t.Errorf("PresenceWindow = %v, want 30s", cfg.PresenceWindow)
+	}
+	if !cfg.AuthEvents || !cfg.AuthDeniedEvents {
+		t.Errorf("Auth-Events sollen aktiv sein, sind %v/%v", cfg.AuthEvents, cfg.AuthDeniedEvents)
+	}
+
+	// Ungültige Dauer ist ein Fehler.
+	t.Setenv(envPresence, "nope")
+	if _, err := FromEnv(); err == nil {
+		t.Error("ungültige CLIO_PRESENCE_WINDOW soll einen Fehler ergeben")
+	}
+}

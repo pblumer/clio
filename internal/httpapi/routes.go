@@ -30,6 +30,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/register-event-schema", s.requireScope(auth.ScopeWrite, s.handleRegisterEventSchema))
 	s.mux.HandleFunc("GET /api/v1/read-event-schema", s.requireScope(auth.ScopeRead, s.handleReadEventSchema))
 
+	// Aktivität & Presence (ADR-030): wer ist online, wer tut was. Scope admin.
+	s.mux.HandleFunc("GET /api/v1/activity", s.requireScope(auth.ScopeAdmin, s.handleActivity))
+
 	// Schlüsselverwaltung zur Laufzeit (ADR-025) — ausschließlich Scope admin.
 	s.mux.HandleFunc("POST /api/v1/keys", s.requireScope(auth.ScopeAdmin, s.handleCreateKey))
 	s.mux.HandleFunc("GET /api/v1/keys", s.requireScope(auth.ScopeAdmin, s.handleListKeys))

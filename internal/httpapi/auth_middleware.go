@@ -4,9 +4,34 @@ import (
 	"context"
 	"crypto/subtle"
 	"net/http"
+	"time"
 
+	"github.com/pblumer/clio/internal/activity"
 	"github.com/pblumer/clio/internal/auth"
 )
+
+// categoryForScope bildet den geforderten Routen-Scope auf die Aktivitäts-
+// Kategorie der Presence-Registry ab (ADR-030).
+func categoryForScope(scope auth.Scope) activity.Category {
+	switch scope {
+	case auth.ScopeWrite:
+		return activity.CategoryWrite
+	case auth.ScopeAdmin:
+		return activity.CategoryAdmin
+	default:
+		return activity.CategoryRead
+	}
+}
+
+// scopeStrings übersetzt eine auth.Scope-Liste in Strings (für die
+// abhängigkeitsfreie Aktivitäts-Registry).
+func scopeStrings(scopes []auth.Scope) []string {
+	out := make([]string, len(scopes))
+	for i, s := range scopes {
+		out[i] = string(s)
+	}
+	return out
+}
 
 // contextKey ist der private Schlüsseltyp für Werte im Request-Context.
 type contextKey int
@@ -96,6 +121,14 @@ func (s *Server) requireScope(scope auth.Scope, next http.HandlerFunc) http.Hand
 		// widerrufener Schlüssel. Bewusst kein Name im Log (uniformes 401).
 		if !parsed || !found || !secretOK || !key.Active() {
 			s.auditDecision(r, scope, "deny", http.StatusUnauthorized, auditKID, "")
+			s.metrics.ObserveAuthDecision(string(scope), "deny")
+			// Aktivität/Denial nur für BEKANNTE Schlüssel verbuchen (found): so kann
+			// ein 401 mit beliebigem, unbekanntem kid die Registry nicht mit
+			// Müll-Einträgen aufblähen (ADR-030, Review-Gate).
+			if found {
+				s.activity.Record(key.KID, key.Name, scopeStrings(key.Scopes), categoryForScope(scope), false, time.Now().UTC())
+				s.maybeEmitDenied(key.KID, key.Name, key.Scopes, scope, http.StatusUnauthorized)
+			}
 			writeError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
@@ -103,11 +136,20 @@ func (s *Server) requireScope(scope auth.Scope, next http.HandlerFunc) http.Hand
 		// nicht. Bewusst von 401 getrennt (ADR-025).
 		if !key.HasScope(scope) {
 			s.auditDecision(r, scope, "deny", http.StatusForbidden, key.KID, key.Name)
+			s.metrics.ObserveAuthDecision(string(scope), "deny")
+			s.activity.Record(key.KID, key.Name, scopeStrings(key.Scopes), categoryForScope(scope), false, time.Now().UTC())
+			s.maybeEmitDenied(key.KID, key.Name, key.Scopes, scope, http.StatusForbidden)
 			writeError(w, http.StatusForbidden, "forbidden: scope "+string(scope)+" erforderlich")
 			return
 		}
 
 		s.auditDecision(r, scope, "allow", http.StatusOK, key.KID, key.Name)
+		s.metrics.ObserveAuthDecision(string(scope), "allow")
+		// Aktivität verbuchen; ein Übergang offline→online löst (opt-in) ein
+		// session-started-Event aus (ADR-030).
+		if started := s.activity.Record(key.KID, key.Name, scopeStrings(key.Scopes), categoryForScope(scope), true, time.Now().UTC()); started {
+			s.emitSessionStarted(key.KID, key.Name, key.Scopes)
+		}
 		ident := auth.Identity{KID: key.KID, Name: key.Name, Scopes: key.Scopes}
 		next(w, r.WithContext(withIdentity(r.Context(), ident)))
 	}

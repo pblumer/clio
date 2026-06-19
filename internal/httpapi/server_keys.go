@@ -76,9 +76,12 @@ func (s *Server) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	byKID := ""
 	if id, ok := identityFromContext(r); ok {
+		byKID = id.KID
 		s.logger.Info("key angelegt", "by", id.KID, "kid", key.KID, "name", key.Name, "scopes", key.Scopes)
 	}
+	s.emitKeyCreated(key, byKID)
 
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"kid":       key.KID,
@@ -140,9 +143,12 @@ func (s *Server) handleRevokeKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	byKID := ""
 	if id, ok := identityFromContext(r); ok {
+		byKID = id.KID
 		s.logger.Warn("key widerrufen", "by", id.KID, "kid", kid)
 	}
+	s.emitKeyRevoked(kid, byKID)
 
 	body := map[string]any{"kid": kid, "status": auth.StatusRevoked}
 	// Nach dem Widerruf prüfen, ob noch ein aktiver Admin-Key existiert.
