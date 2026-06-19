@@ -15,12 +15,14 @@
 package httpapi
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/pblumer/clio/internal/activity"
 	"github.com/pblumer/clio/internal/config"
 	"github.com/pblumer/clio/internal/eventstats"
 	"github.com/pblumer/clio/internal/metrics"
@@ -43,6 +45,12 @@ type Server struct {
 	startedAt       time.Time
 	devMode         bool
 	eventAuthorship bool
+
+	// activity ist die in-memory Presence-/Aktivitäts-Registry (ADR-030).
+	activity *activity.Registry
+	// deniedThrottle begrenzt access-denied-Events je kid (ADR-030, gegen Flutung).
+	deniedMu       sync.Mutex
+	deniedLastSeen map[string]time.Time
 
 	bulkMu         sync.RWMutex
 	bulkImportOpen bool
@@ -88,6 +96,8 @@ func New(cfg config.Config, st *store.Store, logger *slog.Logger, opts ...Option
 		startedAt:       now,
 		devMode:         cfg.DevMode,
 		eventAuthorship: cfg.EventAuthorship,
+		activity:        activity.New(cfg.PresenceWindow),
+		deniedLastSeen:  make(map[string]time.Time),
 		bulkImportOpen:  cfg.DevMode,
 	}
 	for _, opt := range opts {
@@ -139,4 +149,32 @@ func New(cfg config.Config, st *store.Store, logger *slog.Logger, opts ...Option
 // Observability-Middleware (Request-Logging + Metriken).
 func (s *Server) Handler() http.Handler {
 	return s.instrument(s.mux)
+}
+
+// StartBackground startet langlaufende Hintergrundaufgaben des API-Layers und
+// beendet sie sauber, wenn ctx abgebrochen wird (Graceful Shutdown). Aktuell:
+// der Presence-Sweeper (ADR-030), der abgelaufene Sessions schließt und — bei
+// aktiviertem CLIO_AUTH_EVENTS — session-ended-Events schreibt. Wird aus main
+// aufgerufen; Tests, die nur Handler() nutzen, starten bewusst keinen Sweeper.
+func (s *Server) StartBackground(ctx context.Context) {
+	// Tick zweimal pro Fenster, mindestens jede Sekunde — ein Fenster wird so um
+	// höchstens ~Fenster/2 überschritten, bevor die Session als beendet gilt.
+	interval := s.cfg.PresenceWindow / 2
+	if interval < time.Second {
+		interval = time.Second
+	}
+	go func() {
+		t := time.NewTicker(interval)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				for _, e := range s.activity.Sweep(time.Now().UTC()) {
+					s.emitSessionEnded(e)
+				}
+			}
+		}
+	}()
 }
