@@ -216,6 +216,17 @@ Unter `GET /ui`, sechs Tabs — jeder für sich nutzbar:
 
 > **Server-Erweiterungen** für die UI bleiben minimal: zusätzliche Laufzeit-Metriken in `/metrics` und der read-only-Endpunkt `event-stats`. Alles andere ist Wiederverwendung bestehender Endpunkte. Die UI ist **optional** — der Kern (Stufen 0–4) funktioniert ohne sie.
 
+### Release-Meilenstein v0.2.0 ✅
+
+Zweites getaggtes Release (nach v0.1.0). Bündelt die Arbeit aus den Stufen 4–5 sowie querschnittliche Storage-/Auth-Verbesserungen:
+
+- **Benannte API-Keys mit Scopes, Widerruf und Audit (ADR-025)** — löst das geteilte Single-Token (ADR-008) ab. ⚠️ **Verhaltensänderung:** `Bearer <token>` ohne `kid`-Präfix wird nicht mehr akzeptiert; `CLIO_API_TOKEN` lebt nur noch als deprecated Bootstrap-Pfad fort (bootet bei leerem Schlüsselbund einen `legacy-token`-Admin-Key, Leitungswert danach `kid.secret`). Neu bevorzugt: `CLIO_BOOTSTRAP_ADMIN_KEY`.
+- **Transparente Wert-Kompression der Event-Ablage (ADR-024)** — optional, ohne API-Bruch.
+- **Skalierbare Speicherverwaltung** — Pre-Sizing der Mmap-Datei (`CLIO_DB_INITIAL_MB`), Headroom-Monitor und Online-Hintergrund-Kompaktierung gegen bbolt-Remap-Latenzspitzen.
+- **Sekundär-Query auf `event.data` (ADR-029)** — interner Feld-Index für `event.data`-Gleichheiten beschleunigt CEL-Abfragen ohne Typ-Constraint.
+- **UI-Ausbau** — Keys-Tab (ADR-025), Storage-Headroom-/Compaction-Status im Dashboard, Eventstrom-Diagramm (Box-Zoom, Lin/Log, Source-Aufschlüsselung); Assets via `embed.FS` aus der HTML ausgelagert.
+- **Robustheit** — `run-query`-Streaming mit Default-Limit, speichergedeckelte rekursive Reads, Anti-Buffering gegen puffernde Proxies; Gesamt-Coverage > 90 %.
+
 ---
 
 ## 7. Architecture Decision Records (ADRs)
