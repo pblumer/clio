@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"net/http"
+	"time"
 
 	"github.com/pblumer/clio/internal/auth"
 )
@@ -92,9 +93,10 @@ func (s *Server) requireScope(scope auth.Scope, next http.HandlerFunc) http.Hand
 			auditKID = kid
 		}
 
-		// 401: kein gültiger Bearer, unbekannter kid, falsches Geheimnis oder
-		// widerrufener Schlüssel. Bewusst kein Name im Log (uniformes 401).
-		if !parsed || !found || !secretOK || !key.Active() {
+		// 401: kein gültiger Bearer, unbekannter kid, falsches Geheimnis,
+		// widerrufener ODER abgelaufener Schlüssel (Usable prüft Status + Ablauf).
+		// Bewusst kein Name im Log (uniformes 401).
+		if !parsed || !found || !secretOK || !key.Usable(time.Now().UTC()) {
 			s.auditDecision(r, scope, "deny", http.StatusUnauthorized, auditKID, "")
 			writeError(w, http.StatusUnauthorized, "unauthorized")
 			return

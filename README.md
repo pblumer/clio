@@ -297,12 +297,14 @@ Authorization: Bearer kid_ci01.W8xqT2vK9pL4mN6rS1dF3hJ5
 ```
 
 Jeder Key trägt **Scopes**: `read` (lesende Routen), `write` (`write-events`,
-`register-event-schema`) und `admin` (Schlüsselverwaltung, Dev-Routen). Fehlt der
-Schlüssel oder ist er ungültig/widerrufen → **401**; ist er gültig, trägt aber den
-nötigen Scope nicht → **403**. Gespeichert wird nur der SHA-256-Hash des
-Geheimnisses, nie der Klartext; Widerruf setzt den Status (kein Löschen).
+`register-event-schema`) und `admin` (Schlüsselverwaltung, Backup, Dev-Routen).
+Fehlt der Schlüssel oder ist er ungültig/widerrufen/**abgelaufen** → **401**; ist
+er gültig, trägt aber den nötigen Scope nicht → **403**. Gespeichert wird nur der
+SHA-256-Hash des Geheimnisses, nie der Klartext; Widerruf setzt den Status (kein
+Löschen). Optional pro Key: **Ablaufdatum** (`expiresAt`), **Owner/Purpose/
+Description** als Inventar-Felder.
 
-Verwaltung zur Laufzeit (alle drei Routen verlangen Scope `admin`):
+Verwaltung zur Laufzeit (alle Routen verlangen Scope `admin`):
 
 ```bash
 ADMIN=kid_ab12cd34.dein-admin-geheimnis   # Bootstrap-/Admin-Key
@@ -310,16 +312,25 @@ ADMIN=kid_ab12cd34.dein-admin-geheimnis   # Bootstrap-/Admin-Key
 # Neuen Key anlegen — die Antwort enthält EINMALIG den vollständigen kid.secret.
 curl -sS -X POST http://127.0.0.1:3000/api/v1/keys \
   -H "Authorization: Bearer $ADMIN" -H "Content-Type: application/json" \
-  -d '{"name":"ci-writer","scopes":["read","write"]}'
+  -d '{"name":"ci-writer","scopes":["read","write"],"owner":"team-ci","expiresAt":"2026-12-31T00:00:00Z"}'
 # -> {"kid":"kid_ci01","secret":"kid_ci01.W8xq…","warning":"… nur einmal sichtbar …", …}
 
-# Keys auflisten (ohne Geheimnisse/Hashes).
-curl -sS -H "Authorization: Bearer $ADMIN" http://127.0.0.1:3000/api/v1/keys
-
-# Key widerrufen.
-curl -sS -X POST -H "Authorization: Bearer $ADMIN" \
-  http://127.0.0.1:3000/api/v1/keys/kid_ci01/revoke
+curl -sS -H "Authorization: Bearer $ADMIN" http://127.0.0.1:3000/api/v1/keys        # auflisten (ohne Geheimnisse)
+curl -sS -X POST -H "Authorization: Bearer $ADMIN" .../api/v1/keys/kid_ci01/rotate  # Geheimnis erneuern (alter Wert ungültig)
+curl -sS -X POST -H "Authorization: Bearer $ADMIN" .../api/v1/keys/kid_ci01/revoke  # widerrufen
 ```
+
+**Offline / Notfall (Server gestoppt):** dieselbe Verwaltung ohne HTTP — der
+Recovery-Weg bei Lockout (kein nutzbarer Admin-Key mehr):
+
+```bash
+cliostore keys create --db clio.db --name recovery-admin --scopes read,write,admin
+cliostore keys list   --db clio.db
+cliostore keys rotate --db clio.db --kid kid_ci01
+```
+
+Vollständiger Leitfaden inkl. sicherer Verwendung, Bootstrap-Regeln und Migration
+von `CLIO_API_TOKEN`: [`docs/security.md`](docs/security.md).
 
 Jede Autorisierungsentscheidung (allow/deny) wird ins Audit-Log geschrieben —
 ohne jedes Geheimnis. Optional (`CLIO_EVENT_AUTHORSHIP`, Default aus) stempelt der

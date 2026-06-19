@@ -13,31 +13,48 @@ import (
 // im Klartext zurückgegeben (kid.secret) und nie wieder; die Liste enthält
 // niemals Hashes oder Klartext.
 
-// keyView ist die öffentliche Sicht auf einen Schlüssel — ohne secretHash.
+// keyView ist die öffentliche Sicht auf einen Schlüssel — ohne secretHash. Die
+// Metadaten (Ablauf/Beschreibung/Owner/Purpose) erscheinen nur, wenn gesetzt.
 type keyView struct {
-	KID       string       `json:"kid"`
-	Name      string       `json:"name"`
-	Scopes    []auth.Scope `json:"scopes"`
-	Status    auth.Status  `json:"status"`
-	CreatedAt time.Time    `json:"createdAt"`
-	RevokedAt *time.Time   `json:"revokedAt"`
+	KID         string       `json:"kid"`
+	Name        string       `json:"name"`
+	Scopes      []auth.Scope `json:"scopes"`
+	Status      auth.Status  `json:"status"`
+	CreatedAt   time.Time    `json:"createdAt"`
+	RevokedAt   *time.Time   `json:"revokedAt"`
+	ExpiresAt   *time.Time   `json:"expiresAt,omitempty"`
+	Expired     bool         `json:"expired,omitempty"`
+	Description string       `json:"description,omitempty"`
+	Owner       string       `json:"owner,omitempty"`
+	Purpose     string       `json:"purpose,omitempty"`
 }
 
 func toKeyView(k auth.Key) keyView {
 	return keyView{
-		KID:       k.KID,
-		Name:      k.Name,
-		Scopes:    k.Scopes,
-		Status:    k.Status,
-		CreatedAt: k.CreatedAt,
-		RevokedAt: k.RevokedAt,
+		KID:         k.KID,
+		Name:        k.Name,
+		Scopes:      k.Scopes,
+		Status:      k.Status,
+		CreatedAt:   k.CreatedAt,
+		RevokedAt:   k.RevokedAt,
+		ExpiresAt:   k.ExpiresAt,
+		Expired:     k.Expired(time.Now().UTC()),
+		Description: k.Description,
+		Owner:       k.Owner,
+		Purpose:     k.Purpose,
 	}
 }
 
-// createKeyRequest ist der Body von POST /api/v1/keys.
+// createKeyRequest ist der Body von POST /api/v1/keys. Name und Scopes sind
+// Pflicht; die übrigen Felder sind optionale Lebenszyklus-/Inventar-Metadaten.
+// expiresAt ist ein RFC3339-Zeitstempel (z. B. "2026-12-31T00:00:00Z").
 type createKeyRequest struct {
-	Name   string       `json:"name"`
-	Scopes []auth.Scope `json:"scopes"`
+	Name        string       `json:"name"`
+	Scopes      []auth.Scope `json:"scopes"`
+	ExpiresAt   *time.Time   `json:"expiresAt"`
+	Description string       `json:"description"`
+	Owner       string       `json:"owner"`
+	Purpose     string       `json:"purpose"`
 }
 
 // handleCreateKey legt einen neuen Schlüssel an und antwortet EINMALIG mit dem
@@ -64,7 +81,18 @@ func (s *Server) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	key, secret, err := auth.GenerateKey(req.Name, req.Scopes)
+	if req.ExpiresAt != nil && !req.ExpiresAt.After(time.Now().UTC()) {
+		writeError(w, http.StatusBadRequest, "expiresAt muss in der Zukunft liegen")
+		return
+	}
+
+	meta := auth.KeyMeta{
+		Description: req.Description,
+		Owner:       req.Owner,
+		Purpose:     req.Purpose,
+		ExpiresAt:   req.ExpiresAt,
+	}
+	key, secret, err := auth.GenerateKeyWithMeta(req.Name, req.Scopes, meta)
 	if err != nil {
 		s.logger.Error("key erzeugen fehlgeschlagen", "err", err)
 		writeError(w, http.StatusInternalServerError, "interner fehler beim erzeugen")
@@ -77,10 +105,10 @@ func (s *Server) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if id, ok := identityFromContext(r); ok {
-		s.logger.Info("key angelegt", "by", id.KID, "kid", key.KID, "name", key.Name, "scopes", key.Scopes)
+		s.logger.Info("key angelegt", "by", id.KID, "kid", key.KID, "name", key.Name, "scopes", key.Scopes, "expiresAt", key.ExpiresAt)
 	}
 
-	writeJSON(w, http.StatusCreated, map[string]any{
+	body := map[string]any{
 		"kid":       key.KID,
 		"name":      key.Name,
 		"scopes":    key.Scopes,
@@ -89,6 +117,42 @@ func (s *Server) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 		// Vollständiger Leitungswert — nur jetzt verfügbar.
 		"secret":  key.KID + "." + secret,
 		"warning": "Dieser Wert (kid.secret) wird nur einmal angezeigt und ist danach nicht mehr abrufbar. Jetzt sicher speichern.",
+	}
+	if key.ExpiresAt != nil {
+		body["expiresAt"] = key.ExpiresAt
+	}
+	writeJSON(w, http.StatusCreated, body)
+}
+
+// handleRotateKey ersetzt das Geheimnis eines bestehenden Schlüssels und
+// antwortet EINMALIG mit dem neuen kid.secret (200). kid/Scopes/Status/Metadaten
+// bleiben; der alte Wert wird sofort ungültig. 404 bei unbekanntem kid.
+func (s *Server) handleRotateKey(w http.ResponseWriter, r *http.Request) {
+	kid := r.PathValue("kid")
+	if kid == "" {
+		writeError(w, http.StatusBadRequest, "kid ist pflicht")
+		return
+	}
+
+	wire, found, err := s.store.RotateKey(kid)
+	if err != nil {
+		s.logger.Error("key rotieren fehlgeschlagen", "kid", kid, "err", err)
+		writeError(w, http.StatusInternalServerError, "interner fehler beim rotieren")
+		return
+	}
+	if !found {
+		writeError(w, http.StatusNotFound, "unbekannter kid")
+		return
+	}
+
+	if id, ok := identityFromContext(r); ok {
+		s.logger.Warn("key rotiert", "by", id.KID, "kid", kid)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"kid":     kid,
+		"secret":  wire,
+		"warning": "Der alte Wert ist ab sofort ungültig. Dieser neue Wert (kid.secret) wird nur einmal angezeigt. Jetzt sicher speichern.",
 	})
 }
 

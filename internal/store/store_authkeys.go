@@ -100,6 +100,44 @@ func (s *Store) RevokeKey(kid string) (bool, error) {
 	return found, nil
 }
 
+// RotateKey ersetzt das Geheimnis eines bestehenden Schlüssels: der kid, die
+// Scopes, der Status und alle Metadaten bleiben, nur der SecretHash wird auf ein
+// frisch erzeugtes Geheimnis gesetzt. Liefert den neuen vollständigen
+// Leitungswert (kid.secret) — einmalig, danach nicht mehr rekonstruierbar — und
+// found=false bei unbekanntem kid. Hinweis: ein widerrufener Schlüssel bleibt
+// nach der Rotation widerrufen (das neue Geheimnis allein reaktiviert ihn nicht).
+func (s *Store) RotateKey(kid string) (newWire string, found bool, err error) {
+	secret, err := auth.NewSecret()
+	if err != nil {
+		return "", false, fmt.Errorf("secret erzeugen: %w", err)
+	}
+	err = s.update(func(tx *bolt.Tx) error {
+		b := tx.Bucket(bucketAuthKeys)
+		v := b.Get([]byte(kid))
+		if v == nil {
+			return nil
+		}
+		found = true
+		var k auth.Key
+		if err := json.Unmarshal(v, &k); err != nil {
+			return err
+		}
+		k.SecretHash = auth.HashSecret(secret)
+		data, err := json.Marshal(k)
+		if err != nil {
+			return err
+		}
+		return b.Put([]byte(kid), data)
+	})
+	if err != nil {
+		return "", false, fmt.Errorf("key rotieren: %w", err)
+	}
+	if !found {
+		return "", false, nil
+	}
+	return kid + "." + secret, true, nil
+}
+
 // CountKeys liefert die Anzahl der Schlüssel im Bund — Grundlage des
 // Bootstrap-Checks (Bootstrap greift nur bei leerem Bund).
 func (s *Store) CountKeys() (int, error) {

@@ -57,6 +57,12 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "keys":
+			if err := runKeys(os.Args[2:], os.Stdout); err != nil {
+				fmt.Fprintln(os.Stderr, "keys:", err)
+				os.Exit(1)
+			}
+			return
 		}
 	}
 

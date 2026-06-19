@@ -50,7 +50,10 @@ const (
 )
 
 // Key ist ein benannter API-Schlüssel. Persistiert wird ausschließlich der
-// SHA-256-Hash des Geheimnisses (hex), niemals der Klartext.
+// SHA-256-Hash des Geheimnisses (hex), niemals der Klartext. Die Felder ab
+// ExpiresAt sind optionale Lebenszyklus-/Inventar-Metadaten (ADR-025): sie sind
+// rückwärtskompatibel (omitempty) — ältere, ohne sie gespeicherte Keys laden
+// unverändert (Zero-Werte: kein Ablauf, keine Beschreibung).
 type Key struct {
 	KID        string     `json:"kid"`
 	Name       string     `json:"name"`
@@ -59,10 +62,42 @@ type Key struct {
 	Status     Status     `json:"status"`
 	CreatedAt  time.Time  `json:"createdAt"`
 	RevokedAt  *time.Time `json:"revokedAt"`
+	// ExpiresAt ist ein optionales Ablaufdatum. Ist es gesetzt und erreicht/
+	// überschritten, gilt der Schlüssel als nicht mehr verwendbar (siehe Usable),
+	// ohne dass er widerrufen werden muss. nil = kein Ablauf.
+	ExpiresAt *time.Time `json:"expiresAt,omitempty"`
+	// Description/Owner/Purpose sind freie Inventar-Felder für den Betrieb
+	// (wer/wofür) — rein dokumentarisch, ohne Sicherheitswirkung.
+	Description string `json:"description,omitempty"`
+	Owner       string `json:"owner,omitempty"`
+	Purpose     string `json:"purpose,omitempty"`
 }
 
-// Active meldet, ob der Schlüssel aktuell zur Authentifizierung taugt.
+// KeyMeta bündelt die optionalen Metadaten beim Anlegen eines Schlüssels. Alle
+// Felder sind optional; der Zero-Wert verhält sich byte-identisch zum bisherigen
+// Anlegen ohne Metadaten.
+type KeyMeta struct {
+	Description string
+	Owner       string
+	Purpose     string
+	ExpiresAt   *time.Time
+}
+
+// Active meldet, ob der Schlüssel-Status active ist (Status-Sicht, ohne Ablauf).
 func (k Key) Active() bool { return k.Status == StatusActive }
+
+// Expired meldet, ob der Schlüssel zum Zeitpunkt now abgelaufen ist. Ohne
+// gesetztes ExpiresAt läuft ein Schlüssel nie ab. Der Ablauf ist inklusiv: genau
+// zum ExpiresAt-Zeitpunkt gilt der Schlüssel bereits als abgelaufen.
+func (k Key) Expired(now time.Time) bool {
+	return k.ExpiresAt != nil && !now.Before(*k.ExpiresAt)
+}
+
+// Usable meldet, ob der Schlüssel zum Zeitpunkt now zur Authentifizierung taugt:
+// aktiv (nicht widerrufen) UND nicht abgelaufen.
+func (k Key) Usable(now time.Time) bool {
+	return k.Active() && !k.Expired(now)
+}
 
 // HasScope meldet, ob der Schlüssel den geforderten Scope trägt.
 func (k Key) HasScope(s Scope) bool {
@@ -130,6 +165,12 @@ const (
 // danach nicht mehr rekonstruierbar. Der vollständige Wert auf der Leitung ist
 // `kid.secret` (siehe Key.KID).
 func GenerateKey(name string, scopes []Scope) (Key, string, error) {
+	return GenerateKeyWithMeta(name, scopes, KeyMeta{})
+}
+
+// GenerateKeyWithMeta erzeugt wie GenerateKey einen neuen Schlüssel, übernimmt
+// aber zusätzlich die optionalen Metadaten (Ablauf, Beschreibung, Owner, Purpose).
+func GenerateKeyWithMeta(name string, scopes []Scope, meta KeyMeta) (Key, string, error) {
 	secret, err := randToken("", secretRandBytes)
 	if err != nil {
 		return Key{}, "", fmt.Errorf("secret erzeugen: %w", err)
@@ -138,7 +179,23 @@ func GenerateKey(name string, scopes []Scope) (Key, string, error) {
 	if err != nil {
 		return Key{}, "", err
 	}
+	k.applyMeta(meta)
 	return k, secret, nil
+}
+
+// NewSecret erzeugt ein frisches Klartext-Geheimnis (ohne kid-Präfix) mit voller
+// Entropie — genutzt beim Rotieren eines bestehenden Schlüssels (kid bleibt,
+// Geheimnis wird ersetzt).
+func NewSecret() (string, error) {
+	return randToken("", secretRandBytes)
+}
+
+// applyMeta übernimmt die optionalen Metadaten in den Schlüssel (getrimmt).
+func (k *Key) applyMeta(m KeyMeta) {
+	k.Description = strings.TrimSpace(m.Description)
+	k.Owner = strings.TrimSpace(m.Owner)
+	k.Purpose = strings.TrimSpace(m.Purpose)
+	k.ExpiresAt = m.ExpiresAt
 }
 
 // NewKeyWithSecret erzeugt einen Schlüssel mit zufälligem kid, aber einem vom

@@ -357,6 +357,14 @@ paths:
                   type: array
                   items: { type: string, enum: [read, write, admin] }
                   example: ["read", "write"]
+                expiresAt:
+                  type: string
+                  format: date-time
+                  description: "Optionales Ablaufdatum (RFC3339, muss in der Zukunft liegen). Ein abgelaufener Key wird wie ein widerrufener mit 401 abgewiesen."
+                  example: "2026-12-31T00:00:00Z"
+                owner: { type: string, description: "Optionales Inventar-Feld (wer).", example: "team-billing" }
+                purpose: { type: string, description: "Optionales Inventar-Feld (wofür).", example: "nightly-export" }
+                description: { type: string, description: "Optionale Freitext-Beschreibung." }
       responses:
         "201":
           description: Angelegt — Geheimnis nur jetzt sichtbar
@@ -414,6 +422,39 @@ paths:
                 properties:
                   kid: { type: string, example: "kid_ci01" }
                   status: { type: string, example: "revoked" }
+                  warning: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404":
+          description: Unbekannter kid
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/ProblemDetails" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/v1/keys/{kid}/rotate:
+    post:
+      tags: [Admin]
+      summary: API-Key-Geheimnis rotieren (Scope admin)
+      description: |
+        Ersetzt das Geheimnis eines bestehenden Schlüssels. kid, Scopes, Status
+        und Metadaten bleiben; der alte `kid.secret`-Wert wird **sofort ungültig**.
+        Die Antwort enthält **einmalig** den neuen Wert.
+      parameters:
+        - name: kid
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Rotiert — neuer Wert nur jetzt sichtbar
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  kid: { type: string, example: "kid_ci01" }
+                  secret: { type: string, description: "Neuer Leitungswert kid.secret — nur jetzt sichtbar." }
                   warning: { type: string }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -821,6 +862,11 @@ components:
         status: { type: string, enum: [active, revoked], example: "active" }
         createdAt: { type: string, format: date-time }
         revokedAt: { type: string, format: date-time, nullable: true }
+        expiresAt: { type: string, format: date-time, description: "Optionales Ablaufdatum (fehlt, wenn keiner gesetzt)." }
+        expired: { type: boolean, description: "true, wenn expiresAt erreicht/überschritten ist." }
+        owner: { type: string }
+        purpose: { type: string }
+        description: { type: string }
     CreatedKey:
       type: object
       description: |

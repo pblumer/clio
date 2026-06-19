@@ -38,6 +38,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/keys", s.requireScope(auth.ScopeAdmin, s.handleCreateKey))
 	s.mux.HandleFunc("GET /api/v1/keys", s.requireScope(auth.ScopeAdmin, s.handleListKeys))
 	s.mux.HandleFunc("POST /api/v1/keys/{kid}/revoke", s.requireScope(auth.ScopeAdmin, s.handleRevokeKey))
+	s.mux.HandleFunc("POST /api/v1/keys/{kid}/rotate", s.requireScope(auth.ScopeAdmin, s.handleRotateKey))
 
 	// Dev-Mode-only (ADR-022): destruktives Zurücksetzen der gesamten Datenbank
 	// plus Bulk-Import-Fenster direkt nach Start/Reset.
