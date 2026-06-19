@@ -23,6 +23,7 @@
   <button id="tab-generate" data-view="generate">Erzeugen</button>
   <button id="tab-query" data-view="query">Query</button>
   <button id="tab-keys" data-view="keys">Keys</button>
+  <button id="tab-activity" data-view="activity">Aktivität</button>
   <button id="tab-help" data-view="help">Hilfe</button>
 </nav>
 
@@ -396,6 +397,48 @@
           <tbody id="key-tbody"></tbody>
         </table>
       </div>
+    </div>
+  </div>
+
+  <!-- ============ Aktivität & Presence (ADR-030) ============ -->
+  <div id="view-activity" class="view">
+    <div class="notice">
+      <strong>Wer ist online, wer tut was</strong> (ADR-030). Erfordert ein Token mit Scope
+      <strong>admin</strong>. Die Presence-Daten sind <strong>prozesslokal</strong> und
+      <strong>flüchtig</strong> (nach einem Neustart leer); die dauerhafte Spur sind die
+      optionalen Login-/Lifecycle-Events unter <code>/_clio/auth/…</code>
+      (<code>CLIO_AUTH_EVENTS</code>).
+    </div>
+
+    <div class="card gen-card">
+      <div class="gen-row" style="justify-content:space-between">
+        <span class="label" style="margin:0">Aktive Schlüssel <span id="act-online-badge" class="badge ok" style="display:none"></span></span>
+        <span>
+          <label class="inline"><input type="checkbox" id="act-auto" checked> auto (5s)</label>
+          <button id="act-refresh" class="link-btn">aktualisieren</button>
+        </span>
+      </div>
+      <div id="act-status" class="hint" style="margin:6px 0">Token eingeben und <strong>Verbinden</strong>, dann <em>aktualisieren</em>.</div>
+      <div style="overflow-x:auto">
+        <table id="act-table" class="keys-table" style="display:none">
+          <thead><tr>
+            <th>kid</th><th>Name</th><th>Scopes</th><th>Status</th><th>online seit</th>
+            <th>zuletzt aktiv</th><th>gelesen</th><th>geschrieben</th><th>admin</th>
+            <th>abgelehnt</th><th>live</th>
+          </tr></thead>
+          <tbody id="act-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Login-/Lifecycle-Events (Dogfooding) -->
+    <div class="card gen-card">
+      <div class="gen-row" style="justify-content:space-between">
+        <span class="label" style="margin:0">Login-/Lifecycle-Events <code style="font-weight:400">/_clio/auth/</code></span>
+        <button id="act-events-refresh" class="link-btn">aktualisieren</button>
+      </div>
+      <div id="act-events-status" class="hint" style="margin:6px 0"></div>
+      <div id="act-events-list" class="act-events"></div>
     </div>
   </div>
 
