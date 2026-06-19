@@ -1,0 +1,48 @@
+# Produktionsnaher Single-Instance-Betrieb von cliostore via Docker Compose.
+# Single-Instance bleibt Pflicht (ADR-002): KEINE Replicas hochskalieren — zwei
+# Prozesse auf derselben DB-Datei sind nicht erlaubt (Datei-Lock/Korruption).
+#
+# Konfiguration über .env (siehe clio.env.example). Backups: das Hot-Backup läuft
+# über den HTTP-Endpunkt (nicht über das CLI gegen die gehaltene Datei) — siehe
+# backup.sh und den Kommentar beim backup-Profil unten.
+
+services:
+  clio:
+    image: ghcr.io/pblumer/clio:latest
+    restart: unless-stopped
+    env_file: [clio.env]
+    volumes:
+      - clio-data:/data
+      - clio-backups:/backups
+    ports:
+      # Nur lokal binden; TLS/öffentlich über einen vorgelagerten Reverse Proxy.
+      - "127.0.0.1:3000:3000"
+    healthcheck:
+      test: ["CMD", "/cliostore", "verify", "--db", "/data/clio.db"]
+      interval: 1m
+      timeout: 30s
+      retries: 3
+      start_period: 10s
+
+  # Einmaliger Hot-Backup-Lauf:  docker compose run --rm backup
+  # (Host-Cron oder ein Scheduler-Sidecar ruft das periodisch auf.)
+  backup:
+    image: ghcr.io/pblumer/clio:latest
+    profiles: ["backup"]
+    env_file: [clio.env]
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >
+        ts=$$(date -u +%Y%m%dT%H%M%SZ);
+        wget -q -O /backups/clio-$$ts.clio
+        --header="Authorization: Bearer $$CLIO_BACKUP_TOKEN"
+        http://clio:3000/api/v1/backup &&
+        /cliostore verify --db /backups/clio-$$ts.clio
+    volumes:
+      - clio-backups:/backups
+    depends_on:
+      - clio
+
+volumes:
+  clio-data:
+  clio-backups:

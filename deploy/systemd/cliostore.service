@@ -1,0 +1,39 @@
+# /etc/systemd/system/cliostore.service
+#
+# cliostore als systemd-Dienst (Single-Instance, ADR-002). Lädt die Konfiguration
+# aus /etc/clio/clio.env (siehe clio.env.example). Profil-Empfehlungen:
+# docs/production-readiness.md und docs/operations-profiles.md.
+
+[Unit]
+Description=cliostore event store
+Documentation=https://github.com/pblumer/clio
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Eigener, unprivilegierter Benutzer; StateDirectory legt /var/lib/clio an (0700).
+DynamicUser=yes
+StateDirectory=clio
+EnvironmentFile=/etc/clio/clio.env
+ExecStart=/usr/local/bin/cliostore
+Restart=on-failure
+RestartSec=2s
+
+# --- Hardening (Defense in Depth) ---
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+# Datenverzeichnis (StateDirectory) und Backup-Ziel beschreibbar halten.
+ReadWritePaths=/var/lib/clio /var/backups/clio
+
+[Install]
+WantedBy=multi-user.target

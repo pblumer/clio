@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"net/http"
 	"strconv"
@@ -393,6 +394,7 @@ func (s *Server) handleRegisterEventSchema(w http.ResponseWriter, r *http.Reques
 	err := s.store.RegisterSchema(req.Type, req.Schema)
 	switch {
 	case err == nil:
+		s.recordAudit(r, store.AuditActionSchemaRegister, req.Type, "")
 		writeJSON(w, http.StatusOK, map[string]string{"type": req.Type, "status": "registered"})
 	case errors.Is(err, store.ErrSchemaExists):
 		writeError(w, http.StatusConflict, err.Error())
@@ -476,6 +478,34 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		DiskFreeBytes:   diskFree,
 		DiskTotalBytes:  diskTotal,
 	})
+}
+
+// handleBackup streamt einen konsistenten Online-Snapshot der gesamten Datenbank
+// als bbolt-Datei (application/octet-stream, ADR-026). Admin-scoped: das Artefakt
+// enthält die gesamte Historie samt Schlüsselbund (nur Secret-Hashes, nie
+// Klartext). Der Snapshot läuft in einer Read-Transaktion und blockiert keine
+// Schreiber (echtes Hot-Backup). Die Schreib-Deadline wird wie bei den großen
+// Lese-Routen aufgehoben, sonst kappt WriteTimeout große Backups.
+func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
+
+	filename := "clio-" + time.Now().UTC().Format("20060102T150405Z") + ".clio"
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
+
+	// Sobald Backup zu schreiben beginnt, ist der 200-Header raus — ein Fehler
+	// mitten im Stream lässt sich dann nur noch loggen (der Client erkennt das
+	// abgeschnittene Artefakt an `verify`).
+	res, err := s.store.Backup(w)
+	if err != nil {
+		s.logger.Error("backup streamen fehlgeschlagen", "err", err)
+		s.recordAudit(r, store.AuditActionBackup, "", err.Error())
+		return
+	}
+	if id, ok := identityFromContext(r); ok {
+		s.logger.Info("backup gestreamt", "by", id.KID, "events", res.Events, "bytes", res.Bytes, "head", res.Head)
+	}
+	s.recordAudit(r, store.AuditActionBackup, fmt.Sprintf("events=%d,bytes=%d", res.Events, res.Bytes), "")
 }
 
 // handleVerify rechnet die Hash-Kette nach und meldet, ob die Historie

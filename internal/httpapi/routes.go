@@ -30,6 +30,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/register-event-schema", s.requireScope(auth.ScopeWrite, s.handleRegisterEventSchema))
 	s.mux.HandleFunc("GET /api/v1/read-event-schema", s.requireScope(auth.ScopeRead, s.handleReadEventSchema))
 
+	// Konsistenter Online-Snapshot der gesamten DB (ADR-031). Admin-scoped: das
+	// Artefakt enthält die gesamte Historie samt Schlüsselbund-Hashes.
+	s.mux.HandleFunc("GET /api/v1/backup", s.requireScope(auth.ScopeAdmin, s.handleBackup))
+
 	// Aktivität & Presence (ADR-030): wer ist online, wer tut was. Scope admin.
 	s.mux.HandleFunc("GET /api/v1/activity", s.requireScope(auth.ScopeAdmin, s.handleActivity))
 
@@ -37,6 +41,11 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/keys", s.requireScope(auth.ScopeAdmin, s.handleCreateKey))
 	s.mux.HandleFunc("GET /api/v1/keys", s.requireScope(auth.ScopeAdmin, s.handleListKeys))
 	s.mux.HandleFunc("POST /api/v1/keys/{kid}/revoke", s.requireScope(auth.ScopeAdmin, s.handleRevokeKey))
+	s.mux.HandleFunc("POST /api/v1/keys/{kid}/rotate", s.requireScope(auth.ScopeAdmin, s.handleRotateKey))
+
+	// Persistentes Audit-Log administrativer Aktionen (ADR-032), read-only.
+	// Lesbar mit Scope `audit` ODER `admin` (requireAnyScope).
+	s.mux.HandleFunc("GET /api/v1/audit", s.requireAnyScope([]auth.Scope{auth.ScopeAudit, auth.ScopeAdmin}, s.handleAudit))
 
 	// Dev-Mode-only (ADR-022): destruktives Zurücksetzen der gesamten Datenbank
 	// plus Bulk-Import-Fenster direkt nach Start/Reset.

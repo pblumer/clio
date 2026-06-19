@@ -1,0 +1,54 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: cliostore
+  namespace: clio
+spec:
+  serviceName: cliostore
+  # ⚠️ MUSS 1 bleiben — clio ist Single-Instance (ADR-002). NICHT hochskalieren.
+  replicas: 1
+  # OnDelete + RWO-Volume verhindern, dass beim Rollout je zwei Pods gleichzeitig
+  # auf dieselbe DB-Datei zugreifen (Lock-Konflikt/Korruption).
+  updateStrategy:
+    type: OnDelete
+  selector:
+    matchLabels:
+      app: cliostore
+  template:
+    metadata:
+      labels:
+        app: cliostore
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        fsGroup: 65532
+      containers:
+        - name: cliostore
+          image: ghcr.io/pblumer/clio:latest
+          ports:
+            - containerPort: 3000
+          env:
+            - { name: CLIO_DB_PATH, value: /data/clio.db }
+            - { name: CLIO_SYNC, value: group }
+            - { name: CLIO_QUERY_TIMEOUT, value: 15s }
+            - { name: CLIO_DB_INITIAL_MB, value: "1024" }
+            - { name: CLIO_DB_COMPACT_ENABLED, value: "true" }
+            - { name: CLIO_DB_COMPACT_INTERVAL_H, value: "24" }
+            # Erststart: einmalig aus einem Secret, danach entfernen (ADR-025).
+            # - name: CLIO_BOOTSTRAP_ADMIN_KEY
+            #   valueFrom: { secretKeyRef: { name: clio-bootstrap, key: secret } }
+          readinessProbe:
+            httpGet: { path: /api/v1/ping, port: 3000 }
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /api/v1/ping, port: 3000 }
+            initialDelaySeconds: 5
+            periodSeconds: 20
+          volumeMounts:
+            - { name: data, mountPath: /data }
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: clio-data

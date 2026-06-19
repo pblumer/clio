@@ -29,6 +29,12 @@ Die vollständige Architektur, Roadmap und alle Entscheidungen stehen in
 
 ## Status
 
+> **Für den Betrieb:** ist clio das Richtige für meinen Einsatz, und wie betreibe
+> ich es sicher? → [`docs/production-readiness.md`](./docs/production-readiness.md)
+> (Einsatzprofile, Garantien/Nicht-Garantien, Betriebsprofile) und
+> [`docs/threat-model.md`](./docs/threat-model.md) (wogegen clio schützt — und
+> wogegen nicht).
+
 **🎉 v0.2.0 veröffentlicht** — aktuelles Release. Neu gegenüber v0.1.0 u. a.:
 benannte **API-Keys mit Scopes, Widerruf und Audit** (ADR-025), transparente
 **Wert-Kompression** der Event-Ablage (ADR-024), **skalierbare
@@ -309,12 +315,14 @@ Authorization: Bearer kid_ci01.W8xqT2vK9pL4mN6rS1dF3hJ5
 ```
 
 Jeder Key trägt **Scopes**: `read` (lesende Routen), `write` (`write-events`,
-`register-event-schema`) und `admin` (Schlüsselverwaltung, Dev-Routen). Fehlt der
-Schlüssel oder ist er ungültig/widerrufen → **401**; ist er gültig, trägt aber den
-nötigen Scope nicht → **403**. Gespeichert wird nur der SHA-256-Hash des
-Geheimnisses, nie der Klartext; Widerruf setzt den Status (kein Löschen).
+`register-event-schema`) und `admin` (Schlüsselverwaltung, Backup, Dev-Routen).
+Fehlt der Schlüssel oder ist er ungültig/widerrufen/**abgelaufen** → **401**; ist
+er gültig, trägt aber den nötigen Scope nicht → **403**. Gespeichert wird nur der
+SHA-256-Hash des Geheimnisses, nie der Klartext; Widerruf setzt den Status (kein
+Löschen). Optional pro Key: **Ablaufdatum** (`expiresAt`), **Owner/Purpose/
+Description** als Inventar-Felder.
 
-Verwaltung zur Laufzeit (alle drei Routen verlangen Scope `admin`):
+Verwaltung zur Laufzeit (alle Routen verlangen Scope `admin`):
 
 ```bash
 ADMIN=kid_ab12cd34.dein-admin-geheimnis   # Bootstrap-/Admin-Key
@@ -322,21 +330,42 @@ ADMIN=kid_ab12cd34.dein-admin-geheimnis   # Bootstrap-/Admin-Key
 # Neuen Key anlegen — die Antwort enthält EINMALIG den vollständigen kid.secret.
 curl -sS -X POST http://127.0.0.1:3000/api/v1/keys \
   -H "Authorization: Bearer $ADMIN" -H "Content-Type: application/json" \
-  -d '{"name":"ci-writer","scopes":["read","write"]}'
+  -d '{"name":"ci-writer","scopes":["read","write"],"owner":"team-ci","expiresAt":"2026-12-31T00:00:00Z"}'
 # -> {"kid":"kid_ci01","secret":"kid_ci01.W8xq…","warning":"… nur einmal sichtbar …", …}
 
-# Keys auflisten (ohne Geheimnisse/Hashes).
-curl -sS -H "Authorization: Bearer $ADMIN" http://127.0.0.1:3000/api/v1/keys
-
-# Key widerrufen.
-curl -sS -X POST -H "Authorization: Bearer $ADMIN" \
-  http://127.0.0.1:3000/api/v1/keys/kid_ci01/revoke
+curl -sS -H "Authorization: Bearer $ADMIN" http://127.0.0.1:3000/api/v1/keys        # auflisten (ohne Geheimnisse)
+curl -sS -X POST -H "Authorization: Bearer $ADMIN" .../api/v1/keys/kid_ci01/rotate  # Geheimnis erneuern (alter Wert ungültig)
+curl -sS -X POST -H "Authorization: Bearer $ADMIN" .../api/v1/keys/kid_ci01/revoke  # widerrufen
 ```
 
-Jede Autorisierungsentscheidung (allow/deny) wird ins Audit-Log geschrieben —
-ohne jedes Geheimnis. Optional (`CLIO_EVENT_AUTHORSHIP`, Default aus) stempelt der
-Server den `kid` des Schreibers als Extension `clioauthkid` in jedes neue Event
-(Urheberschaft, in die Hash-Kette gebunden).
+**Offline / Notfall (Server gestoppt):** dieselbe Verwaltung ohne HTTP — der
+Recovery-Weg bei Lockout (kein nutzbarer Admin-Key mehr):
+
+```bash
+cliostore keys create --db clio.db --name recovery-admin --scopes read,write,admin
+cliostore keys list   --db clio.db
+cliostore keys rotate --db clio.db --kid kid_ci01
+```
+
+Vollständiger Leitfaden inkl. sicherer Verwendung, Bootstrap-Regeln und Migration
+von `CLIO_API_TOKEN`: [`docs/security.md`](docs/security.md).
+
+Jede Autorisierungsentscheidung (allow/deny) wird strukturiert ins **slog**
+geschrieben — ohne jedes Geheimnis. Zusätzlich führt clio ein **persistentes
+Audit-Log** administrativer Aktionen (Key create/rotate/revoke, Schema-
+Registrierung, Backup, Dev-Reset, Compaction) in einem eigenen, append-only
+bbolt-Bucket (ADR-032). Es ist read-only über `GET /api/v1/audit` lesbar — mit
+Scope `audit` **oder** `admin` — und nicht über die Write-API manipulierbar:
+
+```bash
+curl -sS -H "Authorization: Bearer $ADMIN" "http://127.0.0.1:3000/api/v1/audit?limit=50"
+```
+
+Details (Aktionen, Manipulationsgrenzen, Auditor-Key): [`docs/audit.md`](docs/audit.md).
+
+Optional (`CLIO_EVENT_AUTHORSHIP`, Default aus) stempelt der Server den `kid` des
+Schreibers als Extension `clioauthkid` in jedes neue Event (Urheberschaft, in die
+Hash-Kette gebunden).
 
 ### Dev-Mode: Reset & Bulk-Import-Fenster
 
@@ -625,6 +654,13 @@ Top-Level-Pfade sind CloudEvents-Feldnamen (`id`, `subject`, `type`, `data` …)
 innerhalb von `data` ist beliebige Verschachtelung möglich. Array-Indizierung
 wird nicht unterstützt. Ohne `select` wird das volle Event zurückgegeben.
 
+> **Aggregation, Joins, Reporting?** Bewusst **nicht** im Kern. clio ist der
+> append-only Source of Truth; abgeleitete **Read Models** baut man außerhalb
+> (CQRS). Das Referenzbeispiel
+> [`examples/projection-worker-postgres`](./examples/projection-worker-postgres/)
+> zeigt einen Projection Worker mit `observe`, Checkpointing, Idempotenz, Replay
+> und Lag-Monitoring gegen ein PostgreSQL-Read-Model.
+
 ### Verfügbare Event-Typen
 
 ```bash
@@ -741,6 +777,30 @@ CLIO_DB_PATH=clio.db ./cliostore compact
 # -> kompaktiert: clio.db — 2097152 -> 1048576 bytes (50.0% kleiner)
 ```
 
+### Backup, Restore & Verify
+
+Clio sichert sich über **konsistente Snapshots** der bbolt-Datei (ADR-031). Ein
+Snapshot ist selbst eine gültige, per Hash-Kette prüfbare `.clio`-Datei:
+
+```bash
+# Hot-Backup im laufenden Betrieb (admin-scoped HTTP-Endpunkt, blockiert keine Schreiber)
+curl -fsS -H "Authorization: Bearer $TOKEN" \
+  http://127.0.0.1:3000/api/v1/backup -o clio-$(date +%F).clio
+
+# Cold-Backup über CLI (Server gestoppt) — schreibt + verifiziert in einem Schritt
+./cliostore backup --db clio.db --output clio-$(date +%F).clio --verify
+
+# Restore (offline) an einen Zielpfad, dann prüfen
+./cliostore restore --input clio-2026-06-18.clio --db /data/clio.db
+./cliostore verify  --db /data/clio.db   # Exit 0 = Kette intakt, 1 = Bruch
+```
+
+`verify` ist read-only und skriptbar (Exit-Code); ist `CLIO_SIGNING_KEY` gesetzt,
+prüft es auch die Event-Signaturen mit. **Wichtig:** Das CLI-`backup` kann eine
+*laufende* Instanz nicht öffnen (bbolt-Datei-Lock) — dafür ist der HTTP-Endpunkt
+da. Vollständige Anleitung samt Garantien, Fehlerfällen und RPO/RTO:
+[`docs/backup-restore.md`](docs/backup-restore.md).
+
 ## Performance & Durability
 
 Writes laufen standardmäßig über **Group Commit** (`CLIO_SYNC=group`): viele
@@ -776,4 +836,16 @@ go test -run='^$' -bench=BenchmarkAppend -benchmem ./internal/store/ # Schreiben
 ```bash
 go test ./...
 go test -race ./...   # Nebenläufigkeit (Observe, Group Commit)
+make cover            # paketübergreifende Gesamt-Coverage (~87 %)
 ```
+
+Welche Bereiche abgedeckt sind und welche Lücken bewusst offen bleiben:
+[`docs/testing.md`](docs/testing.md).
+
+## Betrieb (Deployment-Vorlagen & Profile)
+
+Fertige Beispielkonfigurationen für systemd, Docker Compose, Windows und
+Kubernetes (Single-Instance, mit Skalierungs-Warnung) liegen unter
+[`deploy/`](deploy/); empfohlene Umgebungsvariablen je Profil (`dev`/`lab`/
+`small-production`) in [`docs/operations-profiles.md`](docs/operations-profiles.md).
+Eignung und Garantien: [`docs/production-readiness.md`](docs/production-readiness.md).

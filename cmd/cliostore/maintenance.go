@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"math"
 	"time"
@@ -116,6 +117,12 @@ func runCompaction(st *store.Store, logger *slog.Logger) {
 	old, neu, err := st.CompactInPlace()
 	if err != nil {
 		logger.Error("hintergrund-compact fehlgeschlagen", "err", err)
+		// Audit auch im Fehlerfall (best effort, system-Actor).
+		if aerr := st.AppendAudit(store.AuditEntry{
+			Action: "compaction", ActorName: "system:scheduler", Result: store.AuditFailure, Error: err.Error(),
+		}); aerr != nil {
+			logger.Error("audit-eintrag (compaction) schreiben fehlgeschlagen", "err", aerr)
+		}
 		return
 	}
 	var pct float64
@@ -124,4 +131,10 @@ func runCompaction(st *store.Store, logger *slog.Logger) {
 	}
 	logger.Info("hintergrund-compact abgeschlossen",
 		"oldBytes", old, "newBytes", neu, "kleinerProzent", math.Round(pct*10)/10)
+	if aerr := st.AppendAudit(store.AuditEntry{
+		Action: "compaction", ActorName: "system:scheduler",
+		Target: fmt.Sprintf("oldBytes=%d,newBytes=%d", old, neu),
+	}); aerr != nil {
+		logger.Error("audit-eintrag (compaction) schreiben fehlgeschlagen", "err", aerr)
+	}
 }

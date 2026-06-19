@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: cliostore
+  namespace: clio
+spec:
+  # ClusterIP: nur Cluster-intern. Öffentlicher Zugang + TLS über einen Ingress.
+  type: ClusterIP
+  selector:
+    app: cliostore
+  ports:
+    - name: http
+      port: 3000
+      targetPort: 3000

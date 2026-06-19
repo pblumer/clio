@@ -356,26 +356,52 @@ HTTPS, sehr einfach) oder **nginx für Windows**.
 ## 9. Datensicherung (Backup)
 
 Der gesamte Zustand liegt in **einer Datei** (`CLIO_DB_PATH`, hier
-`C:\clio\data\clio.db`). Ein Backup ist also eine konsistente Kopie dieser Datei.
+`C:\clio\data\clio.db`). Clio bringt dafür echte Backup-Kommandos mit, statt nur
+die Datei zu kopieren — das Ergebnis (`.clio`) ist ein **konsistenter,
+hash-ketten-prüfbarer** Snapshot.
 
-bbolt nutzt ACID-Transaktionen; eine Dateikopie im laufenden Betrieb ist im
-Regelfall konsistent (Copy-on-Write). Für ein **garantiert** konsistentes Backup
-ohne Risiko kannst du den Dienst kurz stoppen, kopieren und wieder starten:
+**Hot-Backup im laufenden Betrieb** (admin-scoped HTTP-Endpunkt, kein Stopp
+nötig, blockiert keine Schreiber):
 
 ```powershell
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 New-Item -ItemType Directory -Force -Path 'C:\clio\backup' | Out-Null
+$out = "C:\clio\backup\clio-$stamp.clio"
 
+curl.exe -fsS -H "Authorization: Bearer $env:CLIO_TOKEN" `
+  http://127.0.0.1:3000/api/v1/backup -o $out
+C:\clio\cliostore.exe verify --db $out   # ExitCode 0 = Kette intakt
+```
+
+**Cold-Backup über die CLI** (Dienst gestoppt — das CLI-`backup` kann eine
+laufende Instanz wegen des bbolt-Datei-Locks nicht öffnen):
+
+```powershell
+$env:CLIO_DB_PATH = 'C:\clio\data\clio.db'
+$stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 nssm stop Clio
-Copy-Item 'C:\clio\data\clio.db' "C:\clio\backup\clio-$stamp.db"
+C:\clio\cliostore.exe backup --db 'C:\clio\data\clio.db' `
+  --output "C:\clio\backup\clio-$stamp.clio" --verify
 nssm start Clio
 ```
 
-Für **regelmäßige** Backups die obigen Zeilen in ein `.ps1`-Skript packen und per
-Aufgabenplanung (z. B. nächtlich) ausführen. Die Backup-Dateien anschließend an
-einen anderen Ort (Netzwerkfreigabe, Objektspeicher) wegschaffen.
+**Restore** (immer offline — Dienst stoppen, einspielen, prüfen, starten):
 
-> Ein ausführlicheres Backup-/Restore-/DR-Konzept steht in
+```powershell
+nssm stop Clio
+C:\clio\cliostore.exe restore --input 'C:\clio\backup\clio-20260618-030000.clio' `
+  --db 'C:\clio\data\clio.db' --force
+C:\clio\cliostore.exe verify --db 'C:\clio\data\clio.db'
+nssm start Clio
+```
+
+Für **regelmäßige** Backups die Hot-Backup-Zeilen in ein `.ps1`-Skript packen und
+per Aufgabenplanung (z. B. nächtlich) ausführen. Die `.clio`-Dateien anschließend
+an einen anderen Ort (Netzwerkfreigabe, Objektspeicher) wegschaffen und dort
+verschlüsseln (das Artefakt ist nicht verschlüsselt).
+
+> Vollständige Anleitung mit Garantien, Fehlerfällen und RPO/RTO:
+> [`docs/backup-restore.md`](./backup-restore.md). Architekturhintergrund:
 > [`docs/backup-restore-dr-concept.md`](./backup-restore-dr-concept.md).
 
 ---
@@ -408,8 +434,15 @@ C:\clio\cliostore.exe gen-key
 Den `CLIO_SIGNING_KEY`-Wert dann am Dienst hinterlegen (NSSM:
 `AppEnvironmentExtra`) und den Public Key zum Verifizieren verteilen.
 
-**Integrität prüfen** (Tamper-Evidence) läuft über die laufende Instanz —
-`GET /api/v1/verify` bzw. der **Explorer**-Tab im Dashboard.
+**Integrität prüfen** (Tamper-Evidence): online über die laufende Instanz
+(`GET /api/v1/verify` bzw. der **Explorer**-Tab im Dashboard) **oder** offline auf
+einer Datei/`.clio` — skriptbar über den Exit-Code:
+
+```powershell
+C:\clio\cliostore.exe verify --db 'C:\clio\data\clio.db'
+# verify: OK — <n> events, head <hash>…      (ExitCode 0)
+# verify: KETTE GEBROCHEN — <grund> ...        (ExitCode 1)
+```
 
 ---
 

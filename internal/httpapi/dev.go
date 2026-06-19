@@ -42,6 +42,7 @@ func (s *Server) handleDevReset(w http.ResponseWriter, r *http.Request) {
 	s.bulkMu.Unlock()
 
 	s.logger.Warn("datenbank zurückgesetzt (dev-mode)", "deletedEvents", deleted)
+	s.recordAudit(r, store.AuditActionDevReset, strconv.FormatUint(deleted, 10)+" events", "")
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":         "tabula-rasa",

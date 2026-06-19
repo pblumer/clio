@@ -1,0 +1,25 @@
+# /etc/systemd/system/clio-backup.service
+#
+# Hot-Backup des laufenden Servers über den HTTP-Endpunkt (ADR-030). Bewusst NICHT
+# `cliostore backup --db ...`: solange der Dienst läuft, hält er den exklusiven
+# bbolt-Datei-Lock — ein zweiter Prozess kann die Datei nicht öffnen. Der
+# HTTP-Endpunkt streamt den Snapshot in-Process ohne Schreiber zu blockieren.
+#
+# Erwartet /etc/clio/backup.env mit:
+#   CLIO_TOKEN=kid_xxx.secret   (Scope admin)
+#   CLIO_BASE=http://127.0.0.1:3000
+#   BACKUP_DIR=/var/backups/clio
+#   RETENTION_DAYS=14
+
+[Unit]
+Description=cliostore Hot-Backup (HTTP) + verify
+After=cliostore.service
+Requires=cliostore.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/clio/backup.env
+ExecStart=/usr/local/bin/clio-backup.sh
+# Schreibrechte nur fürs Backup-Ziel.
+DynamicUser=yes
+ReadWritePaths=/var/backups/clio

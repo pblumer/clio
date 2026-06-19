@@ -1,0 +1,42 @@
+# Täglicher Hot-Backup gegen den HTTP-Endpunkt des Service (ADR-031). Schreibt auf
+# das clio-backups-PVC und verifiziert das frische Artefakt. Öffnet bewusst NICHT
+# die DB-Datei direkt (die laufende Instanz hält den Lock).
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: clio-backup
+  namespace: clio
+spec:
+  schedule: "0 3 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: backup
+              image: ghcr.io/pblumer/clio:latest
+              command: ["/bin/sh", "-c"]
+              args:
+                - >
+                  ts=$(date -u +%Y%m%dT%H%M%SZ);
+                  wget -q -O /backups/clio-$ts.clio
+                  --header="Authorization: Bearer $CLIO_TOKEN"
+                  http://cliostore:3000/api/v1/backup &&
+                  /cliostore verify --db /backups/clio-$ts.clio &&
+                  find /backups -name 'clio-*.clio' -mtime +14 -delete
+              env:
+                - name: CLIO_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: clio-backup
+                      key: token
+              volumeMounts:
+                - { name: backups, mountPath: /backups }
+          volumes:
+            - name: backups
+              persistentVolumeClaim:
+                claimName: clio-backups
