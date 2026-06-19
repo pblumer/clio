@@ -1449,7 +1449,7 @@ func TestDashboardUI(t *testing.T) {
 		t.Fatalf("/ui Content-Type = %q, want text/html…", ct)
 	}
 	body := rec.Body.String()
-	if !strings.Contains(body, "<title>clio · Dashboard</title>") {
+	if !strings.Contains(body, "<title>clio · Dashboard — die Muse deiner Events</title>") {
 		t.Fatal("/ui liefert nicht die Dashboard-Seite")
 	}
 	if !strings.Contains(body, "Live-Events") {

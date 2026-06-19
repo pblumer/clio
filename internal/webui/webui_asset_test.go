@@ -36,6 +36,31 @@ func TestAssetHandlerServesCSS(t *testing.T) {
 	}
 }
 
+func TestAssetHandlerServesFavicon(t *testing.T) {
+	rec := httptest.NewRecorder()
+	AssetHandler().ServeHTTP(rec, assetRequest("favicon.svg"))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	// .svg wird als SVG-MIME ausgeliefert (Go-Builtin: image/svg+xml).
+	if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "svg") {
+		t.Fatalf("Content-Type = %q, want …svg…", ct)
+	}
+	if rec.Body.Len() == 0 {
+		t.Fatal("leerer Favicon-Body")
+	}
+}
+
+// TestDashboardHTMLReferencesFavicon prüft, dass das Markup das ausgelagerte
+// Favicon einbindet (sonst zeigt der Browser nur das generische Globus-Icon).
+func TestDashboardHTMLReferencesFavicon(t *testing.T) {
+	html := string(dashboardHTML)
+	if !strings.Contains(html, `<link rel="icon" type="image/svg+xml" href="/ui/favicon.svg">`) {
+		t.Fatal("dashboard.html verweist nicht auf das ausgelagerte Favicon")
+	}
+}
+
 func TestAssetHandlerETagRevalidation(t *testing.T) {
 	rec := httptest.NewRecorder()
 	AssetHandler().ServeHTTP(rec, assetRequest("css/dashboard.css"))
