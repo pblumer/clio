@@ -143,7 +143,10 @@ func (s *Server) requireScope(scope auth.Scope, next http.HandlerFunc) http.Hand
 		if !ok {
 			return
 		}
-		if !key.HasScope(scope) {
+		// Aktions-Gate (ADR-033): trägt der Schlüssel IRGENDEINEN Grant der Aktion
+		// (global oder subject-gebunden)? Die feinere Subject-Prüfung folgt im
+		// Handler (authorizeSubject/authorizeGlobal), sobald das Subject bekannt ist.
+		if !key.HasAction(scope) {
 			s.auditDecision(r, scope, "deny", http.StatusForbidden, key.KID, key.Name)
 			s.metrics.ObserveAuthDecision(string(scope), "deny")
 			s.activity.Record(key.KID, key.Name, scopeStrings(key.Scopes), categoryForScope(scope), false, time.Now().UTC())
@@ -197,10 +200,11 @@ func (s *Server) requireAnyScope(scopes []auth.Scope, next http.HandlerFunc) htt
 	}
 }
 
-// hasAnyScope meldet, ob der Schlüssel mindestens einen der scopes trägt.
+// hasAnyScope meldet, ob der Schlüssel mindestens eine der Aktionen trägt
+// (admin/audit sind global; ADR-033).
 func hasAnyScope(key auth.Key, scopes []auth.Scope) bool {
 	for _, sc := range scopes {
-		if key.HasScope(sc) {
+		if key.HasAction(sc) {
 			return true
 		}
 	}
@@ -214,4 +218,28 @@ func joinScopes(scopes []auth.Scope) string {
 		parts[i] = string(sc)
 	}
 	return strings.Join(parts, "|")
+}
+
+// authorizeSubject prüft die Subject-Berechtigung (ADR-033) der bereits
+// authentifizierten Identität für action auf (subject, recursive). Das
+// Aktions-Gate sitzt schon in requireScope; dieser Aufruf gehört in die
+// Datenroute-Handler, sobald das Subject geparst ist. Erlaubt → true. Sonst wird
+// 403 geschrieben (und die Ablehnung auditiert) und false geliefert.
+func (s *Server) authorizeSubject(w http.ResponseWriter, r *http.Request, action auth.Scope, subject string, recursive bool) bool {
+	id, ok := identityFromContext(r)
+	if ok && auth.ScopesAllow(id.Scopes, action, subject, recursive) {
+		return true
+	}
+	s.auditDecision(r, action, "deny", http.StatusForbidden, id.KID, id.Name)
+	writeError(w, http.StatusForbidden, "forbidden: kein "+string(action)+"-zugriff auf subject "+subject)
+	return false
+}
+
+// authorizeGlobal verlangt einen GLOBALEN Grant der Aktion (ADR-033) — für
+// aggregat-/subjektübergreifende Routen (info, event-stats, read-event-types,
+// read-event-schema, verify, register-event-schema, read-subjects ohne Prefix).
+// Ein subjekt-gebundener Schlüssel hat dort keinen Zugriff. Global == Zugriff auf
+// den gesamten Baum (Root, rekursiv).
+func (s *Server) authorizeGlobal(w http.ResponseWriter, r *http.Request, action auth.Scope) bool {
+	return s.authorizeSubject(w, r, action, "/", true)
 }

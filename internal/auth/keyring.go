@@ -103,7 +103,9 @@ func (k Key) Usable(now time.Time) bool {
 	return k.Active() && !k.Expired(now)
 }
 
-// HasScope meldet, ob der Schlüssel den geforderten Scope trägt.
+// HasScope meldet, ob der Schlüssel den geforderten (global notierten) Scope
+// exakt trägt. Für admin/audit (immer global) ist das die richtige Prüfung; für
+// subject-gebundene read/write-Berechtigungen siehe HasAction/Allows (ADR-033).
 func (k Key) HasScope(s Scope) bool {
 	for _, have := range k.Scopes {
 		if have == s {
@@ -111,6 +113,131 @@ func (k Key) HasScope(s Scope) bool {
 		}
 	}
 	return false
+}
+
+// Grant ist ein aus einem Scope-String geparster Berechtigungseintrag (ADR-033).
+// Ein Grant ist entweder global (Subject == "") oder auf einen Subject-Teilbaum
+// eingeschränkt. admin/audit sind immer global.
+type Grant struct {
+	Action    Scope
+	Subject   string // "" = global; sonst Präfix-Pfad (mit "/" beginnend, ohne Trailing-Slash)
+	Recursive bool   // true bei "/*"-Suffix (ganzer Teilbaum); false = exaktes Subject
+}
+
+// Global meldet, ob der Grant nicht subject-gebunden ist (gilt für alle Subjects).
+func (g Grant) Global() bool { return g.Subject == "" }
+
+// ParseGrant zerlegt einen Scope-String in einen Grant (ADR-033):
+//
+//	"read"            -> global read
+//	"read:/orders"    -> read, exaktes Subject /orders
+//	"read:/orders/*"  -> read, Teilbaum unter /orders
+//	"read:/*"         -> read, gesamter Baum (= effektiv global)
+//
+// admin/audit sind immer global und dürfen keinen ":"-Teil tragen. Nur read/write
+// sind subject-gebunden. "*" ist ausschließlich als "/*"-Suffix erlaubt.
+func ParseGrant(raw string) (Grant, error) {
+	action, rest, bound := strings.Cut(raw, ":")
+	a := Scope(action)
+	switch a {
+	case ScopeRead, ScopeWrite, ScopeAdmin, ScopeAudit:
+	default:
+		return Grant{}, fmt.Errorf("unbekannter scope %q (erlaubt: read, write, admin, audit; read/write optional subject-gebunden)", raw)
+	}
+	if !bound {
+		return Grant{Action: a}, nil
+	}
+	if a != ScopeRead && a != ScopeWrite {
+		return Grant{}, fmt.Errorf("scope %q: nur read/write sind subject-gebunden", raw)
+	}
+	pattern := rest
+	recursive := false
+	if strings.HasSuffix(pattern, "/*") {
+		recursive = true
+		pattern = strings.TrimSuffix(pattern, "/*")
+		if pattern == "" {
+			pattern = "/" // "/*" = ganzer Baum
+		}
+	}
+	if pattern == "" || pattern[0] != '/' {
+		return Grant{}, fmt.Errorf("scope %q: subject muss mit \"/\" beginnen", raw)
+	}
+	if strings.Contains(pattern, "*") {
+		return Grant{}, fmt.Errorf("scope %q: \"*\" ist nur als \"/*\"-Suffix erlaubt", raw)
+	}
+	if len(pattern) > 1 {
+		pattern = strings.TrimRight(pattern, "/") // Trailing-Slash normalisieren (außer Root)
+	}
+	return Grant{Action: a, Subject: pattern, Recursive: recursive}, nil
+}
+
+// ValidScopeString meldet einen Fehler, wenn raw kein gültiger Scope-String ist
+// (global oder subject-gebunden, ADR-033). Genutzt bei der Schlüssel-Anlage.
+func ValidScopeString(raw string) error {
+	_, err := ParseGrant(raw)
+	return err
+}
+
+// HasAction meldet, ob der Schlüssel mindestens einen Grant der Aktion trägt
+// (global oder subject-gebunden) — das Aktions-Gate der Middleware (ADR-033).
+// Ungültige Scope-Strings werden ignoriert (bei validierter Anlage kommen sie
+// nicht vor).
+func (k Key) HasAction(action Scope) bool {
+	for _, raw := range k.Scopes {
+		if g, err := ParseGrant(string(raw)); err == nil && g.Action == action {
+			return true
+		}
+	}
+	return false
+}
+
+// Allows meldet, ob der Schlüssel die Aktion auf dem angefragten Subject-Zugriff
+// (subject, recursive) erlaubt (ADR-033). Delegiert an ScopesAllow.
+func (k Key) Allows(action Scope, subject string, recursive bool) bool {
+	return ScopesAllow(k.Scopes, action, subject, recursive)
+}
+
+// ScopesAllow meldet, ob die Scope-Liste die Aktion auf dem angefragten
+// Subject-Zugriff erlaubt: ein globaler Grant erlaubt alles; ein subject-
+// gebundener nur, wenn der angefragte Zugriff vollständig in seinem Teilbaum liegt.
+func ScopesAllow(scopes []Scope, action Scope, subject string, recursive bool) bool {
+	for _, raw := range scopes {
+		g, err := ParseGrant(string(raw))
+		if err != nil || g.Action != action {
+			continue
+		}
+		if grantCovers(g, subject, recursive) {
+			return true
+		}
+	}
+	return false
+}
+
+// grantCovers meldet, ob der Grant den angefragten (subject, recursive)-Zugriff
+// vollständig abdeckt.
+func grantCovers(g Grant, subject string, recursive bool) bool {
+	if g.Global() {
+		return true
+	}
+	if recursive {
+		// Die Anfrage berührt subject samt aller Nachfahren: nur ein rekursiver
+		// Grant über einen Vorfahren-oder-gleichen Knoten deckt das vollständig ab.
+		return g.Recursive && subtreeContains(g.Subject, subject)
+	}
+	if g.Recursive {
+		return subtreeContains(g.Subject, subject)
+	}
+	return g.Subject == subject
+}
+
+// subtreeContains meldet, ob q == p oder q ein Nachfahre von p im Subject-Baum ist.
+// Geschwister wie /booksstore zu /books werden korrekt ausgeschlossen (der
+// "/"-Suffix-Vergleich verhindert die Präfix-Kollision); Root "/" deckt alles ab.
+func subtreeContains(p, q string) bool {
+	if p == "/" {
+		return true
+	}
+	return q == p || strings.HasPrefix(q, p+"/")
 }
 
 // Identity ist die schlanke Sicht auf einen authentifizierten Aufrufer, die in

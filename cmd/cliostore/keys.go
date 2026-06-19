@@ -234,11 +234,10 @@ func parseScopes(csv string) ([]auth.Scope, error) {
 		if p == "" {
 			continue
 		}
-		sc := auth.Scope(p)
-		if !sc.Valid() {
-			return nil, fmt.Errorf("unbekannter scope %q (erlaubt: read, write, admin, audit)", p)
+		if err := auth.ValidScopeString(p); err != nil {
+			return nil, err
 		}
-		scopes = append(scopes, sc)
+		scopes = append(scopes, auth.Scope(p))
 	}
 	if len(scopes) == 0 {
 		return nil, fmt.Errorf("--scopes ist erforderlich (z. B. read,write)")

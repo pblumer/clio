@@ -322,6 +322,12 @@ SHA-256-Hash des Geheimnisses, nie der Klartext; Widerruf setzt den Status (kein
 Löschen). Optional pro Key: **Ablaufdatum** (`expiresAt`), **Owner/Purpose/
 Description** als Inventar-Felder.
 
+`read`/`write` lassen sich zusätzlich auf einen **Subject-Teilbaum** einschränken
+(ADR-033), z. B. `read:/orders/*` oder `write:/orders/*` — der Schlüssel sieht/
+beschreibt dann nur diesen Bereich; aggregat-/globale Routen (`info`, `verify`,
+`event-stats`, …) verlangen einen globalen Grant. Details und Beispiele:
+[`docs/security.md`](docs/security.md).
+
 Verwaltung zur Laufzeit (alle Routen verlangen Scope `admin`):
 
 ```bash

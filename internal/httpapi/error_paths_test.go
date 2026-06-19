@@ -5,6 +5,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/pblumer/clio/internal/auth"
 )
 
 // closedStoreServer baut einen Dev-Server, dessen Store sofort geschlossen wird:
@@ -33,6 +35,14 @@ func callHandler(h http.HandlerFunc, method, target string, pathVals map[string]
 	for k, v := range pathVals {
 		r.SetPathValue(k, v)
 	}
+	// Direkter Aufruf umgeht die Auth-Middleware; die Handler setzen jedoch eine
+	// vorhandene Identität voraus (ADR-033 Subject-Prüfung). Eine global
+	// berechtigte Identität einsetzen, damit der interne Store-Fehlerpfad geprüft
+	// werden kann und nicht schon die Subject-Autorisierung greift.
+	r = r.WithContext(withIdentity(r.Context(), auth.Identity{
+		KID: "kid_test01", Name: "test",
+		Scopes: []auth.Scope{auth.ScopeRead, auth.ScopeWrite, auth.ScopeAdmin, auth.ScopeAudit},
+	}))
 	rec := httptest.NewRecorder()
 	h(rec, r)
 	return rec
