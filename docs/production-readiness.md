@@ -84,8 +84,8 @@ Diese Seite hilft zu entscheiden, ob das zu deinem Einsatz passt.
 
 ## 5. Empfohlene Betriebsprofile (konkrete Settings)
 
-> Vollständige Werte siehe `docs/operations-profiles.md` (sofern vorhanden) und
-> `deploy/`. Hier die Eckwerte je Profil.
+> Vollständige Env-Werte je Profil: [`operations-profiles.md`](operations-profiles.md).
+> Fertige Vorlagen (systemd/docker/windows/k8s): [`deploy/`](../deploy/).
 
 ### Dev
 ```bash

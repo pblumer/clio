@@ -824,4 +824,16 @@ go test -run='^$' -bench=BenchmarkAppend -benchmem ./internal/store/ # Schreiben
 ```bash
 go test ./...
 go test -race ./...   # Nebenläufigkeit (Observe, Group Commit)
+make cover            # paketübergreifende Gesamt-Coverage (~87 %)
 ```
+
+Welche Bereiche abgedeckt sind und welche Lücken bewusst offen bleiben:
+[`docs/testing.md`](docs/testing.md).
+
+## Betrieb (Deployment-Vorlagen & Profile)
+
+Fertige Beispielkonfigurationen für systemd, Docker Compose, Windows und
+Kubernetes (Single-Instance, mit Skalierungs-Warnung) liegen unter
+[`deploy/`](deploy/); empfohlene Umgebungsvariablen je Profil (`dev`/`lab`/
+`small-production`) in [`docs/operations-profiles.md`](docs/operations-profiles.md).
+Eignung und Garantien: [`docs/production-readiness.md`](docs/production-readiness.md).

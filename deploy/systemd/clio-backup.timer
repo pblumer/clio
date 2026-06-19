@@ -1,0 +1,14 @@
+# /etc/systemd/system/clio-backup.timer
+#
+# Täglicher Hot-Backup-Lauf (nachts). Aktivieren:
+#   systemctl enable --now clio-backup.timer
+
+[Unit]
+Description=Täglicher cliostore Hot-Backup
+
+[Timer]
+OnCalendar=*-*-* 03:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
