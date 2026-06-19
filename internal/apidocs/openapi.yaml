@@ -321,7 +321,7 @@ paths:
         Streamt einen konsistenten Punkt-in-der-Zeit-Snapshot der gesamten
         Datenbank als bbolt-Datei (`application/octet-stream`). Der Snapshot läuft
         in einer Read-Transaktion und blockiert keine Schreiber (echtes
-        Hot-Backup, ADR-026). Das Artefakt ist selbst eine eigenständig öffenbare,
+        Hot-Backup, ADR-031). Das Artefakt ist selbst eine eigenständig öffenbare,
         per `cliostore verify` prüfbare DB. Es enthält die gesamte Historie samt
         Schlüsselbund (nur Secret-Hashes, nie Klartext) — daher admin-scoped.
         Spiegelt das CLI-Kommando `cliostore backup` für den Fall, dass der Server
@@ -332,6 +332,37 @@ paths:
           content:
             application/octet-stream:
               schema: { type: string, format: binary }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/v1/activity:
+    get:
+      tags: [Admin]
+      summary: Aktivität & Presence (Scope admin)
+      description: |
+        Liefert einen Momentaufnahme-Snapshot „wer ist online / wer tut was"
+        (ADR-030): je authentifiziertem Schlüssel (`kid`) erste/letzte Aktivität,
+        Zähler für Lesen/Schreiben/Admin und abgelehnte Zugriffe, offene
+        Observe-Verbindungen sowie der Online-Status. Reiner Laufzeit-State
+        (in-memory, prozesslokal, nach Neustart leer) — enthält **keine**
+        Geheimnisse. Login-/Lifecycle-**Historie** kommt aus den optionalen
+        Events unter `/_clio/auth/…` (siehe `CLIO_AUTH_EVENTS`).
+      responses:
+        "200":
+          description: Presence-/Aktivitäts-Snapshot
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  serverTime: { type: string, format: date-time }
+                  presenceWindowSeconds: { type: number, example: 60 }
+                  authEvents: { type: boolean, description: "ob CLIO_AUTH_EVENTS aktiv ist" }
+                  onlineCount: { type: integer, example: 2 }
+                  keys:
+                    type: array
+                    items: { $ref: "#/components/schemas/ActivitySnapshot" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "500": { $ref: "#/components/responses/InternalError" }
@@ -916,6 +947,27 @@ components:
         result: { type: string, enum: [success, failure], example: "success" }
         target: { type: string, description: "Zielobjekt der Aktion.", example: "kid_ci01" }
         error: { type: string, description: "Fehlermeldung bei result=failure." }
+    ActivitySnapshot:
+      type: object
+      description: |
+        Aktivitäts-/Presence-Momentaufnahme eines Schlüssels (ADR-030). Reiner
+        Laufzeit-State — enthält kein Geheimnis. `online` ist true bei offener
+        Observe-Verbindung oder Aktivität innerhalb des Presence-Fensters.
+      properties:
+        kid: { type: string, example: "kid_ci01" }
+        name: { type: string, example: "ci-writer" }
+        scopes:
+          type: array
+          items: { type: string, enum: [read, write, admin] }
+        firstSeen: { type: string, format: date-time }
+        lastSeen: { type: string, format: date-time }
+        reads: { type: integer, example: 42 }
+        writes: { type: integer, example: 7 }
+        adminOps: { type: integer, example: 1 }
+        denied: { type: integer, example: 0 }
+        openObserves: { type: integer, example: 1 }
+        online: { type: boolean, example: true }
+        sessionStarted: { type: string, format: date-time, description: "Beginn der laufenden Session (nur wenn online)" }
     CreatedKey:
       type: object
       description: |

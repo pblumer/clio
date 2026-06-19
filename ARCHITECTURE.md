@@ -5,7 +5,7 @@
 >
 > **Status des Gesamtprojekts:** `IN ENTWICKLUNG` — **Stufe 0–3 abgeschlossen** plus **Ed25519-Signaturen** (Authentizität). Write/Read/Observe, Optimistic Concurrency, Hash-Kette + Signaturen (`/verify`, `/public-key`), Event-Typen + JSON-Schemas, Group Commit (`CLIO_SYNC`), Observability (`/metrics`), Distribution (Cross-Builds/Docker/Release), Kompaktierung (`cliostore compact`), OpenAPI/Swagger UI, **CEL-Abfragen (`run-query`, ADR-017) mit Typ-Index (ADR-021)**, ein **eingebettetes Betriebs-Dashboard (`/ui`, ADR-020)** und **optionale transparente Wert-Kompression der Ablage (`CLIO_COMPRESS`, ADR-024)**. Offen (Stufe 4): Aggregation/Grouping und Snapshots.
 > **Letzte Aktualisierung:** 2026-06-19
-> **Dokumentversion:** 1.39
+> **Dokumentversion:** 1.40
 
 ---
 
@@ -205,13 +205,15 @@ Statt EventQL syntaxgetreu nachzubauen (kein offener Parser verfügbar, eigener 
 ### Stufe 5 — Betriebs-Dashboard / Web-UI (`/ui`) `🟡`
 *Ein optionaler, zusätzlicher Reifegrad über dem Kern: eine eingebettete Oberfläche (`go:embed`, Vanilla JS, **kein** Build-Step/CDN, keine neuen Fremd-Abhängigkeiten — ADR-020). Reine View-Schicht auf bestehende Endpunkte, gleiche Bearer-Token-Auth. Ausführlicher Scope, Sicherheitsbetrachtung und der schrittweise Verlauf: [`docs/web-ui-scope.md`](./docs/web-ui-scope.md).*
 
-Unter `GET /ui`, sechs Tabs — jeder für sich nutzbar:
+Unter `GET /ui`, mehrere Tabs — jeder für sich nutzbar:
 
 - [x] **Dashboard** — Health/Monitoring aus `/api/v1/info` + `/metrics`; **Live-Telemetrie** (CPU/Heap/Event-Durchsatz/Request-Rate, gespeist aus zusätzlichen Laufzeit-Metriken: `runtime/metrics` + plattformabhängig `getrusage`); ein **Eventstrom-Diagramm über die Zeit** über den neuen Endpunkt **`GET /api/v1/event-stats`** (serverseitiges Zeit-Histogramm, beim Start aus der Historie aufgebaut) mit **Maus-Box-Zoom**; dazu ein einklappbares Live-Events-Fenster.
 - [x] **Live-Events** — `observe`-Stream auf `/` (nur neue Events ab Verbinden, Subject-/Typ-Filter, Pause).
 - [x] **Explorer** — read-only: Subject-Baum (`read-subjects?tree=true`), Event-Typen & Schemas (`read-event-types`/`read-event-schema`), Integrität (`verify`/`public-key`).
 - [x] **Query** & **Hilfe** — `run-query`-Konsole mit CEL-Editor (Highlighting, Autovervollständigung), Verlauf/Favoriten und NDJSON/CSV-Export; CEL-Referenz mit Beispielen.
 - [x] **Erzeugen** — Onboarding: Events schreiben (`write-events`, Vorlagen, Beispiel-Szenarien) und Schemas registrieren (`register-event-schema`). Bewusst die **einzige schreibende** UI-Fläche — normale, token-gebundene Daten-Writes ohne neuen Endpunkt/Privileg.
+- [x] **Keys** — Schlüsselverwaltung (ADR-025): Keys anlegen/auflisten/widerrufen (`/api/v1/keys`, Scope `admin`).
+- [x] **Aktivität** — Presence & Aktivität (ADR-030): wer ist online, wer tut was (`GET /api/v1/activity`, Scope `admin`) plus ein Feed der optionalen Login-/Lifecycle-Events aus `/_clio/auth/…` (`CLIO_AUTH_EVENTS`).
 - [ ] **Maintenance-Konsole** (Kompaktierung u. ä. anstoßen) — **bewusst zurückgestellt**, bis ein eigenes Auth-/Audit-Konzept für betriebskritische Schreibaktionen steht.
 
 > **Server-Erweiterungen** für die UI bleiben minimal: zusätzliche Laufzeit-Metriken in `/metrics` und der read-only-Endpunkt `event-stats`. Alles andere ist Wiederverwendung bestehender Endpunkte. Die UI ist **optional** — der Kern (Stufen 0–4) funktioniert ohne sie.
@@ -424,7 +426,7 @@ Zweites getaggtes Release (nach v0.1.0). Bündelt die Arbeit aus den Stufen 4–
 - **Konsequenzen:** Der teure Payload-Scan aus ADR-028 wird für deklarierte Felder zum direkten Range-Scan (Millisekunden statt Voll-Deserialisierung). clio bleibt ein abhängigkeitsfreies Single-Binary (ADR-001) und Single-Instance (ADR-002). Kosten: **Write-Amplification** (zusätzliche `Put`s pro indiziertem Feld in der Single-Writer-Tx, ADR-003) und — weil nie gelöscht wird (ADR-015) — **monoton wachsende Indizes**; pro deklariertem Feld vertretbar, generisch nicht (daher opt-in). **Bewusste Nicht-Ziele (bleiben in Variante B / Stufe 4 offen):** Volltext, Facetten, Aggregation/Grouping und horizontale Read-Skalierung. Der OpenSearch-Pfad bleibt **sauber nachrüstbar**, gerade *weil* das Log unveränderlich und damit jede Projektion rekonstruierbar ist (CQRS): ein separater Indexer-Prozess **außerhalb** des clio-Binaries macht Backfill über `run-query`/`read`, hängt sich live an `observe` (SSE), checkpointet auf die globale Sequenz und schreibt idempotente Upserts (Key = Event-`id`); Mappings lassen sich aus den registrierten Schemas (ADR-014) ableiten. So bliebe clios Kern unangetastet (ADR-001/002), und die Projektion ist bei Mapping-Drift per Replay ab Seq 0 neu aufbaubar.
 
 ### ADR-030: Aktivität & Presence — wer ist online, wer tut was (Lifecycle als Events)
-- **Status:** Vorgeschlagen · Umsetzungsplan: [`docs/activity-presence-plan.md`](./docs/activity-presence-plan.md)
+- **Status:** Akzeptiert · **umgesetzt** (Registry, Middleware-Verdrahtung, Config, opt-in Lifecycle-Events, Metriken, `GET /api/v1/activity` und `/ui`-Tab „Aktivität"). Umsetzungsplan: [`docs/activity-presence-plan.md`](./docs/activity-presence-plan.md)
 - **Kontext:** Mit dem Schlüsselbund (ADR-025) trägt jede authentifizierte Anfrage eine Identität (`kid`/`name`/Scopes), und jede Autorisierungsentscheidung wird strukturiert ins `slog`-Audit geschrieben. Es fehlt jedoch die **Sicht** darauf: Niemand kann sehen, **wer gerade online ist**, und ein Admin kann **nicht zusammengefasst** erkennen, wer was tut (erste/letzte Aktivität, Lese-/Schreibvolumen, offene Live-Verbindungen, Login-Zeiten). Das Audit-Log ist flüchtig, nicht aggregiert und nicht abfragbar. clio ist **tokenbasiert und sessionlos** — es gibt kein „Login" im klassischen Sinn; Presence muss daher aus dem tatsächlichen Verkehr abgeleitet werden. Naheliegend ist, die eigene Auth-Historie mit den **eigenen Bordmitteln** (Events, `observe`, `run-query`, `/ui`) sichtbar zu machen — „eat your own dog food".
 - **Entscheidung:** Drei nach Last-Profil getrennte Schichten:
   1. **Presence & Aktivitäts-Zähler in-memory.** Eine prozesslokale Registry (`internal/activity`) hält je `kid`: erste/letzte Aktivität, Zähler nach Kategorie (read/write/admin), abgelehnte Zugriffe und die Zahl **offener Observe-Verbindungen**. „**Online**" = offene Live-Verbindung **oder** letzte Aktivität innerhalb eines gleitenden Fensters (`CLIO_PRESENCE_WINDOW`, Default 60 s). Gespeist aus der bestehenden Auth-/Instrument-Middleware — **keine** Persistenz, **keine** Event-Last. Nach Neustart bewusst leer (Presence ist flüchtig; Single-Instance, ADR-002).
