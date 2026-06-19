@@ -386,8 +386,13 @@ paths:
                 name: { type: string, example: "ci-writer" }
                 scopes:
                   type: array
-                  items: { type: string, enum: [read, write, admin, audit] }
-                  example: ["read", "write"]
+                  description: >
+                    Global (`read`/`write`/`admin`/`audit`) oder subject-gebunden
+                    (ADR-033): `read`/`write` lassen sich auf einen Teilbaum
+                    einschränken, z. B. `read:/orders/*` (rekursiv), `read:/orders`
+                    (exakt) oder `read:/*` (ganzer Baum). `admin`/`audit` sind immer global.
+                  items: { type: string }
+                  example: ["read:/orders/*", "write:/orders/*"]
                 expiresAt:
                   type: string
                   format: date-time
@@ -924,7 +929,7 @@ components:
         name: { type: string, example: "ci-writer" }
         scopes:
           type: array
-          items: { type: string, enum: [read, write, admin, audit] }
+          items: { type: string, description: "global oder subject-gebunden (ADR-033), z. B. read:/orders/*" }
         status: { type: string, enum: [active, revoked], example: "active" }
         createdAt: { type: string, format: date-time }
         revokedAt: { type: string, format: date-time, nullable: true }
@@ -958,7 +963,7 @@ components:
         name: { type: string, example: "ci-writer" }
         scopes:
           type: array
-          items: { type: string, enum: [read, write, admin] }
+          items: { type: string, description: "global oder subject-gebunden (ADR-033)" }
         firstSeen: { type: string, format: date-time }
         lastSeen: { type: string, format: date-time }
         reads: { type: integer, example: 42 }
@@ -978,7 +983,7 @@ components:
         name: { type: string, example: "ci-writer" }
         scopes:
           type: array
-          items: { type: string, enum: [read, write, admin, audit] }
+          items: { type: string, description: "global oder subject-gebunden (ADR-033), z. B. read:/orders/*" }
         status: { type: string, example: "active" }
         createdAt: { type: string, format: date-time }
         secret: { type: string, example: "kid_ci01.W8xqT2vK9pL4mN6rS1dF3hJ5" }

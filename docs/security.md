@@ -33,9 +33,45 @@ fehlender/ungültiger Authentifizierung).
 
 > **Prinzip der geringsten Rechte.** Vergib pro Anwendungsfall einen eigenen Key
 > mit minimalem Scope: ein Reporting-Job bekommt `read`, ein Producer `write`,
-> nur die Betriebsverwaltung `admin`. Subject-/Prefix-basierte Rechte
-> (`read:/orders/*`) sind als Ausbaustufe **entworfen** (ADR-033, Designvorschlag),
-> aber noch **nicht implementiert** — aktuell ist der Scope global.
+> nur die Betriebsverwaltung `admin`.
+
+### Subject-/Prefix-gebundene Scopes (ADR-033)
+
+`read` und `write` lassen sich auf einen **Subject-Teilbaum** einschränken — für
+Mehrparteien-Szenarien, in denen ein Producer/Consumer nur einen Bereich sehen
+oder beschreiben darf:
+
+| Scope-String | Bedeutung |
+|---|---|
+| `read` | global lesen (alle Subjects) — wie bisher |
+| `read:/orders/*` | nur den Teilbaum unter `/orders` lesen (rekursiv) |
+| `read:/orders` | nur das **exakte** Subject `/orders` (ohne Nachfahren) |
+| `read:/*` | gesamter Baum (= effektiv global) |
+| `write:/orders/*` | nur in den Teilbaum `/orders` schreiben |
+
+```bash
+# Ein Producer, der ausschließlich /orders/* schreiben und lesen darf:
+cliostore keys create --db clio.db --name orders-svc \
+  --scopes 'read:/orders/*,write:/orders/*'
+```
+
+Durchsetzung:
+
+- **Datenrouten** (`read-events`, `observe-events`, `run-query`, `events`-Pfad,
+  `write-events`): der angefragte Subject-Zugriff muss vollständig in einem Grant
+  liegen, sonst **403**. Bei `write-events` wird **jedes** Event geprüft (eine
+  Abweisung schreibt atomar **nichts**).
+- **Aggregat-/globale Routen** (`info`, `event-stats`, `read-event-types`,
+  `read-event-schema`, `verify`, `read-subjects` ohne Prefix; `register-event-schema`
+  als globaler `write`) verlangen einen **globalen** Grant — ein rein
+  prefix-beschränkter Key bekommt dort 403. `read-subjects?prefix=/orders` ist
+  erlaubt, wenn der Prefix im Grant liegt.
+- `admin`/`audit` sind **immer global** (Schlüssel-/Auditverwaltung ist nicht
+  subjektgebunden).
+
+**Bewusste Grenzen:** keine Deny-Regeln (nur additive Grants), keine Wildcards in
+der Mitte (`/orders/*/items`), und Subjects bleiben in **einer** DB — das ist
+**keine** Mandantentrennung (siehe [`threat-model.md`](threat-model.md)).
 
 ---
 

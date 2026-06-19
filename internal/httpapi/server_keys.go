@@ -76,8 +76,8 @@ func (s *Server) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, sc := range req.Scopes {
-		if !sc.Valid() {
-			writeError(w, http.StatusBadRequest, "unbekannter scope "+string(sc)+" (erlaubt: read, write, admin, audit)")
+		if err := auth.ValidScopeString(string(sc)); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 	}

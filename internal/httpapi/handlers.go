@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/pblumer/clio/internal/apidocs"
+	"github.com/pblumer/clio/internal/auth"
 	"github.com/pblumer/clio/internal/event"
 	"github.com/pblumer/clio/internal/eventstats"
 	"github.com/pblumer/clio/internal/metrics"
@@ -56,6 +57,9 @@ func (s *Server) handlePing(w http.ResponseWriter, r *http.Request) {
 // handleInfo liefert Laufzeit-Infos (Version, Uptime, Startzeit) plus
 // grundlegende Store-Infos für Diagnose und Deploy-Verifikation.
 func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
+	if !s.authorizeGlobal(w, r, auth.ScopeRead) {
+		return
+	}
 	count, err := s.store.Count()
 	if err != nil {
 		s.logger.Error("info: events zählen fehlgeschlagen", "err", err)
@@ -140,6 +144,9 @@ func (s *Server) recordEventStats(written []event.Event) {
 // Bucket-Breite (Sekunden) und die Bucket-Zähler. So kann das /ui-Dashboard die
 // Eventmengen über die Zeitachse zeichnen, ohne die gesamte Historie zu streamen.
 func (s *Server) handleEventStats(w http.ResponseWriter, r *http.Request) {
+	if !s.authorizeGlobal(w, r, auth.ScopeRead) {
+		return
+	}
 	if r.URL.Query().Get("by") == "source" {
 		snap := s.events.SnapshotBySource()
 		// Sentinel-Schlüssel der Overflow-Serie auf ein lesbares Label abbilden.
@@ -188,6 +195,15 @@ func (s *Server) handleReadSubjects(w http.ResponseWriter, r *http.Request) {
 	prefix := q.Get("prefix")
 	if prefix != "" && prefix[0] != '/' {
 		writeError(w, http.StatusBadRequest, "prefix muss mit \"/\" beginnen")
+		return
+	}
+	// Subject-Berechtigung (ADR-033): Listing über den Prefix-Teilbaum (rekursiv);
+	// ohne Prefix = ganzer Baum, verlangt globalen read.
+	base := prefix
+	if base == "" {
+		base = "/"
+	}
+	if !s.authorizeSubject(w, r, auth.ScopeRead, base, true) {
 		return
 	}
 	subjects, err := s.store.Subjects(prefix)
@@ -240,6 +256,9 @@ func (s *Server) handleSubjectChildren(w http.ResponseWriter, r *http.Request) {
 	}
 	if parent[0] != '/' {
 		writeError(w, http.StatusBadRequest, "children muss mit \"/\" beginnen")
+		return
+	}
+	if !s.authorizeSubject(w, r, auth.ScopeRead, parent, true) {
 		return
 	}
 	limit := defaultChildrenLimit
@@ -353,6 +372,9 @@ func computeSubtreeTotals(n *subjectTreeNode) uint64 {
 // handleReadEventTypes liefert alle bisher geschriebenen Event-Typen als NDJSON
 // ({"type":...,"count":...} pro Zeile).
 func (s *Server) handleReadEventTypes(w http.ResponseWriter, r *http.Request) {
+	if !s.authorizeGlobal(w, r, auth.ScopeRead) {
+		return
+	}
 	types, err := s.store.EventTypes()
 	if err != nil {
 		s.logger.Error("read-event-types fehlgeschlagen", "err", err)
@@ -377,6 +399,10 @@ type registerEventSchemaRequest struct {
 }
 
 func (s *Server) handleRegisterEventSchema(w http.ResponseWriter, r *http.Request) {
+	// Schemas gelten typweit (subjektübergreifend) → globaler write (ADR-033).
+	if !s.authorizeGlobal(w, r, auth.ScopeWrite) {
+		return
+	}
 	var req registerEventSchemaRequest
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -407,6 +433,9 @@ func (s *Server) handleRegisterEventSchema(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *Server) handleReadEventSchema(w http.ResponseWriter, r *http.Request) {
+	if !s.authorizeGlobal(w, r, auth.ScopeRead) {
+		return
+	}
 	typ := r.URL.Query().Get("type")
 	if typ == "" {
 		writeError(w, http.StatusBadRequest, "query-parameter type ist pflicht")
@@ -512,6 +541,9 @@ func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 // unverändert ist. Eine erkannte Manipulation ergibt HTTP 200 mit ok=false
 // (die Prüfung selbst war erfolgreich) — erst ein interner Fehler ergibt 500.
 func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
+	if !s.authorizeGlobal(w, r, auth.ScopeRead) {
+		return
+	}
 	res, err := s.store.Verify()
 	if err != nil {
 		s.logger.Error("verify fehlgeschlagen", "err", err)
@@ -560,6 +592,11 @@ func (s *Server) handleWriteEvents(w http.ResponseWriter, r *http.Request) {
 		// 403 (verboten), nicht 400 — die Anfrage ist wohlgeformt, nur unzulässig.
 		if isReservedSubject(c.Subject) {
 			writeError(w, http.StatusForbidden, "events["+strconv.Itoa(i)+"]: subject-präfix "+reservedSubjectPrefix+" ist reserviert (server-only)")
+			return
+		}
+		// Subject-Berechtigung (ADR-033): JEDES Event muss in einem write-Grant
+		// liegen, sonst 403 — atomar, es wurde noch nichts geschrieben.
+		if !s.authorizeSubject(w, r, auth.ScopeWrite, c.Subject, false) {
 			return
 		}
 	}
@@ -659,6 +696,9 @@ func (s *Server) handleReadEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Subject == "" || req.Subject[0] != '/' {
 		writeError(w, http.StatusBadRequest, "subject muss mit \"/\" beginnen")
+		return
+	}
+	if !s.authorizeSubject(w, r, auth.ScopeRead, req.Subject, req.Recursive) {
 		return
 	}
 
@@ -797,6 +837,9 @@ func (s *Server) handleEventsPath(w http.ResponseWriter, r *http.Request) {
 		}
 		recursive = b
 	}
+	if !s.authorizeSubject(w, r, auth.ScopeRead, subject, recursive) {
+		return
+	}
 
 	lower, err := parseBound(q.Get("lowerBound"), "lowerBound")
 	if err != nil {
@@ -883,6 +926,9 @@ func (s *Server) handleObserveEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Subject == "" || req.Subject[0] != '/' {
 		writeError(w, http.StatusBadRequest, "subject muss mit \"/\" beginnen")
+		return
+	}
+	if !s.authorizeSubject(w, r, auth.ScopeRead, req.Subject, req.Recursive) {
 		return
 	}
 	lower, err := parseBound(req.LowerBound, "lowerBound")
@@ -1077,6 +1123,9 @@ func (s *Server) handleRunQuery(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Subject == "" || req.Subject[0] != '/' {
 		writeError(w, http.StatusBadRequest, "subject muss mit \"/\" beginnen")
+		return
+	}
+	if !s.authorizeSubject(w, r, auth.ScopeRead, req.Subject, req.Recursive) {
 		return
 	}
 	if req.Limit < 0 {

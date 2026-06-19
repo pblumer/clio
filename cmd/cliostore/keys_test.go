@@ -104,6 +104,25 @@ func TestKeysCLIWritesAudit(t *testing.T) {
 	}
 }
 
+func TestParseScopesPrefix(t *testing.T) {
+	// Gültige Mischung aus global und subject-gebunden (ADR-033).
+	sc, err := parseScopes("read:/orders/*,write:/orders/*,admin")
+	if err != nil {
+		t.Fatalf("parseScopes: %v", err)
+	}
+	if len(sc) != 3 || sc[0] != "read:/orders/*" || sc[2] != "admin" {
+		t.Fatalf("scopes = %v", sc)
+	}
+	// Ungültig: admin darf nicht subject-gebunden sein.
+	if _, err := parseScopes("admin:/orders/*"); err == nil {
+		t.Fatal("admin:/orders/* sollte abgelehnt werden")
+	}
+	// Ungültig: unbekannte Aktion.
+	if _, err := parseScopes("observe:/orders/*"); err == nil {
+		t.Fatal("observe:/orders/* sollte abgelehnt werden")
+	}
+}
+
 func TestParseExpiry(t *testing.T) {
 	if _, err := parseExpiry("720h"); err != nil {
 		t.Fatalf("dauer: %v", err)
