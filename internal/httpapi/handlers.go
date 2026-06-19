@@ -459,9 +459,16 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		diskFree = -1
 		diskTotal = -1
 	}
+	online := 0
+	for _, sn := range s.activity.Snapshot(time.Now().UTC()) {
+		if sn.Online {
+			online++
+		}
+	}
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	s.metrics.Write(w, metrics.Gauges{
 		ActiveObservers: s.broker.SubscriberCount(),
+		OnlineKeys:      online,
 		EventsTotal:     count,
 		DBSizeBytes:     size,
 		DBDataBytes:     data,
@@ -546,6 +553,13 @@ func (s *Server) handleWriteEvents(w http.ResponseWriter, r *http.Request) {
 	for i, c := range req.Events {
 		if err := c.Validate(); err != nil {
 			writeError(w, http.StatusBadRequest, "events["+strconv.Itoa(i)+"]: "+err.Error())
+			return
+		}
+		// Der Subject-Raum /_clio/ ist server-only (ADR-030): Clients dürfen dort
+		// nicht schreiben, sonst ließen sich z. B. Login-Events fälschen. Bewusst
+		// 403 (verboten), nicht 400 — die Anfrage ist wohlgeformt, nur unzulässig.
+		if isReservedSubject(c.Subject) {
+			writeError(w, http.StatusForbidden, "events["+strconv.Itoa(i)+"]: subject-präfix "+reservedSubjectPrefix+" ist reserviert (server-only)")
 			return
 		}
 	}
@@ -898,6 +912,15 @@ func (s *Server) doObserve(w http.ResponseWriter, r *http.Request, subject strin
 	// ihn nicht kappen. Schreib-Deadline für diese Verbindung aufheben (Fehler
 	// ignorieren: nicht jeder ResponseWriter unterstützt das, z. B. im Test).
 	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
+
+	// Offene Observe-Verbindung als Presence verbuchen (ADR-030): solange die
+	// Verbindung steht, gilt der Schlüssel als online. Die Identität setzt
+	// requireScope in den Context (read-Scope). Ohne Identität (sollte für die
+	// geschützten Routen nicht vorkommen) wird nichts verbucht.
+	if id, ok := identityFromContext(r); ok {
+		s.activity.OpenObserve(id.KID, id.Name, scopeStrings(id.Scopes), time.Now().UTC())
+		defer s.activity.CloseObserve(id.KID, time.Now().UTC())
+	}
 
 	// Zuerst abonnieren, dann History lesen: so geht kein Event verloren, das
 	// zwischen History-Snapshot und Live-Phase geschrieben wird. Doppelte

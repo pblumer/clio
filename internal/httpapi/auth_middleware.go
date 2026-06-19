@@ -7,8 +7,32 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pblumer/clio/internal/activity"
 	"github.com/pblumer/clio/internal/auth"
 )
+
+// categoryForScope bildet den geforderten Routen-Scope auf die Aktivitäts-
+// Kategorie der Presence-Registry ab (ADR-030).
+func categoryForScope(scope auth.Scope) activity.Category {
+	switch scope {
+	case auth.ScopeWrite:
+		return activity.CategoryWrite
+	case auth.ScopeAdmin:
+		return activity.CategoryAdmin
+	default:
+		return activity.CategoryRead
+	}
+}
+
+// scopeStrings übersetzt eine auth.Scope-Liste in Strings (für die
+// abhängigkeitsfreie Aktivitäts-Registry).
+func scopeStrings(scopes []auth.Scope) []string {
+	out := make([]string, len(scopes))
+	for i, s := range scopes {
+		out[i] = string(s)
+	}
+	return out
+}
 
 // contextKey ist der private Schlüsseltyp für Werte im Request-Context.
 type contextKey int
@@ -59,7 +83,7 @@ var dummyHash = auth.HashSecret("clio:auth:nonexistent-key-timing-placeholder")
 // Bei Erfolg liefert es den Schlüssel und ok=true. Andernfalls hat es die Antwort
 // bereits geschrieben (401 oder 500) und die Ablehnung auditiert; ok=false.
 // scopeLabel ist nur das Label fürs Audit der 401-Ablehnung.
-func (s *Server) authenticate(w http.ResponseWriter, r *http.Request, scopeLabel string) (auth.Key, bool) {
+func (s *Server) authenticate(w http.ResponseWriter, r *http.Request, scope auth.Scope) (auth.Key, bool) {
 	kid, secret, parsed := auth.ParseBearer(r.Header.Get("Authorization"))
 
 	var key auth.Key
@@ -95,7 +119,14 @@ func (s *Server) authenticate(w http.ResponseWriter, r *http.Request, scopeLabel
 	// 401: kein gültiger Bearer, unbekannter kid, falsches Geheimnis,
 	// widerrufener ODER abgelaufener Schlüssel (Usable prüft Status + Ablauf).
 	if !parsed || !found || !secretOK || !key.Usable(time.Now().UTC()) {
-		s.auditDecision(r, auth.Scope(scopeLabel), "deny", http.StatusUnauthorized, auditKID, "")
+		s.auditDecision(r, scope, "deny", http.StatusUnauthorized, auditKID, "")
+		s.metrics.ObserveAuthDecision(string(scope), "deny")
+		// Aktivität/Denial nur für BEKANNTE Schlüssel verbuchen (found): ein 401 mit
+		// unbekanntem kid darf die Registry nicht mit Müll-Einträgen aufblähen (ADR-030).
+		if found {
+			s.activity.Record(key.KID, key.Name, scopeStrings(key.Scopes), categoryForScope(scope), false, time.Now().UTC())
+			s.maybeEmitDenied(key.KID, key.Name, key.Scopes, scope, http.StatusUnauthorized)
+		}
 		writeError(w, http.StatusUnauthorized, "unauthorized")
 		return auth.Key{}, false
 	}
@@ -108,16 +139,25 @@ func (s *Server) authenticate(w http.ResponseWriter, r *http.Request, scopeLabel
 // 401), schließlich Identität in den Context legen und next aufrufen.
 func (s *Server) requireScope(scope auth.Scope, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		key, ok := s.authenticate(w, r, string(scope))
+		key, ok := s.authenticate(w, r, scope)
 		if !ok {
 			return
 		}
 		if !key.HasScope(scope) {
 			s.auditDecision(r, scope, "deny", http.StatusForbidden, key.KID, key.Name)
+			s.metrics.ObserveAuthDecision(string(scope), "deny")
+			s.activity.Record(key.KID, key.Name, scopeStrings(key.Scopes), categoryForScope(scope), false, time.Now().UTC())
+			s.maybeEmitDenied(key.KID, key.Name, key.Scopes, scope, http.StatusForbidden)
 			writeError(w, http.StatusForbidden, "forbidden: scope "+string(scope)+" erforderlich")
 			return
 		}
 		s.auditDecision(r, scope, "allow", http.StatusOK, key.KID, key.Name)
+		s.metrics.ObserveAuthDecision(string(scope), "allow")
+		// Aktivität verbuchen; ein Übergang offline→online löst (opt-in) ein
+		// session-started-Event aus (ADR-030).
+		if started := s.activity.Record(key.KID, key.Name, scopeStrings(key.Scopes), categoryForScope(scope), true, time.Now().UTC()); started {
+			s.emitSessionStarted(key.KID, key.Name, key.Scopes)
+		}
 		ident := auth.Identity{KID: key.KID, Name: key.Name, Scopes: key.Scopes}
 		next(w, r.WithContext(withIdentity(r.Context(), ident)))
 	}
@@ -128,17 +168,30 @@ func (s *Server) requireScope(scope auth.Scope, next http.HandlerFunc) http.Hand
 // hat). Genau ein scope verhält sich identisch zu requireScope.
 func (s *Server) requireAnyScope(scopes []auth.Scope, next http.HandlerFunc) http.HandlerFunc {
 	label := joinScopes(scopes)
+	// Repräsentativer Scope für Metrics/Aktivität/Kategorie (Audit-Log und
+	// Fehlertext nutzen das vollständige Label "a|b").
+	rep := auth.Scope(label)
+	if len(scopes) > 0 {
+		rep = scopes[0]
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		key, ok := s.authenticate(w, r, label)
+		key, ok := s.authenticate(w, r, rep)
 		if !ok {
 			return
 		}
 		if !hasAnyScope(key, scopes) {
 			s.auditDecision(r, auth.Scope(label), "deny", http.StatusForbidden, key.KID, key.Name)
+			s.metrics.ObserveAuthDecision(string(rep), "deny")
+			s.activity.Record(key.KID, key.Name, scopeStrings(key.Scopes), categoryForScope(rep), false, time.Now().UTC())
+			s.maybeEmitDenied(key.KID, key.Name, key.Scopes, rep, http.StatusForbidden)
 			writeError(w, http.StatusForbidden, "forbidden: einer der scopes "+label+" erforderlich")
 			return
 		}
 		s.auditDecision(r, auth.Scope(label), "allow", http.StatusOK, key.KID, key.Name)
+		s.metrics.ObserveAuthDecision(string(rep), "allow")
+		if started := s.activity.Record(key.KID, key.Name, scopeStrings(key.Scopes), categoryForScope(rep), true, time.Now().UTC()); started {
+			s.emitSessionStarted(key.KID, key.Name, key.Scopes)
+		}
 		ident := auth.Identity{KID: key.KID, Name: key.Name, Scopes: key.Scopes}
 		next(w, r.WithContext(withIdentity(r.Context(), ident)))
 	}
