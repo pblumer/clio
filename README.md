@@ -35,12 +35,21 @@ Die vollständige Architektur, Roadmap und alle Entscheidungen stehen in
 > [`docs/threat-model.md`](./docs/threat-model.md) (wogegen clio schützt — und
 > wogegen nicht).
 
-**🎉 v0.1.0 veröffentlicht** — das erste getaggte Release. Fertige
-Single-Binaries für alle Plattformen (Linux/macOS/Windows × amd64/arm64) als
-Archive **inkl. SHA-256-Checksums** sowie ein Multi-Arch-Docker-Image liegen
+**🎉 v0.2.0 veröffentlicht** — aktuelles Release. Neu gegenüber v0.1.0 u. a.:
+benannte **API-Keys mit Scopes, Widerruf und Audit** (ADR-025), transparente
+**Wert-Kompression** der Event-Ablage (ADR-024), **skalierbare
+Speicherverwaltung** (Pre-Sizing, Headroom-Monitor, Online-Kompaktierung) sowie
+eine **Sekundär-Query auf `event.data`** mit internem Feld-Index (ADR-029).
+Fertige Single-Binaries für alle Plattformen (Linux/macOS/Windows × amd64/arm64)
+als Archive **inkl. SHA-256-Checksums** sowie ein Multi-Arch-Docker-Image liegen
 unter [Releases](https://github.com/pblumer/clio/releases/latest) bzw. in der
 GitHub Container Registry (`ghcr.io/pblumer/clio`). Siehe
 [Installation](#single-binaries-für-alle-plattformen).
+
+> **⚠️ Auth-Änderung in v0.2.0 (ADR-025):** Das alte `Bearer <token>` ohne
+> `kid`-Präfix wird **nicht mehr akzeptiert**. `CLIO_API_TOKEN` ist deprecated
+> und bootet bei leerem Schlüsselbund einen `legacy-token`-Admin-Key; der
+> Leitungswert ist danach `kid.secret`. Neu bevorzugt: `CLIO_BOOTSTRAP_ADMIN_KEY`.
 
 **Stufe 0–2 — abgeschlossen.** Lauffähig: `ping`, `write-events` (atomar,
 monotone Event-IDs, `bbolt`-Storage, **Preconditions** für Optimistic
@@ -213,7 +222,7 @@ alles an ein GitHub-Release.
 Aus einem Release installieren (Beispiel Linux/amd64):
 
 ```bash
-VERSION=v0.1.0
+VERSION=v0.2.0
 curl -sSL -O https://github.com/pblumer/clio/releases/download/$VERSION/cliostore_${VERSION}_linux_amd64.tar.gz
 curl -sSL -O https://github.com/pblumer/clio/releases/download/$VERSION/checksums.txt
 sha256sum --check --ignore-missing checksums.txt   # Integrität prüfen
@@ -230,7 +239,7 @@ GitHub Container Registry:
 docker run --rm -p 3000:3000 \
   -e CLIO_BOOTSTRAP_ADMIN_KEY=dein-geheimnis \
   -v clio-data:/data \
-  ghcr.io/pblumer/clio:latest      # oder :v0.1.0
+  ghcr.io/pblumer/clio:latest      # oder :v0.2.0
 # Beim ersten Start wird der kid geloggt; der Schlüssel ist dann kid.secret.
 ```
 

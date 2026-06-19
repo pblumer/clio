@@ -63,10 +63,10 @@ Für Windows gibt es bei jedem Release ein fertiges ZIP-Archiv inklusive
 `cliostore.exe`, `LICENSE`, `README.md` sowie eine `checksums.txt` (SHA-256).
 
 > Aktuelle Version siehe **<https://github.com/pblumer/clio/releases/latest>**.
-> Setze `$Version` unten auf den passenden Tag (Beispiel: `v0.1.0`).
+> Setze `$Version` unten auf den passenden Tag (Beispiel: `v0.2.0`).
 
 ```powershell
-$Version = 'v0.1.0'                          # gewünschte Version, siehe Releases-Seite
+$Version = 'v0.2.0'                          # gewünschte Version, siehe Releases-Seite
 $Archive = "cliostore_${Version}_windows_amd64.zip"
 $Base    = "https://github.com/pblumer/clio/releases/download/$Version"
 
@@ -96,7 +96,7 @@ Copy-Item "C:\clio\unpack\cliostore_${Version}_windows_amd64\cliostore.exe" 'C:\
 Remove-Item 'C:\clio\unpack' -Recurse -Force
 
 # Funktioniert das Binary?
-C:\clio\cliostore.exe -version          # -> cliostore v0.1.0
+C:\clio\cliostore.exe -version          # -> cliostore v0.2.0
 ```
 
 Weiter mit [Abschnitt 4 — Erster Start](#4-erster-start-interaktiv-testen).
