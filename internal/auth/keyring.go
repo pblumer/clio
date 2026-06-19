@@ -26,12 +26,16 @@ const (
 	ScopeWrite Scope = "write"
 	// ScopeAdmin erlaubt die Schlüsselverwaltung und Dev-Routen.
 	ScopeAdmin Scope = "admin"
+	// ScopeAudit erlaubt ausschließlich das read-only Lesen des Audit-Logs
+	// (ADR-031). Bewusst getrennt von admin, damit ein reiner Auditor keine
+	// administrativen Rechte braucht (Prinzip der geringsten Rechte).
+	ScopeAudit Scope = "audit"
 )
 
 // Valid meldet, ob s einer der bekannten Scopes ist.
 func (s Scope) Valid() bool {
 	switch s {
-	case ScopeRead, ScopeWrite, ScopeAdmin:
+	case ScopeRead, ScopeWrite, ScopeAdmin, ScopeAudit:
 		return true
 	}
 	return false

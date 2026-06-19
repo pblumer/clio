@@ -138,6 +138,7 @@ func runKeysCreate(args []string, out io.Writer) error {
 	if err := st.PutKey(key); err != nil {
 		return err
 	}
+	recordCLIKeyAudit(st, "key.create", key.KID)
 	wire := key.KID + "." + secret
 
 	if *asJSON {
@@ -175,6 +176,7 @@ func runKeysRotate(args []string, out io.Writer) error {
 	if !found {
 		return fmt.Errorf("unbekannter kid %q", *kid)
 	}
+	recordCLIKeyAudit(st, "key.rotate", *kid)
 	if *asJSON {
 		return writeJSONLine(out, map[string]any{"kid": *kid, "secret": wire})
 	}
@@ -208,11 +210,19 @@ func runKeysRevoke(args []string, out io.Writer) error {
 	if !found {
 		return fmt.Errorf("unbekannter kid %q", *kid)
 	}
+	recordCLIKeyAudit(st, "key.revoke", *kid)
 	if *asJSON {
 		return writeJSONLine(out, map[string]any{"kid": *kid, "status": string(auth.StatusRevoked)})
 	}
 	fmt.Fprintf(out, "key widerrufen: kid=%s\n", *kid)
 	return nil
+}
+
+// recordCLIKeyAudit schreibt einen Audit-Eintrag (ADR-031) für eine
+// Offline-CLI-Key-Aktion (Actor "cli"). Best effort: ein Fehler bricht die Aktion
+// nicht ab (auf stderr nicht nötig — die Aktion selbst ist bereits erfolgt).
+func recordCLIKeyAudit(st *store.Store, action, kid string) {
+	_ = st.AppendAudit(store.AuditEntry{Action: action, ActorName: "cli", Target: kid})
 }
 
 // parseScopes zerlegt eine kommagetrennte Scope-Liste und validiert jeden Eintrag.
@@ -226,7 +236,7 @@ func parseScopes(csv string) ([]auth.Scope, error) {
 		}
 		sc := auth.Scope(p)
 		if !sc.Valid() {
-			return nil, fmt.Errorf("unbekannter scope %q (erlaubt: read, write, admin)", p)
+			return nil, fmt.Errorf("unbekannter scope %q (erlaubt: read, write, admin, audit)", p)
 		}
 		scopes = append(scopes, sc)
 	}

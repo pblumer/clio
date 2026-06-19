@@ -332,10 +332,22 @@ cliostore keys rotate --db clio.db --kid kid_ci01
 Vollständiger Leitfaden inkl. sicherer Verwendung, Bootstrap-Regeln und Migration
 von `CLIO_API_TOKEN`: [`docs/security.md`](docs/security.md).
 
-Jede Autorisierungsentscheidung (allow/deny) wird ins Audit-Log geschrieben —
-ohne jedes Geheimnis. Optional (`CLIO_EVENT_AUTHORSHIP`, Default aus) stempelt der
-Server den `kid` des Schreibers als Extension `clioauthkid` in jedes neue Event
-(Urheberschaft, in die Hash-Kette gebunden).
+Jede Autorisierungsentscheidung (allow/deny) wird strukturiert ins **slog**
+geschrieben — ohne jedes Geheimnis. Zusätzlich führt clio ein **persistentes
+Audit-Log** administrativer Aktionen (Key create/rotate/revoke, Schema-
+Registrierung, Backup, Dev-Reset, Compaction) in einem eigenen, append-only
+bbolt-Bucket (ADR-031). Es ist read-only über `GET /api/v1/audit` lesbar — mit
+Scope `audit` **oder** `admin` — und nicht über die Write-API manipulierbar:
+
+```bash
+curl -sS -H "Authorization: Bearer $ADMIN" "http://127.0.0.1:3000/api/v1/audit?limit=50"
+```
+
+Details (Aktionen, Manipulationsgrenzen, Auditor-Key): [`docs/audit.md`](docs/audit.md).
+
+Optional (`CLIO_EVENT_AUTHORSHIP`, Default aus) stempelt der Server den `kid` des
+Schreibers als Extension `clioauthkid` in jedes neue Event (Urheberschaft, in die
+Hash-Kette gebunden).
 
 ### Dev-Mode: Reset & Bulk-Import-Fenster
 

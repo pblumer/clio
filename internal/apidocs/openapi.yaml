@@ -355,7 +355,7 @@ paths:
                 name: { type: string, example: "ci-writer" }
                 scopes:
                   type: array
-                  items: { type: string, enum: [read, write, admin] }
+                  items: { type: string, enum: [read, write, admin, audit] }
                   example: ["read", "write"]
                 expiresAt:
                   type: string
@@ -463,6 +463,41 @@ paths:
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/ProblemDetails" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/v1/audit:
+    get:
+      tags: [Admin]
+      summary: Audit-Log administrativer Aktionen lesen (Scope audit oder admin)
+      description: |
+        Liefert die jüngsten administrativen Audit-Einträge (ADR-031), neueste
+        zuerst, read-only. Lesbar mit Scope `audit` **oder** `admin`. Es landet
+        nie ein Geheimnis im Log. Das Audit-Log ist append-only und kann **nicht**
+        über die Write-API verändert werden.
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 100, maximum: 1000 }
+        - name: before
+          in: query
+          required: false
+          description: "Cursor: nur Einträge mit seq < before (für Pagination)."
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Audit-Einträge
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  entries:
+                    type: array
+                    items: { $ref: "#/components/schemas/AuditEntry" }
+                  total: { type: integer, example: 42 }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
         "500": { $ref: "#/components/responses/InternalError" }
 
   /api/v1/public-key:
@@ -858,7 +893,7 @@ components:
         name: { type: string, example: "ci-writer" }
         scopes:
           type: array
-          items: { type: string, enum: [read, write, admin] }
+          items: { type: string, enum: [read, write, admin, audit] }
         status: { type: string, enum: [active, revoked], example: "active" }
         createdAt: { type: string, format: date-time }
         revokedAt: { type: string, format: date-time, nullable: true }
@@ -867,6 +902,20 @@ components:
         owner: { type: string }
         purpose: { type: string }
         description: { type: string }
+    AuditEntry:
+      type: object
+      description: |
+        Ein Eintrag im persistenten Audit-Log administrativer Aktionen (ADR-031).
+        Enthält nie ein Geheimnis.
+      properties:
+        seq: { type: integer, description: "Eigene monotone Sequenz des Audit-Logs.", example: 7 }
+        time: { type: string, format: date-time }
+        actorKid: { type: string, description: "kid des Auslösers (leer bei system/CLI).", example: "kid_admin01" }
+        actorName: { type: string, example: "ci-admin" }
+        action: { type: string, example: "key.create" }
+        result: { type: string, enum: [success, failure], example: "success" }
+        target: { type: string, description: "Zielobjekt der Aktion.", example: "kid_ci01" }
+        error: { type: string, description: "Fehlermeldung bei result=failure." }
     CreatedKey:
       type: object
       description: |
@@ -877,7 +926,7 @@ components:
         name: { type: string, example: "ci-writer" }
         scopes:
           type: array
-          items: { type: string, enum: [read, write, admin] }
+          items: { type: string, enum: [read, write, admin, audit] }
         status: { type: string, example: "active" }
         createdAt: { type: string, format: date-time }
         secret: { type: string, example: "kid_ci01.W8xqT2vK9pL4mN6rS1dF3hJ5" }

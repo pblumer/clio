@@ -40,6 +40,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/keys/{kid}/revoke", s.requireScope(auth.ScopeAdmin, s.handleRevokeKey))
 	s.mux.HandleFunc("POST /api/v1/keys/{kid}/rotate", s.requireScope(auth.ScopeAdmin, s.handleRotateKey))
 
+	// Persistentes Audit-Log administrativer Aktionen (ADR-031), read-only.
+	// Lesbar mit Scope `audit` ODER `admin` (requireAnyScope).
+	s.mux.HandleFunc("GET /api/v1/audit", s.requireAnyScope([]auth.Scope{auth.ScopeAudit, auth.ScopeAdmin}, s.handleAudit))
+
 	// Dev-Mode-only (ADR-022): destruktives Zurücksetzen der gesamten Datenbank
 	// plus Bulk-Import-Fenster direkt nach Start/Reset.
 	// Die Routen werden im Produktivbetrieb gar nicht erst registriert — ohne

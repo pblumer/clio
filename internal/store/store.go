@@ -45,6 +45,11 @@ var (
 	// getrennt vom Event-Strom: es sind mutable Steuerungsdaten und vom Reset
 	// (ADR-022) ausgenommen — siehe Reset().
 	bucketAuthKeys = []byte("auth_keys")
+	// bucketAuditLog hält das append-only Audit-Log administrativer Aktionen
+	// (seq → JSON-AuditEntry, ADR-031). Eigener Bucket, getrennt vom Event-Strom,
+	// damit Audit-Einträge Fach-Events nicht stören und nicht über die Write-API
+	// erreichbar sind. Wie auth_keys vom Reset (ADR-022) ausgenommen.
+	bucketAuditLog = []byte("audit_log")
 )
 
 // metaChainHead speichert im meta-Bucket den Hash des zuletzt geschriebenen
@@ -261,7 +266,7 @@ func OpenWithOptions(path string, opts Options) (*Store, error) {
 	}
 
 	err = db.Update(func(tx *bolt.Tx) error {
-		for _, name := range [][]byte{bucketEvents, bucketSubjectIdx, bucketTypeIdx, bucketMeta, bucketTypes, bucketSubjCount, bucketSchemas, bucketDataIdx, bucketAuthKeys} {
+		for _, name := range [][]byte{bucketEvents, bucketSubjectIdx, bucketTypeIdx, bucketMeta, bucketTypes, bucketSubjCount, bucketSchemas, bucketDataIdx, bucketAuthKeys, bucketAuditLog} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return err
 			}
@@ -419,9 +424,10 @@ func (s *Store) Reset() (uint64, error) {
 	var deleted uint64
 	err := s.update(func(tx *bolt.Tx) error {
 		deleted = tx.Bucket(bucketEvents).Sequence()
-		// Bewusst OHNE bucketAuthKeys: der Schlüsselbund (ADR-025) ist mutabler
-		// Steuerungs-State, kein Event-Strom. Würde der Dev-Reset ihn leeren,
-		// sperrte man sich beim Reset selbst aus (kein gültiger Key mehr).
+		// Bewusst OHNE bucketAuthKeys und bucketAuditLog: der Schlüsselbund
+		// (ADR-025) ist mutabler Steuerungs-State (würde der Reset ihn leeren,
+		// sperrte man sich aus), und das Audit-Log (ADR-031) muss die Spur des
+		// Resets selbst überleben — beide bleiben erhalten.
 		for _, name := range [][]byte{bucketEvents, bucketSubjectIdx, bucketTypeIdx, bucketMeta, bucketTypes, bucketSubjCount, bucketSchemas, bucketDataIdx} {
 			if tx.Bucket(name) != nil {
 				if err := tx.DeleteBucket(name); err != nil {

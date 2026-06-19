@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"net/http"
 	"strconv"
@@ -393,6 +394,7 @@ func (s *Server) handleRegisterEventSchema(w http.ResponseWriter, r *http.Reques
 	err := s.store.RegisterSchema(req.Type, req.Schema)
 	switch {
 	case err == nil:
+		s.recordAudit(r, store.AuditActionSchemaRegister, req.Type, "")
 		writeJSON(w, http.StatusOK, map[string]string{"type": req.Type, "status": "registered"})
 	case errors.Is(err, store.ErrSchemaExists):
 		writeError(w, http.StatusConflict, err.Error())
@@ -490,11 +492,13 @@ func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 	res, err := s.store.Backup(w)
 	if err != nil {
 		s.logger.Error("backup streamen fehlgeschlagen", "err", err)
+		s.recordAudit(r, store.AuditActionBackup, "", err.Error())
 		return
 	}
 	if id, ok := identityFromContext(r); ok {
 		s.logger.Info("backup gestreamt", "by", id.KID, "events", res.Events, "bytes", res.Bytes, "head", res.Head)
 	}
+	s.recordAudit(r, store.AuditActionBackup, fmt.Sprintf("events=%d,bytes=%d", res.Events, res.Bytes), "")
 }
 
 // handleVerify rechnet die Hash-Kette nach und meldet, ob die Historie

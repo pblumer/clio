@@ -24,7 +24,8 @@ Klartext. Der Vergleich beim Login läuft **zeitkonstant** (kein Timing-Orakel
 |---|---|
 | `read` | lesende Routen: `read-events`, `observe-events`, `run-query`, `verify`, `info`, `read-subjects`, … |
 | `write` | schreibende Datenrouten: `write-events`, `register-event-schema` |
-| `admin` | Schlüsselverwaltung (`keys` …), `backup`, Dev-Routen |
+| `admin` | Schlüsselverwaltung (`keys` …), `backup`, Dev-Routen; liest auch das Audit-Log |
+| `audit` | **nur** read-only Lesen des Audit-Logs (`GET /api/v1/audit`) — siehe [`audit.md`](audit.md) |
 
 Ein Key trägt einen oder mehrere Scopes. Routen verlangen je **genau einen**
 Scope. Fehlt er, antwortet der Server mit **403** (klar getrennt vom **401** bei

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/pblumer/clio/internal/auth"
+	"github.com/pblumer/clio/internal/store"
 )
 
 // Admin-Routen zur Laufzeit-Verwaltung des Schlüsselbunds (ADR-025). Alle drei
@@ -76,7 +77,7 @@ func (s *Server) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, sc := range req.Scopes {
 		if !sc.Valid() {
-			writeError(w, http.StatusBadRequest, "unbekannter scope "+string(sc)+" (erlaubt: read, write, admin)")
+			writeError(w, http.StatusBadRequest, "unbekannter scope "+string(sc)+" (erlaubt: read, write, admin, audit)")
 			return
 		}
 	}
@@ -107,6 +108,7 @@ func (s *Server) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 	if id, ok := identityFromContext(r); ok {
 		s.logger.Info("key angelegt", "by", id.KID, "kid", key.KID, "name", key.Name, "scopes", key.Scopes, "expiresAt", key.ExpiresAt)
 	}
+	s.recordAudit(r, store.AuditActionKeyCreate, key.KID, "")
 
 	body := map[string]any{
 		"kid":       key.KID,
@@ -141,6 +143,7 @@ func (s *Server) handleRotateKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !found {
+		s.recordAudit(r, store.AuditActionKeyRotate, kid, "unbekannter kid")
 		writeError(w, http.StatusNotFound, "unbekannter kid")
 		return
 	}
@@ -148,6 +151,7 @@ func (s *Server) handleRotateKey(w http.ResponseWriter, r *http.Request) {
 	if id, ok := identityFromContext(r); ok {
 		s.logger.Warn("key rotiert", "by", id.KID, "kid", kid)
 	}
+	s.recordAudit(r, store.AuditActionKeyRotate, kid, "")
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"kid":     kid,
@@ -200,6 +204,7 @@ func (s *Server) handleRevokeKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !found {
+		s.recordAudit(r, store.AuditActionKeyRevoke, kid, "unbekannter kid")
 		writeError(w, http.StatusNotFound, "unbekannter kid")
 		return
 	}
@@ -207,6 +212,7 @@ func (s *Server) handleRevokeKey(w http.ResponseWriter, r *http.Request) {
 	if id, ok := identityFromContext(r); ok {
 		s.logger.Warn("key widerrufen", "by", id.KID, "kid", kid)
 	}
+	s.recordAudit(r, store.AuditActionKeyRevoke, kid, "")
 
 	body := map[string]any{"kid": kid, "status": auth.StatusRevoked}
 	// Nach dem Widerruf prüfen, ob noch ein aktiver Admin-Key existiert.
