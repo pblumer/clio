@@ -43,12 +43,14 @@ function fmtMs(sec) {
 
 // ---------- Tabs ----------
 function switchView(name) {
-  for (const v of ["dashboard", "live", "explorer", "generate", "query", "keys", "help"]) {
+  for (const v of ["dashboard", "live", "explorer", "generate", "query", "keys", "activity", "help"]) {
     $("view-" + v).classList.toggle("active", v === name);
     $("tab-" + v).classList.toggle("active", v === name);
   }
   // Keys: beim ersten Öffnen die Liste laden, sofern ein Token vorliegt.
   if (name === "keys" && !keysLoaded && tokenInput.value.trim()) loadKeys();
+  // Aktivität: beim Öffnen Snapshot + Lifecycle-Events laden, sofern ein Token vorliegt.
+  if (name === "activity" && tokenInput.value.trim()) { loadActivity(); loadAuthEvents(); }
   // Explorer beim ersten Öffnen automatisch laden, sofern ein Token vorliegt.
   if (name === "explorer" && !explorerLoaded && tokenInput.value.trim()) loadExplorer();
   // Erzeugen: Vorschlagslisten beim ersten Öffnen befüllen.
@@ -2338,6 +2340,113 @@ async function createKey() {
 $("key-create").addEventListener("click", createKey);
 $("key-refresh").addEventListener("click", loadKeys);
 $("key-filter").addEventListener("change", renderKeys);
+
+// ---------- Aktivität & Presence (ADR-030) ----------
+// Pollt /api/v1/activity (Snapshot „wer ist online / wer tut was") und zeigt
+// zusätzlich die jüngsten Login-/Lifecycle-Events aus /_clio/auth/ (Dogfooding).
+// Beides braucht ein admin-Token; die Lifecycle-Events erscheinen nur, wenn der
+// Server mit CLIO_AUTH_EVENTS läuft.
+async function loadActivity() {
+  const token = tokenInput.value.trim();
+  const status = $("act-status");
+  if (!token) { status.textContent = "Token fehlt — oben eingeben und Verbinden."; return; }
+  try {
+    const r = await fetch("/api/v1/activity", { headers: { Authorization: "Bearer " + token }, cache: "no-store" });
+    if (r.status === 401) { status.textContent = "Token ungültig (401)."; hideActTable(); return; }
+    if (r.status === 403) { status.textContent = "Kein admin-Scope (403) — dieser Key darf die Aktivität nicht sehen."; hideActTable(); return; }
+    if (!r.ok) { status.textContent = "Fehler: " + await problemDetail(r); hideActTable(); return; }
+    renderActivity(await r.json());
+  } catch (e) { status.textContent = "Netzwerkfehler: " + e.message; }
+}
+
+function hideActTable() { $("act-table").style.display = "none"; $("act-online-badge").style.display = "none"; }
+
+function renderActivity(data) {
+  const keys = (data && data.keys) || [];
+  const badge = $("act-online-badge");
+  badge.textContent = (data.onlineCount || 0) + " online";
+  badge.style.display = "inline-block";
+
+  const tbody = $("act-tbody");
+  tbody.innerHTML = "";
+  for (const k of keys) {
+    const tr = document.createElement("tr");
+    if (!k.online) tr.className = "revoked";
+    const scopes = (k.scopes || []).map((s) => '<span class="badge scope">' + escHtml(s) + "</span>").join("");
+    const statusBadge = k.online
+      ? '<span class="badge ok">online</span>' : '<span class="badge">offline</span>';
+    const since = (k.online && k.sessionStarted && !k.sessionStarted.startsWith("0001"))
+      ? new Date(k.sessionStarted).toLocaleTimeString("de-CH") : "–";
+    const last = (k.lastSeen && !k.lastSeen.startsWith("0001"))
+      ? new Date(k.lastSeen).toLocaleTimeString("de-CH") : "–";
+    const live = k.openObserves > 0 ? '<span class="badge ok">' + k.openObserves + "</span>" : "0";
+    tr.innerHTML =
+      '<td class="kid">' + escHtml(k.kid) + "</td><td>" + escHtml(k.name || "") + "</td><td>" +
+      scopes + "</td><td>" + statusBadge + "</td><td>" + since + "</td><td>" + last + "</td><td>" +
+      (k.reads || 0) + "</td><td>" + (k.writes || 0) + "</td><td>" + (k.adminOps || 0) + "</td><td>" +
+      (k.denied || 0) + "</td><td>" + live + "</td>";
+    tbody.appendChild(tr);
+  }
+  $("act-table").style.display = keys.length ? "table" : "none";
+  let s = keys.length + " Schlüssel gesehen · " + (data.onlineCount || 0) + " online · Fenster " +
+    (data.presenceWindowSeconds || 0) + "s · aktualisiert " + new Date().toLocaleTimeString("de-CH");
+  if (!keys.length) s += " — noch keine Aktivität dieser Laufzeit.";
+  if (!data.authEvents) s += " · Lifecycle-Events aus (CLIO_AUTH_EVENTS).";
+  $("act-status").textContent = s;
+}
+
+async function loadAuthEvents() {
+  const token = tokenInput.value.trim();
+  const status = $("act-events-status");
+  if (!token) { status.textContent = ""; return; }
+  try {
+    // /_clio/auth ist read-Scope; recursive holt sessions/keys/denied. Wir zeigen
+    // die jüngsten zuerst (Server liefert in globaler Reihenfolge, also umdrehen).
+    const r = await fetch("/api/v1/events/_clio/auth?recursive=true&limit=200",
+      { headers: { Authorization: "Bearer " + token }, cache: "no-store" });
+    if (!r.ok) { status.textContent = r.status === 401 ? "Token ungültig (401)." : "Fehler: " + await problemDetail(r); return; }
+    const text = await r.text();
+    const evs = text.split("\n").filter((l) => l.trim()).map((l) => { try { return JSON.parse(l); } catch (_) { return null; } }).filter(Boolean);
+    renderAuthEvents(evs.reverse().slice(0, 50));
+  } catch (e) { status.textContent = "Netzwerkfehler: " + e.message; }
+}
+
+function renderAuthEvents(evs) {
+  const box = $("act-events-list");
+  box.innerHTML = "";
+  if (!evs.length) {
+    $("act-events-status").textContent = "Keine Lifecycle-Events. Aktiviere CLIO_AUTH_EVENTS auf dem Server, damit Login-/Key-Ereignisse hier erscheinen.";
+    return;
+  }
+  $("act-events-status").textContent = evs.length + " jüngste Ereignis(se).";
+  const labels = {
+    "dev.clio.auth.session-started": ["● Login", "ok"],
+    "dev.clio.auth.session-ended": ["○ Logout", ""],
+    "dev.clio.auth.key-created": ["+ Key angelegt", "ok"],
+    "dev.clio.auth.key-revoked": ["– Key widerrufen", "warn"],
+    "dev.clio.auth.access-denied": ["⚠ Zugriff abgelehnt", "warn"],
+  };
+  for (const ev of evs) {
+    const d = ev.data || {};
+    const [label, cls] = labels[ev.type] || [ev.type, ""];
+    const when = ev.time ? new Date(ev.time).toLocaleString("de-CH") : "";
+    const who = d.kid ? d.kid + (d.name ? " (" + d.name + ")" : "") : "";
+    const row = document.createElement("div");
+    row.className = "act-event";
+    row.innerHTML = '<span class="badge ' + cls + '">' + escHtml(label) + '</span>' +
+      '<span class="act-event-who">' + escHtml(who) + '</span>' +
+      '<span class="act-event-when">' + escHtml(when) + '</span>';
+    box.appendChild(row);
+  }
+}
+
+$("act-refresh").addEventListener("click", () => { loadActivity(); loadAuthEvents(); });
+$("act-events-refresh").addEventListener("click", loadAuthEvents);
+// Auto-Refresh des Snapshots, solange der Aktivität-Tab offen, „auto" aktiv und
+// ein Token vorhanden ist (analog zum Dashboard-Ticker).
+setInterval(() => {
+  if ($("view-activity").classList.contains("active") && $("act-auto").checked && tokenInput.value.trim()) loadActivity();
+}, 5000);
 
 // Eventstrom-Diagramm + Live-Liste initialisieren (Canvas, Buttons, Collapse).
 initEventStream();

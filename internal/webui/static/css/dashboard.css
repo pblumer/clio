@@ -324,3 +324,11 @@
     background: radial-gradient(circle at 50% 50%, #fff, #ffe9a8 18%, #ff8a5c 38%, #f472b6 55%, transparent 72%); }
   #supernova-flash.boom { animation: boom 1.2s ease-out forwards; }
   @keyframes boom { 0% { opacity: 0; transform: scale(.2); } 12% { opacity: 1; } 100% { opacity: 0; transform: scale(2.4); } }
+
+  /* Aktivität & Presence (ADR-030) */
+  .act-events { display: flex; flex-direction: column; gap: 4px; max-height: 360px; overflow-y: auto; }
+  .act-event { display: grid; grid-template-columns: 150px 1fr auto; gap: 10px; align-items: center;
+    padding: 4px 6px; border-bottom: 1px solid var(--border); font-size: 13px; }
+  .act-event:last-child { border-bottom: none; }
+  .act-event-who { font-family: var(--mono); color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .act-event-when { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
