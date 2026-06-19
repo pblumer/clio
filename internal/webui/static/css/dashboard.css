@@ -171,8 +171,12 @@
   .ev { background: var(--panel); border: 1px solid var(--border); border-radius: 9px; padding: 9px 12px; }
   .ev-head { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; cursor: pointer; font-family: var(--mono); font-size: 13px; }
   .ev-id { color: var(--muted); min-width: 52px; }
-  .ev-type { color: #0b1020; background: var(--accent); border-radius: 5px; padding: 1px 7px; font-weight: 600; font-size: 12px; }
-  .ev-subject { color: var(--fg); flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .ev-type { color: #0b1020; background: var(--accent); border-radius: 5px; padding: 1px 7px; font-weight: 600; font-size: 12px;
+             min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+  /* Subject behält eine Mindestbreite: reicht der Platz neben ID/Typ nicht (z. B.
+     bei langen Event-Typ-Namen), bricht es per flex-wrap auf eine eigene Zeile um,
+     statt auf ~1 Zeichen gequetscht senkrecht zu zerfallen. */
+  .ev-subject { color: var(--fg); flex: 1 1 12em; min-width: 12em; overflow-wrap: anywhere; }
   .ev-source { color: var(--muted); font-size: 11.5px; opacity: .85; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 200px; }
   .ev-time { color: var(--muted); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
   .ev-data { margin: 8px 0 0; padding: 9px 11px; background: var(--bg); border: 1px solid var(--border); border-radius: 7px;
