@@ -1,0 +1,51 @@
+# Demo-Stack: clio (Event Store) + Postgres (Read Model) + Worker (Projektion).
+#
+# Turnkey-Ablauf über ./setup.sh (empfohlen) — siehe README.md. setup.sh startet
+# clio+postgres, leitet aus dem clio-Log den Admin-Key ab, legt einen read-Key an,
+# schreibt CLIO_TOKEN nach .env, seedet Demo-Orders und startet den Worker.
+
+services:
+  clio:
+    image: ghcr.io/pblumer/clio:latest
+    environment:
+      # Bekanntes Bootstrap-Secret, damit setup.sh den Admin-Wert bilden kann.
+      # Der kid wird von clio erzeugt und ins Log geschrieben (setup.sh liest ihn).
+      CLIO_BOOTSTRAP_ADMIN_KEY: demo-bootstrap-secret-change-me
+      CLIO_DB_PATH: /data/clio.db
+    volumes:
+      - clio-data:/data
+    ports:
+      - "3000:3000"
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: clio
+      POSTGRES_PASSWORD: clio
+      POSTGRES_DB: clio_readmodel
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U clio -d clio_readmodel"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  worker:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      CLIO_BASE: http://clio:3000
+      CLIO_TOKEN: ${CLIO_TOKEN:?setup.sh ausführen oder CLIO_TOKEN in .env setzen}
+      DATABASE_URL: postgres://clio:clio@postgres:5432/clio_readmodel?sslmode=disable
+      PROJECTION_SUBJECT: /orders
+    # Nur starten, wenn explizit angefordert (nachdem CLIO_TOKEN in .env steht).
+    profiles: ["worker"]
+
+volumes:
+  clio-data:
+  pg-data:

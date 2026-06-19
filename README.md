@@ -29,6 +29,12 @@ Die vollständige Architektur, Roadmap und alle Entscheidungen stehen in
 
 ## Status
 
+> **Für den Betrieb:** ist clio das Richtige für meinen Einsatz, und wie betreibe
+> ich es sicher? → [`docs/production-readiness.md`](./docs/production-readiness.md)
+> (Einsatzprofile, Garantien/Nicht-Garantien, Betriebsprofile) und
+> [`docs/threat-model.md`](./docs/threat-model.md) (wogegen clio schützt — und
+> wogegen nicht).
+
 **🎉 v0.1.0 veröffentlicht** — das erste getaggte Release. Fertige
 Single-Binaries für alle Plattformen (Linux/macOS/Windows × amd64/arm64) als
 Archive **inkl. SHA-256-Checksums** sowie ein Multi-Arch-Docker-Image liegen
@@ -635,6 +641,13 @@ curl -X POST http://127.0.0.1:3000/api/v1/run-query \
 Top-Level-Pfade sind CloudEvents-Feldnamen (`id`, `subject`, `type`, `data` …);
 innerhalb von `data` ist beliebige Verschachtelung möglich. Array-Indizierung
 wird nicht unterstützt. Ohne `select` wird das volle Event zurückgegeben.
+
+> **Aggregation, Joins, Reporting?** Bewusst **nicht** im Kern. clio ist der
+> append-only Source of Truth; abgeleitete **Read Models** baut man außerhalb
+> (CQRS). Das Referenzbeispiel
+> [`examples/projection-worker-postgres`](./examples/projection-worker-postgres/)
+> zeigt einen Projection Worker mit `observe`, Checkpointing, Idempotenz, Replay
+> und Lag-Monitoring gegen ein PostgreSQL-Read-Model.
 
 ### Verfügbare Event-Typen
 
