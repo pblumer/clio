@@ -402,7 +402,7 @@ verschlüsseln (das Artefakt ist nicht verschlüsselt).
 
 > Vollständige Anleitung mit Garantien, Fehlerfällen und RPO/RTO:
 > [`docs/backup-restore.md`](./backup-restore.md). Architekturhintergrund:
-> [`docs/backup-restore-dr-concept.md`](./backup-restore-dr-concept.md).
+> [`docs/backup-restore-dr-concept.md`](./plans/backup-restore-dr-concept.md).
 
 ---
 
@@ -496,5 +496,5 @@ Get-Service Clio | Format-List *
 - [README → Konfiguration & API-Keys](../README.md#konfiguration)
 - [Learning Path → Track Betrieb/DevOps](./learning-path/rollen/betrieb.md)
 - [M08 — Betrieb & Durability](./learning-path/module/M08-betrieb-und-durability.md)
-- [Backup-/Restore-/DR-Konzept](./backup-restore-dr-concept.md)
+- [Backup-/Restore-/DR-Konzept](./plans/backup-restore-dr-concept.md)
 - [ARCHITECTURE.md](../ARCHITECTURE.md) — alle Architekturentscheidungen (ADRs)

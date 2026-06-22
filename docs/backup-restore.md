@@ -1,7 +1,7 @@
 # Backup & Restore — Betriebsanleitung
 
 > Praktische Anleitung für den Betrieb. Das **Warum** und die
-> Architekturentscheidung stehen in [`backup-restore-dr-concept.md`](backup-restore-dr-concept.md)
+> Architekturentscheidung stehen in [`backup-restore-dr-concept.md`](plans/backup-restore-dr-concept.md)
 > und **ADR-031** ([`ARCHITECTURE.md`](../ARCHITECTURE.md) §7). Diese Seite zeigt
 > die Kommandos, die Garantien und die Fehlerfälle.
 
@@ -161,7 +161,7 @@ ein Fehler nie ein halb geschriebenes Ziel.
 
 Fertige Units/Compose/Scripts liegen unter [`deploy/`](../deploy/) (sofern in
 deiner Version vorhanden); das Konzeptdokument
-[`backup-restore-dr-concept.md`](backup-restore-dr-concept.md) §4.4 zeigt
+[`backup-restore-dr-concept.md`](plans/backup-restore-dr-concept.md) §4.4 zeigt
 systemd-Timer-, Docker- und Kubernetes-CronJob-Beispiele im Detail.
 
 Minimalbeispiel (systemd-Timer, Cold-Backup nachts mit Stop/Start oder

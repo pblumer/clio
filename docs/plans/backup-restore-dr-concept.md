@@ -1,12 +1,12 @@
 # Backup, Restore & Disaster-Recovery — Konzept & Roadmap
 
-> Begleitdokument zu [`ARCHITECTURE.md`](../ARCHITECTURE.md). Spezifiziert die
+> Begleitdokument zu [`ARCHITECTURE.md`](../../ARCHITECTURE.md). Spezifiziert die
 > Backup-/Restore-/DR-Story von `cliostore`. **Stufe 1** (Snapshot/Restore) ist
 > das committete Zielbild und vollständig ausspezifiziert; **Stufe 2**
 > (Continuous Archiving / PITR) ist eine bewusst abgegrenzte, optionale
 > Ausbaustufe und nur skizziert. Die zugehörige Entscheidung ist **ADR-031**
 > (siehe §6) und in `ARCHITECTURE.md` §7 übernommen. *(Stufe 1 ist umgesetzt;
-> die Betriebsanleitung steht in [`backup-restore.md`](backup-restore.md).)*
+> die Betriebsanleitung steht in [`backup-restore.md`](../backup-restore.md).)*
 >
 > **Hinweis Nummerierung:** Dieses Dokument wurde verfasst, als die nächste freie
 > ADR-Nummer 026 war; bei der Umsetzung war 026 bereits durch die Event-Herkunft
