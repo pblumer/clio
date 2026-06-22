@@ -119,6 +119,13 @@ paths:
       responses:
         "200":
           description: Passende Events als NDJSON
+          headers:
+            X-Clio-Result-Limit:
+              description: |
+                Wirksame Obergrenze für diese Antwort. Ohne `limit` im Request
+                ist das die Default-Obergrenze (aktuell 10000); der Stream endet
+                still nach so vielen Events. Mehr lesen: höheres `limit` setzen.
+              schema: { type: integer }
           content:
             application/x-ndjson:
               schema: { $ref: "#/components/schemas/EventStream" }
@@ -587,7 +594,7 @@ paths:
                 where: { type: string, description: "CEL-Prädikat (bool); leer = alle" }
                 lowerBound: { type: string }
                 upperBound: { type: string }
-                limit: { type: integer, description: "max. Treffer; 0 = unbegrenzt" }
+                limit: { type: integer, description: "max. Treffer; 0/weggelassen = Default-Obergrenze (10000). Höher explizit setzen; kein hartes Maximum. Wirksamer Wert im Header X-Clio-Result-Limit." }
                 select:
                   type: array
                   items: { type: string }
@@ -713,6 +720,14 @@ paths:
         liefern dank `recursive` (Default `true`) automatisch alles darunter.
         Mit `watch=true` bleibt die Verbindung wie bei observe-events offen.
         `GET /api/v1/events` (ohne Subject) liefert die Wurzel (alle Events).
+
+        **Default-Obergrenze:** Ohne `limit` kappt der Server die Ausgabe bei
+        einer Default-Obergrenze (aktuell 10000) — der NDJSON-Stream endet dann
+        still, auch wenn der Scope mehr Events enthält. Der wirksame Wert steht
+        im Antwort-Header `X-Clio-Result-Limit`. Um mehr zu lesen, `?limit=N`
+        explizit setzen; es gibt kein hartes Maximum (z. B. `?limit=1000000`).
+        Alternativ über `lowerBound`/`upperBound` (inklusive Event-ID-Grenzen)
+        in ID-Bereichen seitenweise lesen.
       parameters:
         - name: subject
           in: path
@@ -739,9 +754,22 @@ paths:
           in: query
           description: Verbindung offen halten und live nachliefern
           schema: { type: boolean, default: false }
+        - name: limit
+          in: query
+          description: |
+            Obergrenze an zurückgegebenen Events. Weggelassen/`0` = Default-Obergrenze
+            (aktuell 10000). Höher explizit setzen; kein hartes Maximum. Wirksamer
+            Wert im Antwort-Header `X-Clio-Result-Limit`.
+          schema: { type: integer, minimum: 0 }
       responses:
         "200":
           description: Passende Events als NDJSON
+          headers:
+            X-Clio-Result-Limit:
+              description: |
+                Wirksame Obergrenze für diese Antwort (Default 10000 ohne `limit`).
+                Der Stream endet still nach so vielen Events.
+              schema: { type: integer }
           content:
             application/x-ndjson:
               schema: { $ref: "#/components/schemas/EventStream" }
@@ -1140,6 +1168,15 @@ components:
           type: array
           items: { type: string }
           description: Filter nach Event-Typ
+        limit:
+          type: integer
+          description: |
+            Obergrenze an zurückgegebenen Events. `0`/weggelassen = serverseitige
+            Default-Obergrenze (aktuell 10000; Schutz vor versehentlich breiten
+            Reads). Ein höheres Limit explizit setzen (z. B. `1000000`) — es gibt
+            kein hartes Maximum, und da gestreamt wird, bleibt auch ein großes
+            Limit speicherschonend. Der wirksame Wert steht im Antwort-Header
+            `X-Clio-Result-Limit`.
     ObserveEventsRequest:
       type: object
       required: [subject]
