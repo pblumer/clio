@@ -3,7 +3,7 @@
 **Projekt:** `github.com/pblumer/clio`
 **Status:** PLANUNG — bereit zur Umsetzung durch einen AI-Coding-Agenten
 **Bezug:** ADR-030 (in `ARCHITECTURE.md`); baut auf dem Schlüsselbund ADR-025 (`kid`-Identität, Audit) und der opt-in Event-Urheberschaft (`CLIO_EVENT_AUTHORSHIP`) auf.
-**Vorbild-Doku:** `docs/security-api-keys-plan.md` (in sich geschlossene Work-Packages mit Akzeptanzkriterien).
+**Vorbild-Doku:** `docs/plans/security-api-keys-plan.md` (in sich geschlossene Work-Packages mit Akzeptanzkriterien).
 
 ---
 

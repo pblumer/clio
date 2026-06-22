@@ -130,7 +130,7 @@ exklusiven Lock — bei großen Datenbanken unter Leselast erzeugt das spürbare
 Headroom-Monitor warnt rechtzeitig, falls der genutzte Umfang die vorbelegte
 Grenze erreicht. Der **genutzte** Umfang (getrennt von der ggf. vorbelegten
 Dateigröße) ist als `clio_db_data_bytes` beobachtbar, die Grenze als
-`clio_db_initial_bytes`. Details: [ADR / Storage-Scaling-Plan](../../adr/storage-scaling-plan.md).
+`clio_db_initial_bytes`. Details: [Storage-Scaling-Plan](../../plans/storage-scaling-plan.md).
 
 ## Hands-on
 
