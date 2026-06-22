@@ -15,6 +15,11 @@ Die vollständige Architektur, Roadmap und alle Entscheidungen stehen in
 > Contributor, Architekt:in) — mit Modulen und lauffähigen Beispielen unter
 > [`examples/`](./examples/).
 
+> **Mit einem KI-Agenten unterwegs?** [`SESSION_PROMPT.md`](./SESSION_PROMPT.md)
+> enthält einen wiederverwendbaren Prompt, der einen Agenten (Claude Code o. ä.)
+> zu Beginn jeder Session auf die Prinzipien und Konventionen von Clio
+> einnordet.
+
 ## 👁 Ein Blick ins Betriebs-Dashboard
 
 ![clio Betriebs-Dashboard — Eventstrom über die Zeit, Live-Events und Telemetrie unter /ui](docs/screenshots/dashboard.png)
