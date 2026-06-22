@@ -62,7 +62,7 @@ Datums-Spalte: Die Bestands-ADRs in §7 tragen **kein** Einzeldatum; dort steht 
 | ADR-023 | Kostenbasierte Index-Wahl für `run-query` (Subject vs. Typ) | Akzeptiert | — | `ARCHITECTURE.md` §7 |
 | ADR-024 | Transparente Wert-Kompression der Event-Ablage (DEFLATE + Preset-Dictionary) | Akzeptiert | — | `ARCHITECTURE.md` §7 |
 | ADR-025 | Mehrere benannte API-Keys mit Scopes, Widerruf und Audit | Akzeptiert | — | `ARCHITECTURE.md` §7 |
-| ADR-026 | Authentifizierte Event-Herkunft über Tokens | Vorgeschlagen | — | `ARCHITECTURE.md` §7 |
+| ADR-026 | Authentifizierte Event-Herkunft über Tokens | Vorgeschlagen | — | [`0026-authentifizierte-event-herkunft-ueber-tokens.md`](./0026-authentifizierte-event-herkunft-ueber-tokens.md) (Body auch in `ARCHITECTURE.md` §7) |
 | ADR-027 | *(reserviert)* Token-Lifecycle: Tabelle vs. interner Event-Stream | Offen — noch nicht entschieden (Folge-ADR aus ADR-026) | — | — |
 | ADR-028 | `run-query`-Resilienz unter Last — Heartbeat, Query-Deadline & Index-Warnung | Akzeptiert | — | `ARCHITECTURE.md` §7 |
 | ADR-029 | Sekundär-Query auf `event.data` — interner Feld-Index zuerst, externes Read-Model zurückgestellt | Akzeptiert (interner Index v1 umgesetzt) | — | `ARCHITECTURE.md` §7 |
