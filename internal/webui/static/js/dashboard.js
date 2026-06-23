@@ -1333,7 +1333,13 @@ function renderTreeNode(node, container, depth, isRoot, preloaded) {
   label.title = node.subject;
   const cnt = document.createElement("span");
   cnt.className = "tcount";
-  cnt.textContent = node.count === node.total ? String(node.total) : node.count + "·Σ" + node.total;
+  if (node.count === node.total) {
+    cnt.textContent = fmtInt(node.total);
+    cnt.title = fmtInt(node.total) + " Events";
+  } else {
+    cnt.textContent = fmtInt(node.count) + " / Σ" + fmtInt(node.total);
+    cnt.title = fmtInt(node.count) + " Events direkt auf diesem Subject, Σ " + fmtInt(node.total) + " inkl. Unterpfade";
+  }
   row.append(tog, label, cnt);
   container.appendChild(row);
 
