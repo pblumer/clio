@@ -113,7 +113,9 @@ vorbehalten:
   [ADR-035](./0035-tamper-evidence-unter-partitionierung.md) (n Ketten + globaler
   Merkle-Anker, baut auf ADR-012 auf).
 - **Storage-Engine** jenseits der heutigen bbolt-Single-File-Ablage (ADR-006)
-  → Folge-ADR „Storage-Engine".
+  → entschieden in [ADR-037](./0037-storage-engine-unter-partitionierung.md)
+  (bbolt bleibt, aber eine Datei pro Partition; Engine hinter der Abstraktion lokal
+  austauschbar).
 - **Cross-Partition-Read-Modell** (globale Order-Projektion, Cross-Partition-Queries)
   → entschieden in [ADR-036](./0036-read-path-cqrs-unter-partitionierung.md)
   (Scatter-Gather + per-Partition-Cursor-Vektor, globale Ordnung als nachgelagertes

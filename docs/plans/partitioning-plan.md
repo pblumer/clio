@@ -120,18 +120,24 @@ Konsistentes Hashing + Key-Ableitung als reines Paket.
   erwarteter Bruchteil der Keys wandert). Keine Storage-/HTTP-Importe (Architektur-
   Test wie `internal/auth`).
 
-### WP-2 — Per-Partition-Writer & -Kette
+### WP-2 — Per-Partition-Writer & -Kette (Storage: ADR-037)
 
-Store-Kern auf n Ketten/Sequenzen umstellen; Default `CLIO_PARTITIONS=1` =
-heutiges Verhalten.
+Store-Kern auf n Ketten/Sequenzen umstellen; Storage-Substrat = **eine bbolt-Datei
+pro Partition** (ADR-037). Default `CLIO_PARTITIONS=1` = heutiges Verhalten.
 
 - **Akzeptanz:** (a) Mit `CLIO_PARTITIONS=1` sind Hashes/Sequenzen **bit-identisch**
-  zum Verhalten vor der Umstellung (Regressions-Golden-Test). (b) Mit
-  `CLIO_PARTITIONS=8` landen Events nach `source` deterministisch in der richtigen
-  Partition; jede Partition hat eine lückenlose Kette (`Verify` grün je Partition).
-  (c) Paralleles Schreiben in **verschiedene** Partitionen skaliert (Benchmark: n
-  Writer > 1 Writer Durchsatz; Zahlen dokumentiert). (d) `make race` grün unter
-  paralleler Schreiblast über mehrere Partitionen.
+  zum Verhalten vor der Umstellung (Regressions-Golden-Test) — eine Datei, ein
+  Writer wie heute. (b) Mit `CLIO_PARTITIONS=8` landen Events nach `source`
+  deterministisch in der richtigen Partition/Datei; jede Partition hat eine
+  lückenlose Kette (`Verify` grün je Partition). (c) Paralleles Schreiben in
+  **verschiedene** Partitionen skaliert (Benchmark: n Writer > 1 Writer Durchsatz,
+  **kein** gemeinsamer Datei-Schreib-Lock; Zahlen dokumentiert). (d) `make race` grün
+  unter paralleler Schreiblast über mehrere Partitionen. (e) **Handle-Pool** (lazy
+  open/close, LRU, konfigurierbar) hält nur aktive Partitionsdateien gemappt;
+  Reopen einer „kalten" Partition funktioniert korrekt; Adressraum-/FD-Verbrauch
+  bleibt mit der Partitionszahl beschränkt. (f) Die `storage-scaling-plan`-Hebel
+  (`InitialMmapSize`-Vorab-Mmap, Headroom-Monitor, Online-Compaction) wirken pro
+  Partitionsdatei.
 
 ### WP-3 — Read-Path, Scatter-Gather & Cursor (ADR-036, braucht WP-0)
 
