@@ -92,6 +92,12 @@ Key-Migration zu erlauben (Details in der Folge-ADR zu Distribution/Consensus).
 > globale Total-Order — nur partielle Ordnung. Jeder Konsument, der globale Ordnung
 > benötigt, muss diese explizit über ein nachgelagertes Read-Modell rekonstruieren.
 
+**Umsetzung**
+
+Der „Wie"-Teil (Work-Packages, Akzeptanzkriterien, Etappen, Migration) steht im
+Umsetzungsplan [`docs/plans/partitioning-plan.md`](../plans/partitioning-plan.md)
+und wird hier nur verlinkt, nicht ausgebreitet.
+
 **Offene Punkte / Folge-ADRs**
 
 Diese ADR legt nur das Fundament. Bewusst offen und je einer eigenen Folge-ADR
