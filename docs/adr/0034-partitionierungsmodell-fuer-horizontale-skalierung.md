@@ -5,7 +5,7 @@
 > Tamper-Evidence-Mechanik, Read-Path und Consensus werden in den unten genannten
 > Folge-ADRs entschieden und hier nur verlinkt, nicht ausgebreitet.
 
-**Status:** Vorgeschlagen
+**Status:** Akzeptiert (2026-06-24)
 
 **Datum:** 2026-06-24
 

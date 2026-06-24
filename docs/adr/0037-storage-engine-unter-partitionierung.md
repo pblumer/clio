@@ -7,7 +7,7 @@
 > unter Partitionierung; Tamper-Evidence (ADR-035) und Read-Path (ADR-036) sind
 > separat entschieden.
 
-**Status:** Vorgeschlagen
+**Status:** Akzeptiert (2026-06-24)
 
 **Datum:** 2026-06-24
 

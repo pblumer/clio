@@ -6,7 +6,7 @@
 > Entscheidet **ausschließlich** die Tamper-Evidence-Mechanik unter Partitionierung;
 > Storage-Engine, Read-Path/CQRS und Distribution/Consensus bleiben eigenen ADRs.
 
-**Status:** Vorgeschlagen
+**Status:** Akzeptiert (2026-06-24)
 
 **Datum:** 2026-06-24
 
