@@ -245,6 +245,7 @@
   .ac-item.sel, .ac-item:hover { background: var(--panel-2); }
   .ac-kind { font-size: 10px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); min-width: 34px; }
   .ac-kind.fld { color: #7dcfff; } .ac-kind.fn { color: var(--accent); } .ac-kind.kw { color: #bb9af7; }
+  .ac-kind.subj { color: #9ece6a; }
   .ac-text { color: var(--fg); flex: 1; }
   .ac-hint { color: var(--muted); font-size: 11px; }
   .editor-actions { display: flex; gap: 10px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
