@@ -97,15 +97,18 @@ Partition** geführt werden statt global:
 > Akzeptanzkriterien sind je WP **prüfbar** formuliert. Qualitätstor je WP:
 > `make lint` · `make test` · `make race` grün (SESSION_PROMPT.md §5).
 
-### WP-0 — Konsumenten-Audit (Voraussetzung, blockiert WP-3)
+### WP-0 — Konsumenten-Audit (Voraussetzung, blockiert WP-3) — ✅ ABGESCHLOSSEN
 
 Bestandsaufnahme aller Stellen, die **globale Total-Order / eine globale Sequenz**
 annehmen (Code, `/ui`, Beispiele, Postman, Doku).
 
-- **Ergebnis:** Liste in `docs/plans/partitioning-consumer-audit.md` mit je Fundstelle
-  + Einordnung (bricht / unkritisch / braucht per-Partition-Cursor).
-- **Akzeptanz:** Jeder Treffer von `seq`/`sequence`/„global order"/`lastEventNumber`
-  o. Ä. ist klassifiziert; keine offene „unklar"-Zeile.
+- **Ergebnis:** [`partitioning-consumer-audit.md`](./partitioning-consumer-audit.md)
+  — 7× BRICHT (konzentriert im Store-Kern), ~16× BRAUCHT-CURSOR (skalare globale ID
+  als Cursor über API/UI/Worker/Postman/Lehrtexte), ~6× nur Doku-Nachzug.
+- **Akzeptanz:** ✅ Jeder Treffer ist klassifiziert; keine offene „unklar"-Zeile.
+- **Kernerkenntnis:** Der Bruch sitzt konzentriert (ID-Vergabe + Hash-Kette +
+  Read-Ordnung an **derselben** globalen Sequenz), aber der externe **Cursor-Vertrag**
+  (`lowerBound`, `eventsTotal+1`, Singleton-Checkpoint) ist eine Breaking Change.
 
 ### WP-1 — `internal/partition` (Routing, rein)
 
@@ -140,6 +143,20 @@ Per-Partition-Cursor, dokumentierte Approx-Order, INV-P1 sichtbar gemacht.
   explizites Feld/Flag „order: per-partition" bzw. „approximated". `/ui`-Explorer
   zeigt Partition je Event. Audit-Treffer aus WP-0, die „bricht" waren, sind
   adressiert.
+
+### WP-5 — Globaler Anker / Tamper-Evidence (ADR-035, braucht WP-2)
+
+Pro-Partition-Genesis + append-only Anker-Kette mit Merkle-Commitment über alle
+`(partitionID, head, seq)`; Verify-Erweiterung; Epoche-0-Versiegelung des Bestands.
+
+- **Akzeptanz:** (a) Jede Partition verifiziert von ihrem partitionseigenen Genesis.
+  (b) Ein Anker reproduziert die Merkle-Wurzel der aktuellen Heads; manipuliert man
+  eine Partition (Drop/Rollback) und prüft gegen den letzten Anker → **erkannt**.
+  (c) `verify` = Konjunktion der Partitions-Verifies **und** Anker-Reproduktion
+  **und** lückenlose Anker-Kette. (d) Migration: bestehende eine Kette bleibt
+  unverändert als Epoche-0 prüfbar; ihr Head ist Genesis-Anker (`anchorSeq=0`); kein
+  Event wird neu gehasht (ADR-012/015 gewahrt). (e) Anker-Koordinator hält **keinen**
+  partitionsübergreifenden Schreib-Lock (read-only Snapshot, vgl. ADR-031).
 
 ### WP-4 — Observability & Betrieb
 
@@ -176,8 +193,11 @@ Dieser Plan liefert das **Single-Node-Fundament** der Partitionierung. Ausdrück
 - **Physische Verteilung über Knoten, Rebalancing-Live-Move, Consensus** →
   Folge-ADR „Distribution / Consensus". (WP-1 liefert nur die *reine* Mapping-/
   Rebalance-Funktion, keinen Live-Datentransport.)
-- **Übergeordnetes Anchoring der n Ketten / Bestands-Re-Chaining** → Folge-ADR
-  „Tamper-Evidence unter Partitionierung".
+- **Übergeordnetes Anchoring der n Ketten / Bestands-Migration** → **entschieden in
+  [ADR-035](../adr/0035-tamper-evidence-unter-partitionierung.md)** (n Ketten +
+  globaler Merkle-Anker, Epoche-0-Versiegelung statt Re-Chaining); umgesetzt in
+  **WP-5**, gegen WP-2 gated. Damit **nicht mehr** Nicht-Ziel, sondern Teil dieses
+  Plans.
 - **Neue Storage-Engine** jenseits bbolt (B+Tree-Grenzen aus ADR-006/dem
   Storage-Scaling-Plan) → Folge-ADR „Storage-Engine".
 - **Cross-Partition-Read-Modell / globale Order-Projektion (CQRS)** → Folge-ADR
@@ -193,12 +213,14 @@ Dieser Plan liefert das **Single-Node-Fundament** der Partitionierung. Ausdrück
 
 ```
 WP-1 (Routing) ─┐
-                ├─► WP-2 (Writer/Kette) ─► WP-3 (Read-Path) ─► WP-4 (Observability)
-WP-0 (Audit) ───┘                    ▲
-                                     └─ WP-0 blockiert WP-3 (Cursor-Umstellung)
+                ├─► WP-2 (Writer/Kette) ─┬─► WP-3 (Read-Path) ─► WP-4 (Observability)
+WP-0 (Audit) ✅ ─┘   (ADR-034)           └─► WP-5 (Anker/Tamper-Evidence, ADR-035)
+                                     ▲
+                                     └─ WP-0 ✅ blockiert WP-3 (Cursor-Umstellung)
 
-Etappe 4 (Verteilung) ── GATED auf Folge-ADRs (Distribution/Consensus,
-                          Tamper-Evidence-unter-Partitionierung, Storage-Engine)
+Etappe 4 (physische Verteilung) ── GATED auf Folge-ADRs (Distribution/Consensus,
+                                    Storage-Engine). Tamper-Evidence-Anchoring ist
+                                    mit ADR-035/WP-5 entschieden.
 ```
 
 Empfehlung: WP-0 und WP-1 parallel starten (unabhängig), dann WP-2, dann WP-3/WP-4.

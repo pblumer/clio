@@ -71,6 +71,7 @@ Datums-Spalte: Die Bestands-ADRs in §7 tragen **kein** Einzeldatum; dort steht 
 | ADR-032 | Persistentes Audit-Log administrativer Aktionen (separater bbolt-Bucket) | Akzeptiert (umgesetzt) | — | `ARCHITECTURE.md` §7 |
 | ADR-033 | Subject-/Prefix-basierte Scopes (`read:/orders/*`) | Akzeptiert (umgesetzt) | — | `ARCHITECTURE.md` §7 |
 | ADR-034 | Partitionierungsmodell für horizontale Skalierung | Vorgeschlagen | 2026-06-24 | [`0034-partitionierungsmodell-fuer-horizontale-skalierung.md`](./0034-partitionierungsmodell-fuer-horizontale-skalierung.md) |
+| ADR-035 | Tamper-Evidence unter Partitionierung (n Ketten + globaler Anker) | Vorgeschlagen | 2026-06-24 | [`0035-tamper-evidence-unter-partitionierung.md`](./0035-tamper-evidence-unter-partitionierung.md) |
 
-**Nächste freie Nummer: ADR-035.** (ADR-027 ist als Folge-ADR aus ADR-026
+**Nächste freie Nummer: ADR-036.** (ADR-027 ist als Folge-ADR aus ADR-026
 reserviert, aber noch unentschieden — nicht neu vergeben.)

@@ -109,8 +109,9 @@ vorbehalten:
   → Folge-ADR „Distribution / Consensus".
 - **Verhalten bei Events ohne eindeutigen `source`** (vgl. tokenlose Writes /
   Inbox-Stream, ADR-026).
-- **Übergeordnetes Anchoring der n Hash-Chains** → Folge-ADR „Tamper-Evidence unter
-  Partitionierung" (baut auf ADR-012 auf).
+- **Übergeordnetes Anchoring der n Hash-Chains** → entschieden in
+  [ADR-035](./0035-tamper-evidence-unter-partitionierung.md) (n Ketten + globaler
+  Merkle-Anker, baut auf ADR-012 auf).
 - **Storage-Engine** jenseits der heutigen bbolt-Single-File-Ablage (ADR-006)
   → Folge-ADR „Storage-Engine".
 - **Cross-Partition-Read-Modell** (globale Order-Projektion, Cross-Partition-Queries)
