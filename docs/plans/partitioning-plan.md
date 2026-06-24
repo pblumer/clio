@@ -133,16 +133,24 @@ heutiges Verhalten.
   Writer > 1 Writer Durchsatz; Zahlen dokumentiert). (d) `make race` grün unter
   paralleler Schreiblast über mehrere Partitionen.
 
-### WP-3 — Read-Path & Cursor (braucht WP-0)
+### WP-3 — Read-Path, Scatter-Gather & Cursor (ADR-036, braucht WP-0)
 
-Per-Partition-Cursor, dokumentierte Approx-Order, INV-P1 sichtbar gemacht.
+Realisiert [ADR-036](../adr/0036-read-path-cqrs-unter-partitionierung.md):
+Scatter-Gather mit streaming k-Wege-Merge, opaker per-Partition-Cursor-Vektor,
+explizite `order`-Klassifikation (INV-P3).
 
-- **Akzeptanz:** `read-events`/`run-query` liefern je Partition strikt geordnet;
-  Cursor-Vektor round-trippt korrekt (kein Event doppelt/verloren über
-  Partitionsgrenzen). Antworten, die früher globale Order implizierten, tragen ein
-  explizites Feld/Flag „order: per-partition" bzw. „approximated". `/ui`-Explorer
-  zeigt Partition je Event. Audit-Treffer aus WP-0, die „bricht" waren, sind
-  adressiert.
+- **Akzeptanz:** (a) Read/Query mit `source`/Key-Filter bleibt **single-partition**
+  (kein Fan-out); ohne solchen Filter fächert er korrekt über die betroffenen
+  Partitionen und merged streaming (keine Voll-Materialisierung; ADR-028
+  Heartbeat/Deadline gelten pro Partition **und** für den Merge). (b) `read-events`/
+  `run-query` liefern je Partition strikt geordnet; jede Mehr-Partition-Antwort trägt
+  `order: per-partition|approximated` (nie „global garantiert"). (c) Der **opake
+  Cursor-Vektor** round-trippt korrekt (kein Event doppelt/verloren über
+  Partitionsgrenzen); bei `CLIO_PARTITIONS=1` ist er bit-kompatibel zum alten
+  skalaren `lowerBound`. (d) `/ui`-Explorer zeigt Partition je Event. (e) Alle
+  Audit-Treffer aus WP-0 mit Klasse „BRAUCHT-CURSOR"/„BRICHT" im Lesepfad sind
+  adressiert — inkl. Umstellung des `projection-worker-postgres`-Beispiels auf
+  per-Partition-Checkpoint.
 
 ### WP-5 — Globaler Anker / Tamper-Evidence (ADR-035, braucht WP-2)
 

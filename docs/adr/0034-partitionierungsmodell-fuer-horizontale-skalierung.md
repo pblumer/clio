@@ -115,7 +115,9 @@ vorbehalten:
 - **Storage-Engine** jenseits der heutigen bbolt-Single-File-Ablage (ADR-006)
   → Folge-ADR „Storage-Engine".
 - **Cross-Partition-Read-Modell** (globale Order-Projektion, Cross-Partition-Queries)
-  → Folge-ADR „Read-Path / CQRS" (baut auf ADR-017/ADR-029 auf).
+  → entschieden in [ADR-036](./0036-read-path-cqrs-unter-partitionierung.md)
+  (Scatter-Gather + per-Partition-Cursor-Vektor, globale Ordnung als nachgelagertes
+  CQRS-Read-Modell; baut auf ADR-017/ADR-029 auf).
 
 **Referenzen**
 
