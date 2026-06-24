@@ -18,3 +18,4 @@ bleibt in der ADR.
 | [`activity-presence-plan.md`](./activity-presence-plan.md) | ADR-030 | Planung (umgesetzt) |
 | [`backup-restore-dr-concept.md`](./backup-restore-dr-concept.md) | ADR-031 | Stufe 1 umgesetzt, Stufe 2 offen |
 | [`web-ui-modularization-plan.md`](./web-ui-modularization-plan.md) | ADR-020 | Vorschlag, nicht umgesetzt |
+| [`partitioning-plan.md`](./partitioning-plan.md) | ADR-034 | Planung (Etappen 1–3 umsetzbar, Etappe 4 auf Folge-ADRs gated) |

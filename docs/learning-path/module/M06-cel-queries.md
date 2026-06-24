@@ -60,6 +60,21 @@ Alle Lese-Optionen gelten weiter: `subject`, `recursive`, `lowerBound`/
 `upperBound`, plus optionales `limit`. Das Prädikat filtert *innerhalb* des
 Scopes — wähle den Scope eng, dann muss CEL weniger Events prüfen.
 
+### Reihenfolge
+
+`order` steuert die Lesereihenfolge: `asc` (Default, älteste zuerst) oder
+`desc` (neueste zuerst, sortiert nach Event-ID). Mit `limit` kombiniert liefert
+`desc` die **jüngsten** n Treffer statt der ältesten n — praktisch, um aus einem
+breiten Stream die letzten Ereignisse zu ziehen.
+
+```bash
+# Die 20 zuletzt geschriebenen Ausleihen
+curl -X POST http://127.0.0.1:3000/api/v1/run-query \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"subject":"/books","recursive":true,
+       "where":"event.type == '\''borrowed'\''","order":"desc","limit":20}'
+```
+
 ### Verwandt: Query-Preconditions
 
 Dasselbe CEL-Prädikat steckt in `isQueryResultEmpty`/`isQueryResultNonEmpty`

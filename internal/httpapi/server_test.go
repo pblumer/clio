@@ -433,6 +433,47 @@ func TestRunQuery(t *testing.T) {
 	}
 }
 
+func TestRunQueryOrder(t *testing.T) {
+	srv := newTestServer(t)
+	do(t, srv, http.MethodPost, "/api/v1/write-events", adminToken,
+		`{"events":[
+			{"source":"s","subject":"/orders/1","type":"placed"},
+			{"source":"s","subject":"/orders/2","type":"placed"},
+			{"source":"s","subject":"/orders/3","type":"placed"}
+		]}`)
+
+	// order=desc: neueste zuerst.
+	rec := do(t, srv, http.MethodPost, "/api/v1/run-query", adminToken,
+		`{"subject":"/orders","recursive":true,"order":"desc"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; %s", rec.Code, rec.Body.String())
+	}
+	if got := strings.Join(idsOfEvents(decodeNDJSON(t, rec.Body.String())), ","); got != "3,2,1" {
+		t.Fatalf("order=desc = %v, want [3 2 1]", got)
+	}
+
+	// order=asc (explizit) entspricht dem Default: älteste zuerst.
+	rec = do(t, srv, http.MethodPost, "/api/v1/run-query", adminToken,
+		`{"subject":"/orders","recursive":true,"order":"asc"}`)
+	if got := strings.Join(idsOfEvents(decodeNDJSON(t, rec.Body.String())), ","); got != "1,2,3" {
+		t.Fatalf("order=asc = %v, want [1 2 3]", got)
+	}
+
+	// desc + limit liefert die jüngsten n Treffer (nicht die ältesten n).
+	rec = do(t, srv, http.MethodPost, "/api/v1/run-query", adminToken,
+		`{"subject":"/orders","recursive":true,"order":"desc","limit":2}`)
+	if got := strings.Join(idsOfEvents(decodeNDJSON(t, rec.Body.String())), ","); got != "3,2" {
+		t.Fatalf("order=desc limit=2 = %v, want [3 2]", got)
+	}
+
+	// Ohne order bleibt der aufsteigende Default.
+	rec = do(t, srv, http.MethodPost, "/api/v1/run-query", adminToken,
+		`{"subject":"/orders","recursive":true,"limit":2}`)
+	if got := strings.Join(idsOfEvents(decodeNDJSON(t, rec.Body.String())), ","); got != "1,2" {
+		t.Fatalf("default limit=2 = %v, want [1 2]", got)
+	}
+}
+
 func TestRunQueryProjection(t *testing.T) {
 	srv := newTestServer(t)
 	do(t, srv, http.MethodPost, "/api/v1/write-events", adminToken,
@@ -498,6 +539,7 @@ func TestRunQueryBadRequest(t *testing.T) {
 		`{"subject":"/o","lowerBound":"5","upperBound":"2"}`, // lower > upper
 		`{"subject":"/o","select":[""]}`,                     // leerer select-eintrag
 		`{"subject":"/o","select":["data."]}`,                // select-pfad mit leerem segment
+		`{"subject":"/o","order":"down"}`,                    // ungültige sortierrichtung
 	}
 	for _, body := range tests {
 		rec := do(t, srv, http.MethodPost, "/api/v1/run-query", adminToken, body)

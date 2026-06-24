@@ -101,6 +101,11 @@ type ReadOptions struct {
 	LowerBound uint64
 	UpperBound uint64
 	Types      []string
+	// Descending kehrt die Lesereihenfolge um: neueste Events (höchste Sequenz)
+	// zuerst statt älteste. Der Nullwert (false) bleibt die bisherige aufsteigende
+	// Reihenfolge — abwärtskompatibel für alle Aufrufer. Das gemeinsam mit einem
+	// Limit zu nutzen liefert die jüngsten n Treffer (statt der ältesten n).
+	Descending bool
 }
 
 // typeSet baut aus Types ein Lookup-Set. nil bedeutet „kein Typ-Filter".
@@ -862,19 +867,22 @@ func (s *Store) ReadByTypesFunc(types []string, opts ReadOptions, fn func(event.
 		if len(types) == 1 {
 			prefix := typePrefix(types[0])
 			cur := tidx.Cursor()
-			for k, v := cur.Seek(prefix); k != nil && hasPrefix(k, prefix); k, v = cur.Next() {
+			var ferr error
+			scanPrefix(cur, prefix, opts.Descending, func(k, v []byte) bool {
 				if len(k) != len(prefix)+8 {
-					continue // exakter Typ (keine Separator-Kollision)
+					return true // exakter Typ (keine Separator-Kollision)
 				}
 				ev, ok, err := load(binary.BigEndian.Uint64(v))
 				if err != nil {
-					return err
+					ferr = err
+					return false
 				}
 				if ok && !fn(ev) {
-					return nil
+					return false
 				}
-			}
-			return nil
+				return true
+			})
+			return ferr
 		}
 
 		var seqs []uint64
@@ -888,7 +896,7 @@ func (s *Store) ReadByTypesFunc(types []string, opts ReadOptions, fn func(event.
 				seqs = append(seqs, binary.BigEndian.Uint64(v))
 			}
 		}
-		sort.Slice(seqs, func(i, j int) bool { return seqs[i] < seqs[j] })
+		sortSeqs(seqs, opts.Descending)
 		for _, seq := range seqs {
 			ev, ok, err := load(seq)
 			if err != nil {
@@ -1022,27 +1030,28 @@ func (s *Store) ReadByDataFieldFunc(typ, field, value string, opts ReadOptions, 
 		}
 		prefix := dataIdxPrefix(typ, field, []byte(value))
 		cur := didx.Cursor()
-		for k, v := cur.Seek(prefix); k != nil && hasPrefix(k, prefix); k, v = cur.Next() {
+		var ferr error
+		scanPrefix(cur, prefix, opts.Descending, func(k, v []byte) bool {
 			if len(k) != len(prefix)+8 {
-				continue // exakter Wert (keine Längen-/Separator-Kollision)
+				return true // exakter Wert (keine Längen-/Separator-Kollision)
 			}
 			seq := binary.BigEndian.Uint64(v)
 			if !inBounds(seq, opts) {
-				continue
+				return true
 			}
 			raw := evts.Get(seqKey(seq))
 			if raw == nil {
-				return fmt.Errorf("inkonsistenter data-index: event %d fehlt", seq)
+				ferr = fmt.Errorf("inkonsistenter data-index: event %d fehlt", seq)
+				return false
 			}
 			var ev event.Event
 			if err := unmarshalStored(raw, &ev); err != nil {
-				return fmt.Errorf("event dekodieren: %w", err)
+				ferr = fmt.Errorf("event dekodieren: %w", err)
+				return false
 			}
-			if !fn(ev) {
-				return nil
-			}
-		}
-		return nil
+			return fn(ev)
+		})
+		return ferr
 	})
 }
 
@@ -1617,27 +1626,31 @@ func readSubjectIndex(tx *bolt.Tx, subject string, opts ReadOptions, fn func(eve
 	prefix := append([]byte(subject), subjectSep)
 	types := opts.typeSet()
 
-	for k, evKey := cur.Seek(prefix); k != nil && hasPrefix(k, prefix); k, evKey = cur.Next() {
+	// Die Index-Schlüssel eines Subjects sind subject+sep+seq; innerhalb des
+	// Prefix sortieren sie nach Sequenz. Absteigend = höchste Sequenz (neuestes
+	// Event) zuerst.
+	var ferr error
+	scanPrefix(cur, prefix, opts.Descending, func(k, evKey []byte) bool {
 		seq := binary.BigEndian.Uint64(evKey)
 		if !inBounds(seq, opts) {
-			continue
+			return true
 		}
 		raw := evts.Get(evKey)
 		if raw == nil {
-			return fmt.Errorf("inkonsistenter index: event %x fehlt", evKey)
+			ferr = fmt.Errorf("inkonsistenter index: event %x fehlt", evKey)
+			return false
 		}
 		var ev event.Event
 		if err := unmarshalStored(raw, &ev); err != nil {
-			return fmt.Errorf("event dekodieren: %w", err)
+			ferr = fmt.Errorf("event dekodieren: %w", err)
+			return false
 		}
 		if !matchType(ev.Type, types) {
-			continue
+			return true
 		}
-		if !fn(ev) {
-			return nil
-		}
-	}
-	return nil
+		return fn(ev)
+	})
+	return ferr
 }
 
 // maxRecursiveSeqBuffer deckelt, wie viele Treffer-Sequenzen ein rekursiver
@@ -1688,7 +1701,7 @@ func readRecursive(tx *bolt.Tx, query string, opts ReadOptions, fn func(event.Ev
 		}
 		seqs = append(seqs, seq)
 	}
-	sort.Slice(seqs, func(i, j int) bool { return seqs[i] < seqs[j] })
+	sortSeqs(seqs, opts.Descending)
 
 	for _, seq := range seqs {
 		raw := evts.Get(seqKey(seq))
@@ -1709,21 +1722,31 @@ func readRecursive(tx *bolt.Tx, query string, opts ReadOptions, fn func(event.Ev
 }
 
 // scanEventsRecursive durchläuft den global nach Sequenz geordneten events-Bucket
-// und filtert per MatchSubject — verwendet für die Wurzel-Abfrage ("/").
+// und filtert per MatchSubject — verwendet für die Wurzel-Abfrage ("/"). Bei
+// opts.Descending läuft der Scan vom oberen Ende (höchste Sequenz / neuestes
+// Event) rückwärts; das jeweils gegenüberliegende Bound bildet die Abbruchgrenze.
 func scanEventsRecursive(tx *bolt.Tx, query string, opts ReadOptions, fn func(event.Event) bool) error {
 	cur := tx.Bucket(bucketEvents).Cursor()
 	types := opts.typeSet()
 
 	var k, v []byte
-	if opts.LowerBound != 0 {
+	step := cur.Next
+	if opts.Descending {
+		step = cur.Prev
+		k, v = seekDescStart(cur, opts.UpperBound)
+	} else if opts.LowerBound != 0 {
 		k, v = cur.Seek(seqKey(opts.LowerBound))
 	} else {
 		k, v = cur.First()
 	}
 
-	for ; k != nil; k, v = cur.Next() {
+	for ; k != nil; k, v = step() {
 		seq := binary.BigEndian.Uint64(k)
-		if opts.UpperBound != 0 && seq > opts.UpperBound {
+		if opts.Descending {
+			if opts.LowerBound != 0 && seq < opts.LowerBound {
+				break
+			}
+		} else if opts.UpperBound != 0 && seq > opts.UpperBound {
 			break
 		}
 		var ev event.Event
@@ -1739,6 +1762,32 @@ func scanEventsRecursive(tx *bolt.Tx, query string, opts ReadOptions, fn func(ev
 	return nil
 }
 
+// seekDescStart positioniert cur auf das Event mit der größten Sequenz <= upper
+// (upper==0 → letztes Event) als Startpunkt eines absteigenden Scans.
+func seekDescStart(cur *bolt.Cursor, upper uint64) ([]byte, []byte) {
+	if upper == 0 {
+		return cur.Last()
+	}
+	k, v := cur.Seek(seqKey(upper))
+	if k == nil {
+		return cur.Last() // upper jenseits des letzten Events
+	}
+	if binary.BigEndian.Uint64(k) > upper {
+		return cur.Prev() // Seek landete oberhalb → ein Schritt zurück
+	}
+	return k, v // exakter Treffer auf upper
+}
+
+// sortSeqs ordnet gesammelte Sequenznummern in die gewünschte Lese-Richtung:
+// aufsteigend (Default) oder absteigend (neueste zuerst).
+func sortSeqs(seqs []uint64, desc bool) {
+	if desc {
+		sort.Slice(seqs, func(i, j int) bool { return seqs[i] > seqs[j] })
+		return
+	}
+	sort.Slice(seqs, func(i, j int) bool { return seqs[i] < seqs[j] })
+}
+
 // inBounds prüft, ob eine Sequenz innerhalb der (inklusiven) ID-Grenzen liegt.
 func inBounds(seq uint64, opts ReadOptions) bool {
 	if opts.LowerBound != 0 && seq < opts.LowerBound {
@@ -1748,6 +1797,54 @@ func inBounds(seq uint64, opts ReadOptions) bool {
 		return false
 	}
 	return true
+}
+
+// prefixSuccessor liefert den kleinsten Schlüssel, der strikt größer ist als
+// jeder Schlüssel mit dem Prefix p: p mit dem letzten Byte < 0xFF inkrementiert
+// und nachfolgenden 0xFF-Bytes abgeschnitten. nil bedeutet, dass kein solcher
+// Schlüssel existiert (p leer oder nur 0xFF) — der Prefix-Bereich reicht bis ans
+// Ende des Buckets. Wird genutzt, um beim absteigenden Scan ans Prefix-Ende zu
+// springen.
+func prefixSuccessor(p []byte) []byte {
+	s := append([]byte(nil), p...)
+	for i := len(s) - 1; i >= 0; i-- {
+		if s[i] != 0xFF {
+			s[i]++
+			return s[:i+1]
+		}
+	}
+	return nil
+}
+
+// scanPrefix ruft yield für jeden Schlüssel des Cursors auf, dessen Bytes mit
+// prefix beginnen — aufsteigend (desc=false) oder absteigend (desc=true) in der
+// bbolt-Schlüsselordnung. Gibt yield false zurück, bricht der Scan vorzeitig ab.
+// Kapselt die Rückwärts-Iteration (hinter das Prefix-Ende springen, dann Prev),
+// damit alle index-basierten Lesepfade dieselbe richtungsabhängige Logik teilen.
+func scanPrefix(cur *bolt.Cursor, prefix []byte, desc bool, yield func(k, v []byte) bool) {
+	if !desc {
+		for k, v := cur.Seek(prefix); k != nil && hasPrefix(k, prefix); k, v = cur.Next() {
+			if !yield(k, v) {
+				return
+			}
+		}
+		return
+	}
+	// Absteigend: hinter das Prefix-Ende springen und einen Schritt zurück in den
+	// Bereich — das ist der letzte (höchste) Schlüssel mit dem Prefix.
+	var k, v []byte
+	if end := prefixSuccessor(prefix); end == nil {
+		k, v = cur.Last()
+	} else if k, v = cur.Seek(end); k == nil {
+		k, v = cur.Last() // Prefix-Bereich liegt am Bucket-Ende → letzter Schlüssel
+	} else {
+		k, v = cur.Prev() // Seek landete hinter dem Prefix → ein Schritt zurück
+	}
+	for ; k != nil && hasPrefix(k, prefix); k, v = cur.Prev() {
+		if !yield(k, v) {
+			return
+		}
+	}
 }
 
 // seqKey kodiert eine Sequenznummer als 8-Byte-Big-Endian, sodass die
