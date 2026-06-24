@@ -448,6 +448,12 @@
       <input id="q-subject" placeholder="Subject (z. B. /orders)" value="/" spellcheck="false" style="min-width:200px">
       <label class="inline"><input id="q-recursive" type="checkbox" checked> rekursiv</label>
       <label class="inline">Limit <input id="q-limit" class="short" type="number" min="0" value="100" title="0 = unbegrenzt"></label>
+      <label class="inline">Reihenfolge
+        <select id="q-order" title="Sortierung nach Event-ID (Schreibreihenfolge)">
+          <option value="asc">Älteste zuerst</option>
+          <option value="desc">Neueste zuerst</option>
+        </select>
+      </label>
       <input id="q-select" placeholder="select (Projektion, Komma) — z. B. id, data.amount" spellcheck="false" style="min-width:240px">
       <span class="spacer"></span>
       <span id="q-index-warn" class="q-error" style="display:none" title="Diese Abfrage kann keinen Index nutzen und scannt den gesamten Scope."></span>
@@ -566,6 +572,7 @@
           <code>timestamp(event.time)</code>-Prädikat und werden mit dem Editor-Prädikat <code>&amp;&amp;</code>-verknüpft.
           <em>Bis</em> ist exklusiv. Ohne <code>event.type ==</code> scannt ein reiner Zeitfilter den ganzen Scope (Index-Hinweis erscheint).</dd>
         <dt>Limit</dt><dd>max. Treffer (0 = unbegrenzt).</dd>
+        <dt>Reihenfolge</dt><dd><strong>Älteste zuerst</strong> (Default) oder <strong>Neueste zuerst</strong> — sortiert nach Event-ID (Schreibreihenfolge). Mit einem Limit kombiniert liefert <em>Neueste zuerst</em> die jüngsten n Treffer statt der ältesten n.</dd>
         <dt>select</dt><dd>punktseparierte Feldpfade (z. B. <code>id, data.amount</code>) → nur diese Felder pro Zeile, Verschachtelung bleibt erhalten.</dd>
       </dl>
     </section>

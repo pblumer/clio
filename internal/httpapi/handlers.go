@@ -1105,6 +1105,7 @@ type runQueryRequest struct {
 	UpperBound string   `json:"upperBound"`
 	Limit      int      `json:"limit"`  // 0 = Default-Obergrenze (defaultReadLimit)
 	Select     []string `json:"select"` // Feldpfade für Projektion; leer = volles Event
+	Order      string   `json:"order"`  // "" / "asc" = älteste zuerst (Default), "desc" = neueste zuerst
 }
 
 // handleRunQuery liest die Events eines Scopes und filtert sie mit einem
@@ -1150,6 +1151,20 @@ func (s *Server) handleRunQuery(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "lowerBound darf nicht größer als upperBound sein")
 		return
 	}
+	// Sortierrichtung: "desc" liefert die neuesten Treffer zuerst (höchste
+	// Event-ID). Mit einem Limit kombiniert ergibt das die jüngsten n Events statt
+	// der ältesten n — der Scan startet dafür am oberen Ende. "" / "asc" bleibt der
+	// abwärtskompatible Default (älteste zuerst).
+	var descending bool
+	switch req.Order {
+	case "", "asc":
+		descending = false
+	case "desc":
+		descending = true
+	default:
+		writeError(w, http.StatusBadRequest, `order muss "asc" oder "desc" sein`)
+		return
+	}
 
 	var pred *query.Predicate
 	if strings.TrimSpace(req.Where) != "" {
@@ -1161,7 +1176,7 @@ func (s *Server) handleRunQuery(w http.ResponseWriter, r *http.Request) {
 		pred = p
 	}
 
-	opts := store.ReadOptions{LowerBound: lower, UpperBound: upper}
+	opts := store.ReadOptions{LowerBound: lower, UpperBound: upper, Descending: descending}
 
 	// limit==0 → Default-Obergrenze (wie read-events). Schützt vor breiten Queries
 	// mit vielen Treffern. req.Limit<0 ist oben bereits als 400 abgefangen.
