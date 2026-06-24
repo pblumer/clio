@@ -30,6 +30,8 @@
 <!-- Vorschlagslisten (Autocomplete) für den Generator -->
 <datalist id="dl-gen-subjects"></datalist>
 <datalist id="dl-gen-types"></datalist>
+<!-- Vorhandene Subjects für das Scope-Feld der Query -->
+<datalist id="dl-q-subjects"></datalist>
 
 <main>
   <!-- ============ Dashboard ============ -->
@@ -445,7 +447,7 @@
   <!-- ============ Query ============ -->
   <div id="view-query" class="view">
     <div class="controls">
-      <input id="q-subject" placeholder="Subject (z. B. /orders)" value="/" spellcheck="false" style="min-width:200px">
+      <input id="q-subject" list="dl-q-subjects" placeholder="Subject (z. B. /orders)" value="/" spellcheck="false" style="min-width:200px">
       <label class="inline"><input id="q-recursive" type="checkbox" checked> rekursiv</label>
       <label class="inline">Limit <input id="q-limit" class="short" type="number" min="0" value="100" title="0 = unbegrenzt"></label>
       <label class="inline">Reihenfolge
