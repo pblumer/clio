@@ -6,7 +6,7 @@
 > sowie die in ADR-035/036 offen gelassene verteilte Koordination. Entscheidet
 > Platzierung, Eigentümerschaft und Umverteilung von Partitionen über Knoten.
 
-**Status:** Vorgeschlagen
+**Status:** Akzeptiert (2026-06-24)
 
 **Datum:** 2026-06-24
 

@@ -7,7 +7,7 @@
 > Partitionierung; Tamper-Evidence ist in ADR-035 entschieden, Storage-Engine und
 > Distribution/Consensus bleiben eigenen ADRs.
 
-**Status:** Vorgeschlagen
+**Status:** Akzeptiert (2026-06-24)
 
 **Datum:** 2026-06-24
 
