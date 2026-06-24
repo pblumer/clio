@@ -568,6 +568,10 @@ paths:
         Variable `event` (z. B. `event.type == 'placed' && event.data.amount > 100`).
         Leeres `where` = alle im Scope. Ergebnis als NDJSON.
 
+        Mit `order` lässt sich die Lesereihenfolge steuern: `asc` (Default,
+        älteste zuerst) oder `desc` (neueste zuerst). `desc` zusammen mit `limit`
+        liefert die jüngsten n Treffer statt der ältesten n.
+
         Optionale **Projektion** via `select`: eine Liste punktseparierter
         Feldpfade (z. B. `["id", "data.title"]`). Ist `select` gesetzt, enthält
         jede Zeile nur die gewählten Felder; die Verschachtelung bleibt erhalten
@@ -588,6 +592,11 @@ paths:
                 lowerBound: { type: string }
                 upperBound: { type: string }
                 limit: { type: integer, description: "max. Treffer; 0 = unbegrenzt" }
+                order:
+                  type: string
+                  enum: [asc, desc]
+                  default: asc
+                  description: "Lesereihenfolge: asc = älteste zuerst (Default), desc = neueste zuerst"
                 select:
                   type: array
                   items: { type: string }

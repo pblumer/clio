@@ -1703,6 +1703,7 @@ async function runQuery() {
   if (upper) req.upperBound = upper;
   const sel = $("q-select").value.split(",").map((s) => s.trim()).filter(Boolean);
   if (sel.length) req.select = sel;
+  if ($("q-order").value === "desc") req.order = "desc"; // neueste zuerst (Default: älteste)
 
   $("q-status").textContent = "läuft …";
   const t0 = performance.now();
@@ -1767,7 +1768,7 @@ function currentQueryState() {
     subject: $("q-subject").value.trim() || "/", recursive: $("q-recursive").checked,
     where: qEditor.value.trim(), select: $("q-select").value.trim(),
     limit: $("q-limit").value.trim(), lower: $("q-lower").value.trim(), upper: $("q-upper").value.trim(),
-    from: $("q-from").value, to: $("q-to").value,
+    order: $("q-order").value, from: $("q-from").value, to: $("q-to").value,
   };
 }
 function applyQueryState(s) {
@@ -1778,6 +1779,7 @@ function applyQueryState(s) {
   $("q-limit").value = (s.limit === undefined || s.limit === "") ? "100" : s.limit;
   $("q-lower").value = s.lower || "";
   $("q-upper").value = s.upper || "";
+  $("q-order").value = s.order === "desc" ? "desc" : "asc";
   $("q-from").value = s.from || "";
   $("q-to").value = s.to || "";
   updatePeriod(null);
@@ -1791,6 +1793,7 @@ function saveStore(key, v) { try { localStorage.setItem(key, JSON.stringify(v));
 function sameState(a, b) {
   return a.subject === b.subject && a.recursive === b.recursive && a.where === b.where &&
     a.select === b.select && a.limit === b.limit && a.lower === b.lower && a.upper === b.upper &&
+    (a.order || "asc") === (b.order || "asc") &&
     (a.from || "") === (b.from || "") && (a.to || "") === (b.to || "");
 }
 function scopeLabel(s) {
