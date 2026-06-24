@@ -97,6 +97,34 @@ Damit jede KI dieselbe Sprache spricht:
 
 **Warum Go?** HTTP-Server, JSON, NDJSON-Streaming (`http.Flusher`) und Nebenläufigkeit (Goroutinen/Channels für Observe) sind alles Standardbibliothek. Cross-Compilation zu Single-Binaries via `GOOS`/`GOARCH` ist trivial. Statisches Linken ohne externe Abhängigkeiten passt exakt zum Distributionsziel.
 
+### 4.1 Designprinzip: Skalierung ist opt-in (graceful degradation auf Single-Instance)
+
+clio ist primär ein **Single-Instance**-Store (ADR-002) und soll als solcher
+**einfach bleiben**. Jede Skalierungsfähigkeit, die der Partitionierungs-Cluster
+(ADR-034…038) einführt, ist deshalb **opt-in und voreingestellt aus**: Der
+Default-Pfad kollabiert auf den degenerierten Fall einer einzigen Partition und ist
+zur Laufzeit **verhaltensgleich** zur heutigen Single-Instance — für Betreiber und
+Clients wird nichts komplizierter, und es entsteht **keine** neue Abhängigkeit.
+
+> **Versprechen:** Eine kleine Instanz läuft nach Einführung der Partitionierung
+> **exakt wie vorher**. Skalierung zahlt man nur, wenn man sie einschaltet — nie
+> als Grundlast.
+
+Verankert an vier voreingestellten Defaults:
+
+| Fähigkeit | Default (klein) | Hochskaliert (opt-in) | ADR |
+|---|---|---|---|
+| Partitionen | `CLIO_PARTITIONS=1` — eine Kette, eine Sequenz, **bit-identisch** zu heute | `>1` Partitionen, n Writer | ADR-034 |
+| Storage | eine bbolt-Datei, ein Writer (wie heute) | Datei pro Partition + Handle-Pool | ADR-037 |
+| Lese-Cursor | skalarer Cursor, **bit-kompatibel** zum bisherigen `lowerBound` | opaker per-Partition-Cursor-Vektor | ADR-036 |
+| Koordination | `static` — ein Knoten besitzt alles, **kein** Konsens, keine neue Dependency | eingebettetes `raft` (pure-Go) | ADR-038 |
+
+Der Preis liegt bewusst auf der **Maintainer**-Seite (ein paar Abstraktionsschichten:
+Partition-Routing, Coordinator-Schnittstelle, Cursor-Kodierung), die bei `n=1` zur
+Laufzeit wirkungslos sind — nicht auf der Betreiber-/Client-Seite. Dieses Prinzip ist
+die gemeinsame Klammer über den gesamten ADR-034…038-Cluster und beim Hinzufügen
+weiterer Skalierungs-Features einzuhalten.
+
 ---
 
 ## 5. HTTP-API-Kontrakt (Zielbild)

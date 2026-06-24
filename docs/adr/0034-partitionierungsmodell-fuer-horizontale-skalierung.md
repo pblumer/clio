@@ -64,6 +64,12 @@ Key-Migration zu erlauben (Details in der Folge-ADR zu Distribution/Consensus).
 - Schreib- und Speicherlast pro Partition begrenzbar.
 - Single-Writer-per-Partition ist ein in diesem Ökosystem bereits erprobtes Modell
   (vgl. Chrampfer: Single-Writer-per-Partition mit Group Commit, ADR-009).
+- **Skalierung ist opt-in.** Der Default `CLIO_PARTITIONS=1` ist zur Laufzeit
+  verhaltensgleich zur heutigen Single-Instance (eine Kette, eine Sequenz,
+  bit-identisch). Eine kleine Instanz wird durch diese ADR **nicht** komplizierter und
+  zieht keine neue Abhängigkeit — die Skalierungsfähigkeit zahlt nur, wer sie
+  einschaltet. Dies ist die gemeinsame Klammer des Clusters ADR-034…038; siehe das
+  Designprinzip in [`ARCHITECTURE.md` §4.1](../../ARCHITECTURE.md#41-designprinzip-skalierung-ist-opt-in-graceful-degradation-auf-single-instance).
 
 *Negativ / Grenzen (geopfert):*
 
