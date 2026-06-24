@@ -204,9 +204,13 @@ Partition als erste Klasse in Metriken/`/info`.
 Dieser Plan liefert das **Single-Node-Fundament** der Partitionierung. Ausdrücklich
 **nicht** Teil dieses Plans:
 
-- **Physische Verteilung über Knoten, Rebalancing-Live-Move, Consensus** →
-  Folge-ADR „Distribution / Consensus". (WP-1 liefert nur die *reine* Mapping-/
-  Rebalance-Funktion, keinen Live-Datentransport.)
+- **Physische Verteilung über Knoten, Rebalancing-Live-Move, Consensus** —
+  Architektur **entschieden in
+  [ADR-038](../adr/0038-distribution-consensus-partition-ownership.md)** (Write-Leases
+  + eingebettetes Raft, `static` als Single-Node-Default; INV-P4), aber **Umsetzung ist
+  Etappe 4** und bleibt aus diesem (Single-Node-)Plan ausgeklammert. WP-1 liefert nur
+  die *reine* Mapping-/Rebalance-Funktion, keinen Live-Datentransport; der `static`
+  Coordinator ist der implizite Modus von WP-2.
 - **Übergeordnetes Anchoring der n Ketten / Bestands-Migration** → **entschieden in
   [ADR-035](../adr/0035-tamper-evidence-unter-partitionierung.md)** (n Ketten +
   globaler Merkle-Anker, Epoche-0-Versiegelung statt Re-Chaining); umgesetzt in
@@ -232,9 +236,10 @@ WP-0 (Audit) ✅ ─┘   (ADR-034)           └─► WP-5 (Anker/Tamper-Evide
                                      ▲
                                      └─ WP-0 ✅ blockiert WP-3 (Cursor-Umstellung)
 
-Etappe 4 (physische Verteilung) ── GATED auf Folge-ADRs (Distribution/Consensus,
-                                    Storage-Engine). Tamper-Evidence-Anchoring ist
-                                    mit ADR-035/WP-5 entschieden.
+Etappe 4 (physische Verteilung) ── Architektur entschieden (ADR-038: Leases+Raft,
+                                    `static` Default); Umsetzung wartet auf realen
+                                    Multi-Node-Treiber. Tamper-Evidence (ADR-035),
+                                    Storage (ADR-037) und Read-Path (ADR-036) stehen.
 ```
 
 Empfehlung: WP-0 und WP-1 parallel starten (unabhängig), dann WP-2, dann WP-3/WP-4.

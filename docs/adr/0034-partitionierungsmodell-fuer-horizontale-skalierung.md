@@ -106,7 +106,8 @@ vorbehalten:
 - **Anzahl/Granularität der Partitionen** (fix vs. dynamisch) sowie
   **Splitting/Merging** von Partitionen zur Laufzeit.
 - **Exaktes `source → partition`-Mapping und Rebalancing-Strategie**
-  → Folge-ADR „Distribution / Consensus".
+  → entschieden in [ADR-038](./0038-distribution-consensus-partition-ownership.md)
+  (konsistentes Hashing + Write-Leases + eingebettetes Raft; INV-P4).
 - **Verhalten bei Events ohne eindeutigen `source`** (vgl. tokenlose Writes /
   Inbox-Stream, ADR-026).
 - **Übergeordnetes Anchoring der n Hash-Chains** → entschieden in
