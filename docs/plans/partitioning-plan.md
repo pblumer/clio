@@ -110,15 +110,18 @@ annehmen (Code, `/ui`, Beispiele, Postman, Doku).
   Read-Ordnung an **derselben** globalen Sequenz), aber der externe **Cursor-Vertrag**
   (`lowerBound`, `eventsTotal+1`, Singleton-Checkpoint) ist eine Breaking Change.
 
-### WP-1 — `internal/partition` (Routing, rein)
+### WP-1 — `internal/partition` (Routing, rein) — ✅ ABGESCHLOSSEN
 
 Konsistentes Hashing + Key-Ableitung als reines Paket.
 
-- **Akzeptanz:** Determinismus-Test (gleiche Eingabe ⇒ gleiche Partition über
-  Prozess-Neustart, fester Seed-frei); Verteilungs-Test (≈ Gleichverteilung über
-  Zufalls-Keys, Toleranz dokumentiert); `Rebalance`-Test (Knoten +1 ⇒ nur
-  erwarteter Bruchteil der Keys wandert). Keine Storage-/HTTP-Importe (Architektur-
-  Test wie `internal/auth`).
+- **Akzeptanz:** ✅ Determinismus-Test (gleiche Eingabe ⇒ gleiche Partition über
+  Ring-Neuaufbau, sha256 ohne Seed); ✅ Verteilungs-Test (≈ Gleichverteilung über
+  40k deterministische Keys, Toleranz ±35 % dokumentiert); ✅ `Rebalance`-Test
+  (N→N+1 ⇒ < 22 % der Keys wandern, plus Gegenprobe gegen naives Modulo); ✅ N=1 ⇒
+  immer Partition 0 (opt-in-Skalierung, §4.1); ✅ stdlib-only, keine Storage-/HTTP-
+  Importe.
+- **Umgesetzt:** `internal/partition` (`KeyFromSource`, `Ring`/`NewRing`,
+  `Partition`/`PartitionForSource`, `Rebalance`); `make lint`/`test`/`race` grün.
 
 ### WP-2 — Per-Partition-Writer & -Kette (Storage: ADR-037)
 
