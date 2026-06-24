@@ -97,15 +97,18 @@ Partition** geführt werden statt global:
 > Akzeptanzkriterien sind je WP **prüfbar** formuliert. Qualitätstor je WP:
 > `make lint` · `make test` · `make race` grün (SESSION_PROMPT.md §5).
 
-### WP-0 — Konsumenten-Audit (Voraussetzung, blockiert WP-3)
+### WP-0 — Konsumenten-Audit (Voraussetzung, blockiert WP-3) — ✅ ABGESCHLOSSEN
 
 Bestandsaufnahme aller Stellen, die **globale Total-Order / eine globale Sequenz**
 annehmen (Code, `/ui`, Beispiele, Postman, Doku).
 
-- **Ergebnis:** Liste in `docs/plans/partitioning-consumer-audit.md` mit je Fundstelle
-  + Einordnung (bricht / unkritisch / braucht per-Partition-Cursor).
-- **Akzeptanz:** Jeder Treffer von `seq`/`sequence`/„global order"/`lastEventNumber`
-  o. Ä. ist klassifiziert; keine offene „unklar"-Zeile.
+- **Ergebnis:** [`partitioning-consumer-audit.md`](./partitioning-consumer-audit.md)
+  — 7× BRICHT (konzentriert im Store-Kern), ~16× BRAUCHT-CURSOR (skalare globale ID
+  als Cursor über API/UI/Worker/Postman/Lehrtexte), ~6× nur Doku-Nachzug.
+- **Akzeptanz:** ✅ Jeder Treffer ist klassifiziert; keine offene „unklar"-Zeile.
+- **Kernerkenntnis:** Der Bruch sitzt konzentriert (ID-Vergabe + Hash-Kette +
+  Read-Ordnung an **derselben** globalen Sequenz), aber der externe **Cursor-Vertrag**
+  (`lowerBound`, `eventsTotal+1`, Singleton-Checkpoint) ist eine Breaking Change.
 
 ### WP-1 — `internal/partition` (Routing, rein)
 
@@ -117,29 +120,57 @@ Konsistentes Hashing + Key-Ableitung als reines Paket.
   erwarteter Bruchteil der Keys wandert). Keine Storage-/HTTP-Importe (Architektur-
   Test wie `internal/auth`).
 
-### WP-2 — Per-Partition-Writer & -Kette
+### WP-2 — Per-Partition-Writer & -Kette (Storage: ADR-037)
 
-Store-Kern auf n Ketten/Sequenzen umstellen; Default `CLIO_PARTITIONS=1` =
-heutiges Verhalten.
+Store-Kern auf n Ketten/Sequenzen umstellen; Storage-Substrat = **eine bbolt-Datei
+pro Partition** (ADR-037). Default `CLIO_PARTITIONS=1` = heutiges Verhalten.
 
 - **Akzeptanz:** (a) Mit `CLIO_PARTITIONS=1` sind Hashes/Sequenzen **bit-identisch**
-  zum Verhalten vor der Umstellung (Regressions-Golden-Test). (b) Mit
-  `CLIO_PARTITIONS=8` landen Events nach `source` deterministisch in der richtigen
-  Partition; jede Partition hat eine lückenlose Kette (`Verify` grün je Partition).
-  (c) Paralleles Schreiben in **verschiedene** Partitionen skaliert (Benchmark: n
-  Writer > 1 Writer Durchsatz; Zahlen dokumentiert). (d) `make race` grün unter
-  paralleler Schreiblast über mehrere Partitionen.
+  zum Verhalten vor der Umstellung (Regressions-Golden-Test) — eine Datei, ein
+  Writer wie heute. (b) Mit `CLIO_PARTITIONS=8` landen Events nach `source`
+  deterministisch in der richtigen Partition/Datei; jede Partition hat eine
+  lückenlose Kette (`Verify` grün je Partition). (c) Paralleles Schreiben in
+  **verschiedene** Partitionen skaliert (Benchmark: n Writer > 1 Writer Durchsatz,
+  **kein** gemeinsamer Datei-Schreib-Lock; Zahlen dokumentiert). (d) `make race` grün
+  unter paralleler Schreiblast über mehrere Partitionen. (e) **Handle-Pool** (lazy
+  open/close, LRU, konfigurierbar) hält nur aktive Partitionsdateien gemappt;
+  Reopen einer „kalten" Partition funktioniert korrekt; Adressraum-/FD-Verbrauch
+  bleibt mit der Partitionszahl beschränkt. (f) Die `storage-scaling-plan`-Hebel
+  (`InitialMmapSize`-Vorab-Mmap, Headroom-Monitor, Online-Compaction) wirken pro
+  Partitionsdatei.
 
-### WP-3 — Read-Path & Cursor (braucht WP-0)
+### WP-3 — Read-Path, Scatter-Gather & Cursor (ADR-036, braucht WP-0)
 
-Per-Partition-Cursor, dokumentierte Approx-Order, INV-P1 sichtbar gemacht.
+Realisiert [ADR-036](../adr/0036-read-path-cqrs-unter-partitionierung.md):
+Scatter-Gather mit streaming k-Wege-Merge, opaker per-Partition-Cursor-Vektor,
+explizite `order`-Klassifikation (INV-P3).
 
-- **Akzeptanz:** `read-events`/`run-query` liefern je Partition strikt geordnet;
-  Cursor-Vektor round-trippt korrekt (kein Event doppelt/verloren über
-  Partitionsgrenzen). Antworten, die früher globale Order implizierten, tragen ein
-  explizites Feld/Flag „order: per-partition" bzw. „approximated". `/ui`-Explorer
-  zeigt Partition je Event. Audit-Treffer aus WP-0, die „bricht" waren, sind
-  adressiert.
+- **Akzeptanz:** (a) Read/Query mit `source`/Key-Filter bleibt **single-partition**
+  (kein Fan-out); ohne solchen Filter fächert er korrekt über die betroffenen
+  Partitionen und merged streaming (keine Voll-Materialisierung; ADR-028
+  Heartbeat/Deadline gelten pro Partition **und** für den Merge). (b) `read-events`/
+  `run-query` liefern je Partition strikt geordnet; jede Mehr-Partition-Antwort trägt
+  `order: per-partition|approximated` (nie „global garantiert"). (c) Der **opake
+  Cursor-Vektor** round-trippt korrekt (kein Event doppelt/verloren über
+  Partitionsgrenzen); bei `CLIO_PARTITIONS=1` ist er bit-kompatibel zum alten
+  skalaren `lowerBound`. (d) `/ui`-Explorer zeigt Partition je Event. (e) Alle
+  Audit-Treffer aus WP-0 mit Klasse „BRAUCHT-CURSOR"/„BRICHT" im Lesepfad sind
+  adressiert — inkl. Umstellung des `projection-worker-postgres`-Beispiels auf
+  per-Partition-Checkpoint.
+
+### WP-5 — Globaler Anker / Tamper-Evidence (ADR-035, braucht WP-2)
+
+Pro-Partition-Genesis + append-only Anker-Kette mit Merkle-Commitment über alle
+`(partitionID, head, seq)`; Verify-Erweiterung; Epoche-0-Versiegelung des Bestands.
+
+- **Akzeptanz:** (a) Jede Partition verifiziert von ihrem partitionseigenen Genesis.
+  (b) Ein Anker reproduziert die Merkle-Wurzel der aktuellen Heads; manipuliert man
+  eine Partition (Drop/Rollback) und prüft gegen den letzten Anker → **erkannt**.
+  (c) `verify` = Konjunktion der Partitions-Verifies **und** Anker-Reproduktion
+  **und** lückenlose Anker-Kette. (d) Migration: bestehende eine Kette bleibt
+  unverändert als Epoche-0 prüfbar; ihr Head ist Genesis-Anker (`anchorSeq=0`); kein
+  Event wird neu gehasht (ADR-012/015 gewahrt). (e) Anker-Koordinator hält **keinen**
+  partitionsübergreifenden Schreib-Lock (read-only Snapshot, vgl. ADR-031).
 
 ### WP-4 — Observability & Betrieb
 
@@ -173,11 +204,18 @@ Partition als erste Klasse in Metriken/`/info`.
 Dieser Plan liefert das **Single-Node-Fundament** der Partitionierung. Ausdrücklich
 **nicht** Teil dieses Plans:
 
-- **Physische Verteilung über Knoten, Rebalancing-Live-Move, Consensus** →
-  Folge-ADR „Distribution / Consensus". (WP-1 liefert nur die *reine* Mapping-/
-  Rebalance-Funktion, keinen Live-Datentransport.)
-- **Übergeordnetes Anchoring der n Ketten / Bestands-Re-Chaining** → Folge-ADR
-  „Tamper-Evidence unter Partitionierung".
+- **Physische Verteilung über Knoten, Rebalancing-Live-Move, Consensus** —
+  Architektur **entschieden in
+  [ADR-038](../adr/0038-distribution-consensus-partition-ownership.md)** (Write-Leases
+  + eingebettetes Raft, `static` als Single-Node-Default; INV-P4), aber **Umsetzung ist
+  Etappe 4** und bleibt aus diesem (Single-Node-)Plan ausgeklammert. WP-1 liefert nur
+  die *reine* Mapping-/Rebalance-Funktion, keinen Live-Datentransport; der `static`
+  Coordinator ist der implizite Modus von WP-2.
+- **Übergeordnetes Anchoring der n Ketten / Bestands-Migration** → **entschieden in
+  [ADR-035](../adr/0035-tamper-evidence-unter-partitionierung.md)** (n Ketten +
+  globaler Merkle-Anker, Epoche-0-Versiegelung statt Re-Chaining); umgesetzt in
+  **WP-5**, gegen WP-2 gated. Damit **nicht mehr** Nicht-Ziel, sondern Teil dieses
+  Plans.
 - **Neue Storage-Engine** jenseits bbolt (B+Tree-Grenzen aus ADR-006/dem
   Storage-Scaling-Plan) → Folge-ADR „Storage-Engine".
 - **Cross-Partition-Read-Modell / globale Order-Projektion (CQRS)** → Folge-ADR
@@ -193,12 +231,15 @@ Dieser Plan liefert das **Single-Node-Fundament** der Partitionierung. Ausdrück
 
 ```
 WP-1 (Routing) ─┐
-                ├─► WP-2 (Writer/Kette) ─► WP-3 (Read-Path) ─► WP-4 (Observability)
-WP-0 (Audit) ───┘                    ▲
-                                     └─ WP-0 blockiert WP-3 (Cursor-Umstellung)
+                ├─► WP-2 (Writer/Kette) ─┬─► WP-3 (Read-Path) ─► WP-4 (Observability)
+WP-0 (Audit) ✅ ─┘   (ADR-034)           └─► WP-5 (Anker/Tamper-Evidence, ADR-035)
+                                     ▲
+                                     └─ WP-0 ✅ blockiert WP-3 (Cursor-Umstellung)
 
-Etappe 4 (Verteilung) ── GATED auf Folge-ADRs (Distribution/Consensus,
-                          Tamper-Evidence-unter-Partitionierung, Storage-Engine)
+Etappe 4 (physische Verteilung) ── Architektur entschieden (ADR-038: Leases+Raft,
+                                    `static` Default); Umsetzung wartet auf realen
+                                    Multi-Node-Treiber. Tamper-Evidence (ADR-035),
+                                    Storage (ADR-037) und Read-Path (ADR-036) stehen.
 ```
 
 Empfehlung: WP-0 und WP-1 parallel starten (unabhängig), dann WP-2, dann WP-3/WP-4.

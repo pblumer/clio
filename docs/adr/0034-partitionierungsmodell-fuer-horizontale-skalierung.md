@@ -64,6 +64,12 @@ Key-Migration zu erlauben (Details in der Folge-ADR zu Distribution/Consensus).
 - Schreib- und Speicherlast pro Partition begrenzbar.
 - Single-Writer-per-Partition ist ein in diesem Ökosystem bereits erprobtes Modell
   (vgl. Chrampfer: Single-Writer-per-Partition mit Group Commit, ADR-009).
+- **Skalierung ist opt-in.** Der Default `CLIO_PARTITIONS=1` ist zur Laufzeit
+  verhaltensgleich zur heutigen Single-Instance (eine Kette, eine Sequenz,
+  bit-identisch). Eine kleine Instanz wird durch diese ADR **nicht** komplizierter und
+  zieht keine neue Abhängigkeit — die Skalierungsfähigkeit zahlt nur, wer sie
+  einschaltet. Dies ist die gemeinsame Klammer des Clusters ADR-034…038; siehe das
+  Designprinzip in [`ARCHITECTURE.md` §4.1](../../ARCHITECTURE.md#41-designprinzip-skalierung-ist-opt-in-graceful-degradation-auf-single-instance).
 
 *Negativ / Grenzen (geopfert):*
 
@@ -106,15 +112,21 @@ vorbehalten:
 - **Anzahl/Granularität der Partitionen** (fix vs. dynamisch) sowie
   **Splitting/Merging** von Partitionen zur Laufzeit.
 - **Exaktes `source → partition`-Mapping und Rebalancing-Strategie**
-  → Folge-ADR „Distribution / Consensus".
+  → entschieden in [ADR-038](./0038-distribution-consensus-partition-ownership.md)
+  (konsistentes Hashing + Write-Leases + eingebettetes Raft; INV-P4).
 - **Verhalten bei Events ohne eindeutigen `source`** (vgl. tokenlose Writes /
   Inbox-Stream, ADR-026).
-- **Übergeordnetes Anchoring der n Hash-Chains** → Folge-ADR „Tamper-Evidence unter
-  Partitionierung" (baut auf ADR-012 auf).
+- **Übergeordnetes Anchoring der n Hash-Chains** → entschieden in
+  [ADR-035](./0035-tamper-evidence-unter-partitionierung.md) (n Ketten + globaler
+  Merkle-Anker, baut auf ADR-012 auf).
 - **Storage-Engine** jenseits der heutigen bbolt-Single-File-Ablage (ADR-006)
-  → Folge-ADR „Storage-Engine".
+  → entschieden in [ADR-037](./0037-storage-engine-unter-partitionierung.md)
+  (bbolt bleibt, aber eine Datei pro Partition; Engine hinter der Abstraktion lokal
+  austauschbar).
 - **Cross-Partition-Read-Modell** (globale Order-Projektion, Cross-Partition-Queries)
-  → Folge-ADR „Read-Path / CQRS" (baut auf ADR-017/ADR-029 auf).
+  → entschieden in [ADR-036](./0036-read-path-cqrs-unter-partitionierung.md)
+  (Scatter-Gather + per-Partition-Cursor-Vektor, globale Ordnung als nachgelagertes
+  CQRS-Read-Modell; baut auf ADR-017/ADR-029 auf).
 
 **Referenzen**
 
