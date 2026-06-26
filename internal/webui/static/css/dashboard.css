@@ -182,6 +182,14 @@
   .ev-data { margin: 8px 0 0; padding: 9px 11px; background: var(--bg); border: 1px solid var(--border); border-radius: 7px;
              font-family: var(--mono); font-size: 12px; white-space: pre-wrap; word-break: break-word; display: none; }
   .ev.open .ev-data { display: block; }
+  /* Fremdschlüssel-Werte in Event-Payloads sind klickbare Links auf die
+     Event-Ansicht des referenzierten Subjects (siehe dashboard.js,
+     referenceCollection). Farbe NUR über das Theme-Token --accent; Unterstreichung
+     erst bei :hover/:focus-visible, damit referenzfreie Payloads unverändert wie
+     das JSON aussehen. Keine Literalfarbe. */
+  .ev-ref { color: var(--accent); cursor: pointer; text-decoration: none; }
+  .ev-ref:hover, .ev-ref:focus-visible { text-decoration: underline; }
+  .ev-ref:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
   /* Schmale Screens: Subject auf eine eigene volle Zeile, statt es zwischen
      ID/Typ/Zeit auf ~1 Zeichen zu quetschen (sonst senkrechter Zeichen-Umbruch). */
   @media (max-width: 600px) {
@@ -245,6 +253,7 @@
   .ac-item.sel, .ac-item:hover { background: var(--panel-2); }
   .ac-kind { font-size: 10px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); min-width: 34px; }
   .ac-kind.fld { color: #7dcfff; } .ac-kind.fn { color: var(--accent); } .ac-kind.kw { color: #bb9af7; }
+  .ac-kind.subj { color: #9ece6a; }
   .ac-text { color: var(--fg); flex: 1; }
   .ac-hint { color: var(--muted); font-size: 11px; }
   .editor-actions { display: flex; gap: 10px; align-items: center; margin-top: 10px; flex-wrap: wrap; }

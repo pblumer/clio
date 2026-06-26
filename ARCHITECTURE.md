@@ -142,7 +142,9 @@ Alle Routen nutzen **POST** (außer ggf. `ping`), weil Parameter im Request-Body
 | `GET /api/v1/read-event-types` | Alle bisher geschriebenen Event-Typen (Anzahl + `hasSchema`) | 3 |
 | `GET /api/v1/read-subjects` | Alle bisher beschriebenen Subjects/Streams (Anzahl); optionaler `prefix`-Query für rekursiven Scope, `tree=true` für einen hierarchischen Baum (`count`/`total`) | 3 |
 | `POST /api/v1/register-event-schema` · `GET /api/v1/read-event-schema` | JSON-Schema je Typ registrieren/lesen; Validierung beim Write (ADR-014) | 3 |
+| `POST /api/v1/register-reduce-spec` · `GET /api/v1/read-reduce-spec` · `DELETE /api/v1/reduce-spec` | Deklarative Feld-Reduktionsstrategien der Zustandssicht je Subject-Prefix registrieren/lesen/löschen (sum/min/max/append/union/first; ADR-041) | 3 |
 | `GET /api/v1/events/<subject>` | Komfort-Leseroute: Subject = URL-Pfad; Optionen als Query (`recursive` (Default true), `lowerBound`, `upperBound`, `type` (wiederholbar), `watch=true` für Live). `GET /api/v1/events` = Wurzel | 3 |
+| `GET /api/v1/state/<subject>` | Gefalteter aktueller Zustand **eines** Subjects: `data`-Payloads zu einem Objekt verschmolzen (Default Last-Write-Wins-Deep-Merge; feldweise Strategien per Reduce-Spec, ADR-041). Single-subject, nicht rekursiv; `at=<eventId>` für Zeitreise, `type` wiederholbar. In-Memory-Cache (ADR-040); nicht-persistierte Lese-Komfortschicht, kein materialisiertes Read-Model (ADR-039) | 3 |
 | `POST /api/v1/run-query` | CEL-basierte Abfrage (Scope + Prädikat), NDJSON (ADR-017) | 4 |
 | `GET /api/v1/event-stats` | Histogramm der Eventmengen über die Zeit (nach Event-Zeit, beim Start aus der Historie aufgebaut; Start, Bucket-Breite, Zähler) — fürs `/ui`-Dashboard, ohne die Historie zu streamen | 3 |
 | `GET /openapi.yaml` · `GET /docs` | OpenAPI-3-Spec bzw. interaktive Swagger UI (eingebettet, ohne Auth) | 3 |
@@ -256,6 +258,19 @@ Zweites getaggtes Release (nach v0.1.0). Bündelt die Arbeit aus den Stufen 4–
 - **Sekundär-Query auf `event.data` (ADR-029)** — interner Feld-Index für `event.data`-Gleichheiten beschleunigt CEL-Abfragen ohne Typ-Constraint.
 - **UI-Ausbau** — Keys-Tab (ADR-025), Storage-Headroom-/Compaction-Status im Dashboard, Eventstrom-Diagramm (Box-Zoom, Lin/Log, Source-Aufschlüsselung); Assets via `embed.FS` aus der HTML ausgelagert.
 - **Robustheit** — `run-query`-Streaming mit Default-Limit, speichergedeckelte rekursive Reads, Anti-Buffering gegen puffernde Proxies; Gesamt-Coverage > 90 %.
+
+### Release-Meilenstein v0.3.0 ✅
+
+Drittes getaggtes Release (nach v0.2.0). Bündelt Betriebs-/Sicherheits-Features, eine neue State-Lese-Schicht und die Grundlagen der horizontalen Skalierung:
+
+- **Aktivität & Presence (ADR-030)** — In-Memory-Presence-/Aktivitäts-Registry, `GET /api/v1/activity` (Scope `admin`), Auth-Lifecycle-Events (`CLIO_AUTH_EVENTS`) und ein eigener UI-Tab „Aktivität": wer ist online, wer tut was.
+- **Persistentes Audit-Log (ADR-031)** — administrative Aktionen werden nachvollziehbar protokolliert.
+- **Key-Lifecycle (ADR-025)** — Rotation, Ablauf und Metadaten benannter API-Keys plus eine Offline-CLI zur Schlüsselverwaltung.
+- **Backup / Restore / Verify** — als echtes Produktfeature statt manuellem Datei-Kopieren.
+- **Subject-/Prefix-basierte Scopes (ADR-033)** — feingranulare Berechtigungen wie `read:/orders/*`; additiv und rückwärtskompatibel zum bestehenden Scope-System.
+- **Gefaltete Zustandssicht eines Subjects per REST (ADR-039)** — Read-Model über `event.data`-Faltung, beschleunigt durch **Reduce-Specs (ADR-041)** und einen **In-Memory-Snapshot-Cache (ADR-040)**. Query erhält zudem eine optionale Sortierreihenfolge (älteste/neueste zuerst).
+- **Horizontale Skalierung — Grundlagen (ADR-034…038)** — Partitionierungsmodell, Storage-Engine pro Partition, Read-Path/CQRS und Distribution/Consensus akzeptiert (löst ADR-002/003 ab); umgesetzt ist WP-1 (konsistentes Hash-Routing in `internal/partition`). **Opt-in:** Default bleibt Single-Instance (`CLIO_PARTITIONS=1`) und ist verhaltensgleich zum bisherigen Betrieb.
+- **UI & Robustheit** — klickbare Fremdschlüssel-Links in Event-Payloads (ADR-020), Subject-Autovervollständigung im Query-Tab, lesbare Event-Zähler im Explorer, Layout-Fix bei langen Event-Typ-Namen; `observe` nutzt Burst-Flush (kein Reconnect-Flattern unter hoher Last).
 
 ---
 

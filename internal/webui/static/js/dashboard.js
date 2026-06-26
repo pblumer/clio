@@ -56,7 +56,7 @@ function switchView(name) {
   // Erzeugen: Vorschlagslisten beim ersten Öffnen befüllen.
   if (name === "generate" && !genLoaded && tokenInput.value.trim()) { genLoaded = true; loadGenSuggestions(); }
   // Query-Tab: Feld-Vorschläge beim ersten Öffnen aus echten Events lernen.
-  if (name === "query") { qEditor && qEditor.focus(); if (!qSampleLoaded && tokenInput.value.trim()) refreshQuerySchema(); }
+  if (name === "query") { qEditor && qEditor.focus(); if (tokenInput.value.trim()) { loadQuerySubjects(); if (!qSampleLoaded) refreshQuerySchema(); } }
   // Dashboard: Canvas nach erneutem Einblenden frisch vermessen.
   if (name === "dashboard") { evResize(); redrawSparks(); }
 }
@@ -909,6 +909,9 @@ function schedule() {
 function connect() {
   sessionStorage.setItem("clioToken", tokenInput.value.trim());
   refresh(); schedule(); startEventStream();
+  // Steht der Nutzer schon auf dem Query-Tab, die Subject-Vorschläge sofort laden
+  // (der Tab-Wechsel, der das sonst auslöst, bleibt hier aus).
+  if ($("view-query").classList.contains("active")) loadQuerySubjects();
 }
 
 $("connect").addEventListener("click", connect);
@@ -1057,6 +1060,106 @@ function fmtEvTime(d) {
   const sameDay = d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
   return sameDay ? t : d.toLocaleDateString("de-CH") + " " + t;
 }
+// ---------- Event-Referenzen (Fremdschlüssel-Links in Payloads) ----------
+// Sieht ein Payload-Feld wie eine Fremdschlüssel-Referenz aus (employeeId,
+// tagIds, productRef …), wird sein STRING-Wert als klickbarer Link gerendert;
+// ein Klick (oder Enter/Space bei Fokus) öffnet die Event-Ansicht des
+// referenzierten Subjects im Explorer (derselbe selectSubject-Pfad wie sonst,
+// kein neuer Endpoint). Reine View-Schicht, ADR-020-konform.
+
+// REF_FIELD_RE / referenceCollection bilden einen Feldnamen auf eine
+// Ziel-Collection ab. Heuristik (übernommen aus der Clio-Workbench): Regex
+// ^(.+?)(ids|id|refs|ref)$ auf den kleingeschriebenen Namen; das blosse Feld
+// "id" ist KEINE Referenz (group 1 wäre leer → kein Treffer). Die Collection ist
+// der best-effort-Plural des Stamms (Stamm + "s", ausser er endet schon auf
+// "s"): employeeId→employees, tagIds→tags, productRef→products. Rückgabe "" wenn
+// keine Referenz.
+//
+// Bewusste v1-Grenze (identisch zur Workbench): Der Plural wird NICHT gegen real
+// existierende Collections aufgelöst — diese Referenzen sind ein Startpunkt, kein
+// autoritatives Schema. camelCase-Felder landen daher auf einer zusammengezogenen
+// Collection (primaryAccountId → /primaryaccounts/… statt /primary-accounts/…)
+// und damit ggf. auf einer leeren Liste. Akzeptiert, nicht „gelöst".
+const REF_FIELD_RE = /^(.+?)(ids|id|refs|ref)$/;
+function referenceCollection(field) {
+  if (typeof field !== "string") return "";
+  const m = REF_FIELD_RE.exec(field.toLowerCase());
+  if (!m) return "";
+  const stem = m[1];
+  return stem.endsWith("s") ? stem : stem + "s";
+}
+
+// appendPayload rendert einen JSON-Wert als Kindknoten von host und formatiert
+// dabei byte-gleich zu JSON.stringify(value, null, 2). Einziger Unterschied:
+// String-Werte unter einem Fremdschlüssel-Feld (referenceCollection) — auch als
+// Array-Elemente, z. B. tagIds:["t1","t2"] — werden als <a class="ev-ref"> mit
+// data-subject="/<collection>/<wert>" gerendert. ALLE Texte gehen über
+// createTextNode/textContent: Event-Payloads sind ungeprüfte Eingabe, Markup wie
+// "<b>x</b>" erscheint deshalb als Klartext, nie als HTML. Nur unsere eigenen
+// Link-Knoten sind echtes Markup; referenzfreie Payloads sehen exakt wie das JSON
+// aus. refColl ist die für value geltende Collection (vom umschliessenden Feld).
+function appendPayload(host, value, indent, refColl) {
+  const t = (s) => host.appendChild(document.createTextNode(s));
+  const pad = "  ".repeat(indent), pad1 = "  ".repeat(indent + 1);
+  if (Array.isArray(value)) {
+    if (!value.length) { t("[]"); return; }
+    t("[\n");
+    value.forEach((v, i) => {
+      t(pad1);
+      appendPayload(host, v, indent + 1, refColl); // Collection des Feldes gilt je Element
+      t(i < value.length - 1 ? ",\n" : "\n");
+    });
+    t(pad + "]");
+    return;
+  }
+  if (value && typeof value === "object") {
+    const keys = Object.keys(value);
+    if (!keys.length) { t("{}"); return; }
+    t("{\n");
+    keys.forEach((k, i) => {
+      t(pad1 + JSON.stringify(k) + ": ");
+      appendPayload(host, value[k], indent + 1, referenceCollection(k));
+      t(i < keys.length - 1 ? ",\n" : "\n");
+    });
+    t(pad + "}");
+    return;
+  }
+  if (typeof value === "string" && refColl) { host.appendChild(refLink(refColl, value)); return; }
+  t(JSON.stringify(value));
+}
+
+// refLink baut den klickbaren Link um einen String-Wert. Die Anzeige ist
+// byte-gleich zum JSON-String (inkl. Anführungszeichen/Escapes) via textContent;
+// data-subject trägt den ROHEN Wert — eventsPath()/selectSubject() kodieren die
+// Pfadsegmente später. Linkfarbe/Unterstreichung kommen aus der CSS (.ev-ref).
+function refLink(collection, value) {
+  const a = document.createElement("a");
+  a.className = "ev-ref";
+  a.tabIndex = 0;
+  a.dataset.subject = "/" + collection + "/" + value;
+  a.textContent = JSON.stringify(value);
+  return a;
+}
+
+// Ein dokumentweiter, delegierter Handler deckt alle Payload-Flächen (Dashboard-
+// Live, Live-Tab, Explorer, Query) in einem ab: Klick bzw. Enter/Space auf einem
+// .ev-ref öffnet das referenzierte Subject im Explorer — der bestehende
+// selectSubject-Mechanismus, kein neuer Pfad.
+function openEventRef(subject) { switchView("explorer"); selectSubject(subject, null); }
+document.addEventListener("click", (e) => {
+  const a = e.target.closest && e.target.closest(".ev-ref[data-subject]");
+  if (!a) return;
+  e.preventDefault();
+  openEventRef(a.dataset.subject);
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" && e.key !== " " && e.key !== "Spacebar") return;
+  const a = e.target.closest && e.target.closest(".ev-ref[data-subject]");
+  if (!a) return;
+  e.preventDefault();
+  openEventRef(a.dataset.subject);
+});
+
 function renderEvent(ev) {
   const row = document.createElement("div");
   row.className = "ev";
@@ -1083,7 +1186,7 @@ function renderEvent(ev) {
   if (ev.data !== undefined) {
     const pre = document.createElement("pre");
     pre.className = "ev-data";
-    pre.textContent = JSON.stringify(ev.data, null, 2);
+    appendPayload(pre, ev.data, 0, "");
     row.appendChild(pre);
     head.addEventListener("click", () => row.classList.toggle("open"));
   }
@@ -1515,6 +1618,7 @@ const CEL_FUNCS = [
 const CEL_KEYWORDS = ["true", "false", "null", "in"];
 const FUNC_NAMES = new Set(CEL_FUNCS.map((f) => f.name).concat(STRING_METHODS.map((m) => m.name)));
 let dataPaths = []; // aus echten Events gelernte event.data.*-Pfade
+let knownSubjects = []; // vorhandene Subjects (für Scope-Feld + String-Literale)
 
 // --- Syntax-Highlighting (Token-Overlay hinter dem Textarea) ---
 function escHtml(s) { return s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])); }
@@ -1575,10 +1679,48 @@ function completionsFor(tok) {
   }
   return out.slice(0, 50);
 }
+// subjectStringContext erkennt, ob der Cursor in einem noch offenen String-Literal
+// steht, das den Wert eines subject-Vergleichs bildet (z. B. event.subject == '…',
+// subject in ['…'], event.subject.startsWith('…')). Dann liefert es den bereits
+// getippten Präfix samt Position, damit wir vorhandene Subjects vorschlagen können.
+function subjectStringContext(left) {
+  let quote = null, start = -1, prefix = "";
+  for (let i = 0; i < left.length; i++) {
+    const c = left[i];
+    if (quote) {
+      if (c === "\\") { i++; continue; } // Escape überspringen
+      if (c === quote) { quote = null; start = -1; prefix = ""; continue; }
+      prefix += c;
+    } else if (c === "'" || c === '"') { quote = c; start = i; prefix = ""; }
+  }
+  if (!quote) return null; // nicht in einem offenen String
+  const before = left.slice(0, start);
+  const cmp = /(?:event\.)?subject\s*(?:==|!=|in)\s*\[?\s*$/;
+  const mth = /(?:event\.)?subject\s*\.\s*(?:startsWith|endsWith|contains|matches)\s*\(\s*$/;
+  if (!cmp.test(before) && !mth.test(before)) return null;
+  return { prefix, start };
+}
+function subjectCompletions(prefix) {
+  const out = [];
+  for (const s of knownSubjects) {
+    if (s.startsWith(prefix)) out.push({ text: s, kind: "subj", hint: "Subject" });
+    if (out.length >= 50) break;
+  }
+  return out;
+}
 function showAc() {
-  const { tok, start } = currentToken();
-  if (!tok) return hideAc();
-  const items = completionsFor(tok);
+  const left = qEditor.value.slice(0, qEditor.selectionStart);
+  const sc = subjectStringContext(left);
+  let items, start;
+  if (sc) {
+    items = subjectCompletions(sc.prefix);
+    start = sc.start + 1; // direkt hinter dem öffnenden Anführungszeichen ersetzen
+  } else {
+    const t = currentToken();
+    if (!t.tok) return hideAc();
+    items = completionsFor(t.tok);
+    start = t.start;
+  }
   if (!items.length) return hideAc();
   acItems = items; acSel = 0; acTokenStart = start;
   qAc.innerHTML = "";
@@ -1656,6 +1798,19 @@ async function refreshQuerySchema() {
       try { const ev = JSON.parse(l); if (ev.data !== undefined) collectPaths(ev.data, "event.data", paths); } catch (_) {}
     }
     dataPaths = [...paths].sort();
+  } catch (_) { /* Vorschläge sind optional */ }
+}
+
+// loadQuerySubjects holt die vorhandenen Subjects und speist sie sowohl in das
+// native Scope-Feld (Datalist) als auch in den CEL-Editor (String-Literale). Wie
+// die übrigen Vorschläge ist das optional — ein eingeschränkter Key ohne globalen
+// read darf hier scheitern, ohne die Query zu stören.
+async function loadQuerySubjects() {
+  if (!tokenInput.value.trim()) return;
+  try {
+    const subjects = (await getNDJSON("/api/v1/read-subjects")).map((s) => s.subject);
+    knownSubjects = subjects;
+    fillGenList("dl-q-subjects", subjects.slice(0, 500));
   } catch (_) { /* Vorschläge sind optional */ }
 }
 

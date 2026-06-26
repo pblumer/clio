@@ -36,6 +36,11 @@ func (s *Server) handleDevReset(w http.ResponseWriter, r *http.Request) {
 	// startet (origin = jetzt).
 	s.events.Reset(now)
 
+	// Zustands-Cache leeren (ADR-040): nach dem Reset beginnt die Sequenz wieder
+	// bei 1; gecachte Stände mit höherer lastSeq würden neue Events sonst nicht
+	// inkrementell aufnehmen.
+	s.stateCache.clear()
+
 	// Nach jeder Supernova wieder Bulk-Import-Fenster öffnen.
 	s.bulkMu.Lock()
 	s.bulkImportOpen = true

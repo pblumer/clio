@@ -174,6 +174,34 @@ Endpunkt `event-stats`. Die Telemetrie-Sparklines aus Stufe 6 bleiben erhalten.
 > über `event-stats`** fürs Diagramm und **nur neue** für die Live-Liste. Damit
 > ist beides erfüllt, ohne die Historie zu streamen.
 
+### Interaktive Event-Links (Fremdschlüssel im Payload)  ✅ umgesetzt
+Querschnitt über alle Flächen, die einen Event-Payload zeigen (Dashboard-Live,
+Live-Viewer, Explorer-Events, Query-Ergebnisse) — sie laufen alle durch denselben
+Client-Renderer `renderEvent`. Sieht ein Feld im `data` wie eine
+Fremdschlüssel-Referenz aus, wird sein **String-Wert** als klickbarer Link
+gerendert; ein Klick (oder <kbd>Enter</kbd>/<kbd>Space</kbd> bei Fokus) öffnet die
+**bestehende** Subject-Events-Ansicht des Explorers für das referenzierte Subject
+(z. B. `employeeId: "E-000005"` → Events von `/employees/E-000005`). Ein einziger
+dokumentweiter, delegierter Handler deckt alle Flächen ab; geöffnet wird über den
+schon vorhandenen `selectSubject`-Pfad — **kein neuer Endpoint, kein neuer
+Server-Code** (ADR-020-konform, reine View-Schicht).
+
+- **Heuristik** (`referenceCollection` in `dashboard.js`): Regex
+  `^(.+?)(ids|id|refs|ref)$` auf den kleingeschriebenen Feldnamen; das blosse Feld
+  `id` ist **keine** Referenz. Die Ziel-Collection ist der best-effort-Plural des
+  Stamms (`employeeId`→`employees`, `tagIds`→`tags`, `productRef`→`products`).
+  Arrays von Strings (`tagIds: ["t1","t2"]`) verlinken jedes Element.
+- **Sicherheit**: Der Payload-Renderer baut DOM-Knoten und setzt **alle** Texte
+  über `textContent` — Events sind ungeprüfte Eingabe, Markup wie `<b>x</b>`
+  erscheint daher als Klartext, nie als HTML. Nur unsere eigenen Link-Knoten sind
+  Markup; referenzfreie Payloads sehen byte-gleich wie das JSON aus. Linkfarbe nur
+  über das Theme-Token `var(--accent)`, Unterstreichung erst bei `:hover`/`:focus`.
+- **Bewusste v1-Grenze**: Der Plural wird **nicht** gegen real existierende
+  Collections aufgelöst — diese Referenzen sind ein Startpunkt, kein autoritatives
+  Schema. camelCase-Felder werden zusammengezogen (`primaryAccountId` →
+  `/primaryaccounts/…` statt `/primary-accounts/…`) und landen dann ggf. auf einer
+  leeren Liste. Akzeptiert, im Code als bekannte Grenze kommentiert.
+
 ### Stufe 4 — Maintenance-Konsole  ⚠️ bewusst zurückgestellt
 Schreibende **Maintenance**-Aktionen (z. B. Kompaktierung anstoßen). **Out of
 scope** für jetzt: würde über die normalen Daten-Writes (Stufe 7) hinaus eine

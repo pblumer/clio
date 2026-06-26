@@ -26,13 +26,15 @@ const (
 // damit sie sich gut filtern lassen. Zentral hier, damit HTTP-Layer und CLI/
 // Maintenance dieselbe Vokabel verwenden.
 const (
-	AuditActionKeyCreate      = "key.create"
-	AuditActionKeyRotate      = "key.rotate"
-	AuditActionKeyRevoke      = "key.revoke"
-	AuditActionSchemaRegister = "schema.register"
-	AuditActionBackup         = "backup"
-	AuditActionDevReset       = "dev.reset"
-	AuditActionCompaction     = "compaction"
+	AuditActionKeyCreate          = "key.create"
+	AuditActionKeyRotate          = "key.rotate"
+	AuditActionKeyRevoke          = "key.revoke"
+	AuditActionSchemaRegister     = "schema.register"
+	AuditActionReduceSpecRegister = "reducespec.register"
+	AuditActionReduceSpecDelete   = "reducespec.delete"
+	AuditActionBackup             = "backup"
+	AuditActionDevReset           = "dev.reset"
+	AuditActionCompaction         = "compaction"
 )
 
 // AuditEntry ist ein einzelner Audit-Eintrag. Seq ist die eigene monotone

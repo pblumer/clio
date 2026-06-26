@@ -30,6 +30,13 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/register-event-schema", s.requireScope(auth.ScopeWrite, s.handleRegisterEventSchema))
 	s.mux.HandleFunc("GET /api/v1/read-event-schema", s.requireScope(auth.ScopeRead, s.handleReadEventSchema))
 
+	// Reduce-Specs der Zustandssicht (ADR-041): deklarative Feld-Strategien je
+	// Subject-Prefix. Registrieren/Löschen verlangt globalen `write` (wirkt prefix-
+	// weit), Lesen `read`.
+	s.mux.HandleFunc("POST /api/v1/register-reduce-spec", s.requireScope(auth.ScopeWrite, s.handleRegisterReduceSpec))
+	s.mux.HandleFunc("GET /api/v1/read-reduce-spec", s.requireScope(auth.ScopeRead, s.handleReadReduceSpec))
+	s.mux.HandleFunc("DELETE /api/v1/reduce-spec", s.requireScope(auth.ScopeWrite, s.handleDeleteReduceSpec))
+
 	// Konsistenter Online-Snapshot der gesamten DB (ADR-031). Admin-scoped: das
 	// Artefakt enthält die gesamte Historie samt Schlüsselbund-Hashes.
 	s.mux.HandleFunc("GET /api/v1/backup", s.requireScope(auth.ScopeAdmin, s.handleBackup))
@@ -65,6 +72,12 @@ func (s *Server) routes() {
 	// `GET /api/v1/events` ohne Subject = Wurzel (alle Events).
 	s.mux.HandleFunc("GET /api/v1/events", s.requireScope(auth.ScopeRead, s.handleEventsPath))
 	s.mux.HandleFunc("GET /api/v1/events/{subject...}", s.requireScope(auth.ScopeRead, s.handleEventsPath))
+
+	// Zustands-/Aggregationssicht eines Subjects (ADR-039): GET /api/v1/state/<subject>
+	// faltet die data-Payloads der Events des Subjects per Last-Write-Wins zu einem
+	// aktuellen Zustand. Optionen als Query-Parameter (at, type). Single-Subject —
+	// kein rekursiver Teilbaum-Read.
+	s.mux.HandleFunc("GET /api/v1/state/{subject...}", s.requireScope(auth.ScopeRead, s.handleState))
 
 	// Betriebs-Dashboard (ADR-020): statische, eingebettete Seite unter /ui plus
 	// ausgelagerte Assets (z. B. /ui/css/dashboard.css) unter /ui/<pfad>.

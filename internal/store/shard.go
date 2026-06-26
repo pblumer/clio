@@ -24,14 +24,14 @@ var eventBuckets = [][]byte{
 // dasselbe Bucket-Layout erhält wie bisher (n=1 verhaltensgleich).
 var allBuckets = [][]byte{
 	bucketEvents, bucketSubjectIdx, bucketTypeIdx, bucketMeta, bucketTypes, bucketSubjCount,
-	bucketSchemas, bucketDataIdx, bucketAuthKeys, bucketAuditLog,
+	bucketSchemas, bucketReduceSpecs, bucketDataIdx, bucketAuthKeys, bucketAuditLog,
 }
 
 // centralBuckets sind die partitionsübergreifenden Buckets — sie leben einmalig in
 // der Datei der Partition 0, nicht je Partition: mutable Steuerdaten (Schlüsselbund
-// ADR-025), append-only Audit-Log (ADR-032) und die Event-Schemas (ADR-014, global
-// je Typ registriert).
-var centralBuckets = [][]byte{bucketSchemas, bucketAuthKeys, bucketAuditLog}
+// ADR-025), append-only Audit-Log (ADR-032), die Event-Schemas (ADR-014, global je
+// Typ) und die Reduce-Specs der Zustandssicht (ADR-041, global je Prefix).
+var centralBuckets = [][]byte{bucketSchemas, bucketReduceSpecs, bucketAuthKeys, bucketAuditLog}
 
 // shard kapselt den Speicher EINER Partition (ADR-034/037, file-per-partition):
 // eine eigene bbolt-Datei mit den Event-Buckets, eigener bbolt-Sequenz und eigener

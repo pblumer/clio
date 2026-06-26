@@ -40,11 +40,15 @@ Die vollständige Architektur, Roadmap und alle Entscheidungen stehen in
 > [`docs/threat-model.md`](./docs/threat-model.md) (wogegen clio schützt — und
 > wogegen nicht).
 
-**🎉 v0.2.0 veröffentlicht** — aktuelles Release. Neu gegenüber v0.1.0 u. a.:
-benannte **API-Keys mit Scopes, Widerruf und Audit** (ADR-025), transparente
-**Wert-Kompression** der Event-Ablage (ADR-024), **skalierbare
-Speicherverwaltung** (Pre-Sizing, Headroom-Monitor, Online-Kompaktierung) sowie
-eine **Sekundär-Query auf `event.data`** mit internem Feld-Index (ADR-029).
+**🎉 v0.3.0 veröffentlicht** — aktuelles Release. Neu gegenüber v0.2.0 u. a.:
+**Aktivität & Presence** (wer online ist, wer was tut — `GET /api/v1/activity`,
+ADR-030), **persistentes Audit-Log** administrativer Aktionen (ADR-031),
+**Key-Lifecycle** mit Rotation/Ablauf/Metadaten und Offline-CLI (ADR-025),
+**Backup/Restore/Verify** als Produktfeature, **Subject-/Prefix-Scopes**
+(`read:/orders/*`, ADR-033), eine **gefaltete Zustandssicht** eines Subjects per
+REST mit Reduce-Specs und Snapshot-Cache (ADR-039/040/041) sowie die Grundlagen
+für **horizontale Skalierung** (Partitionierungs-Cluster ADR-034…038, opt-in via
+`CLIO_PARTITIONS`; Default bleibt Single-Instance).
 Fertige Single-Binaries für alle Plattformen (Linux/macOS/Windows × amd64/arm64)
 als Archive **inkl. SHA-256-Checksums** sowie ein Multi-Arch-Docker-Image liegen
 unter [Releases](https://github.com/pblumer/clio/releases/latest) bzw. in der
@@ -227,7 +231,7 @@ alles an ein GitHub-Release.
 Aus einem Release installieren (Beispiel Linux/amd64):
 
 ```bash
-VERSION=v0.2.0
+VERSION=v0.3.0
 curl -sSL -O https://github.com/pblumer/clio/releases/download/$VERSION/cliostore_${VERSION}_linux_amd64.tar.gz
 curl -sSL -O https://github.com/pblumer/clio/releases/download/$VERSION/checksums.txt
 sha256sum --check --ignore-missing checksums.txt   # Integrität prüfen
@@ -244,7 +248,7 @@ GitHub Container Registry:
 docker run --rm -p 3000:3000 \
   -e CLIO_BOOTSTRAP_ADMIN_KEY=dein-geheimnis \
   -v clio-data:/data \
-  ghcr.io/pblumer/clio:latest      # oder :v0.2.0
+  ghcr.io/pblumer/clio:latest      # oder :v0.3.0
 # Beim ersten Start wird der kid geloggt; der Schlüssel ist dann kid.secret.
 ```
 
@@ -264,8 +268,8 @@ Releases sind tag-getrieben — ein annotierter SemVer-Tag `vX.Y.Z` auf `main`
 genügt, der Rest läuft automatisch:
 
 ```bash
-git tag -a v0.2.0 -m "clio v0.2.0"
-git push origin v0.2.0
+git tag -a v0.3.0 -m "clio v0.3.0"
+git push origin v0.3.0
 ```
 
 Der Workflow [`release.yml`](.github/workflows/release.yml) baut daraufhin in
@@ -495,6 +499,70 @@ curl -N -H "Authorization: Bearer $TOKEN" \
 
 Query-Parameter: `recursive` (Default `true`), `lowerBound`, `upperBound`,
 `type` (wiederholbar), `watch=true`. Auth läuft weiter über den Bearer-Header.
+
+### Aktueller Zustand einer Entität (`GET /state/<subject>`)
+
+Ein Subject ist oft eine **Entität**, die auf dem Zeitstrahl Events erfährt. Statt
+die Historie selbst zu falten, liefert `GET /api/v1/state/<subject>` direkt den
+**aktuellen Zustand**: die `data`-Payloads aller Events des Subjects werden in
+Schreibreihenfolge per **Last-Write-Wins-Deep-Merge** zu einem Objekt verschmolzen
+(ADR-039).
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" \
+  http://127.0.0.1:3000/api/v1/state/orders/1
+# -> {"subject":"/orders/1","state":{"status":"shipped","amount":250,
+#     "customer":{"id":7,"name":"Ada Lovelace"}},
+#     "revision":"3","eventCount":3,"firstEventId":"1","lastEventId":"3",
+#     "lastEventType":"shipped","lastEventTime":"2026-06-26T..."}
+
+# Zeitreise: Stand „as of" einer Revision (inklusive obere Event-ID)
+curl -H "Authorization: Bearer $TOKEN" \
+  "http://127.0.0.1:3000/api/v1/state/orders/1?at=2"
+
+# Nur bestimmte Event-Typen in den Fold einbeziehen (wiederholbar)
+curl -H "Authorization: Bearer $TOKEN" \
+  "http://127.0.0.1:3000/api/v1/state/orders/1?type=created&type=shipped"
+```
+
+**Merge-Semantik (Default):** Objekte werden rekursiv pro Schlüssel verschmolzen;
+Skalare, Arrays und Typwechsel ersetzen den bisherigen Wert; JSON `null` ist ein
+**Tombstone** und löscht den Schlüssel. Bewusst **single-subject** (nicht
+rekursiv): ein Subject = ein Aggregat. Ein Subject ohne passende Events ergibt
+`404`. Die nackte Abfrage wird über einen In-Memory-Cache bedient und
+lazy-inkrementell fortgeschrieben (ADR-040).
+
+#### Feld-Strategien per Reduce-Spec (ADR-041)
+
+Statt reinem Last-Write-Wins lassen sich pro **Subject-Prefix** deklarative
+Feld-Strategien registrieren — für Zähler, Summen, Extremwerte, Listen und Mengen.
+Für ein Subject gilt die Spec des längsten passenden Prefix; ohne Spec bleibt es
+beim Default-Merge.
+
+```bash
+# Strategien für alle Subjects unter /orders registrieren (Scope write)
+curl -X POST http://127.0.0.1:3000/api/v1/register-reduce-spec \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"prefix":"/orders","spec":{
+        "fields":{"amount":"sum","tags":"union","log":"append","createdBy":"first"},
+        "default":"lww"}}'
+
+# Wirksame Spec für ein Subject ansehen
+curl -H "Authorization: Bearer $TOKEN" \
+  "http://127.0.0.1:3000/api/v1/read-reduce-spec?subject=/orders/1"
+
+# Spec eines Prefix löschen
+curl -X DELETE -H "Authorization: Bearer $TOKEN" \
+  "http://127.0.0.1:3000/api/v1/reduce-spec?prefix=/orders"
+```
+
+Strategien: `lww` (Default), `sum`, `min`, `max`, `append` (Array; Array-Werte
+elementweise), `union` (mengenartig, dedupliziert), `first` (ersten nicht-null-Wert
+behalten). Die `GET /state`-Antwort nennt im Feld `reducer` den wirksamen Prefix.
+Eine Reduce-Spec ist mutable **Lese-Konfiguration** (überschreib-/löschbar) — sie
+ändert nur abgeleitete Sichten, nie gespeicherte Events. Für Reduktionen jenseits
+dieses Vokabulars oder Cross-Subject-Aggregation baut man weiterhin ein externes
+Read-Model (CQRS, siehe unten).
 
 ### Events live beobachten
 

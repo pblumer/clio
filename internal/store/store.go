@@ -38,6 +38,11 @@ var (
 	bucketTypes      = []byte("types")
 	bucketSubjCount  = []byte("subj_count")
 	bucketSchemas    = []byte("schemas")
+	// bucketReduceSpecs hält die deklarativen Reduce-Specs der Zustandssicht
+	// (Subject-Prefix → JSON-Spec, ADR-041). Mutable Lese-Konfiguration (kein
+	// historisches Faktum): überschreib- und löschbar, ändert nur abgeleitete
+	// Sichten, nie gespeicherte Events. Vom Reset (ADR-022) mit-zurückgesetzt.
+	bucketReduceSpecs = []byte("reduce_specs")
 	// bucketDataIdx ist der deklarative Sekundärindex auf `event.data`-Felder
 	// (ADR-029): Schlüssel (typ, feld, wert, seq) → Event-Sequenz. Nur explizit
 	// per Options.DataIndexFields deklarierte (typ,feld)-Paare werden gepflegt.
@@ -439,17 +444,22 @@ func (s *Store) Reset() (uint64, error) {
 			return 0, fmt.Errorf("datenbank zurücksetzen: %w", err)
 		}
 	}
-	// Schemas (zentral) wie bisher mit verwerfen; Schlüsselbund/Audit-Log bleiben.
+	// Schemas und Reduce-Specs (zentral) wie bisher mit verwerfen; Schlüsselbund/
+	// Audit-Log bleiben erhalten.
 	if err := s.central.update(func(tx *bolt.Tx) error {
-		if tx.Bucket(bucketSchemas) != nil {
-			if err := tx.DeleteBucket(bucketSchemas); err != nil {
+		for _, name := range [][]byte{bucketSchemas, bucketReduceSpecs} {
+			if tx.Bucket(name) != nil {
+				if err := tx.DeleteBucket(name); err != nil {
+					return err
+				}
+			}
+			if _, err := tx.CreateBucket(name); err != nil {
 				return err
 			}
 		}
-		_, err := tx.CreateBucket(bucketSchemas)
-		return err
+		return nil
 	}); err != nil {
-		return 0, fmt.Errorf("schemas zurücksetzen: %w", err)
+		return 0, fmt.Errorf("zentrale buckets zurücksetzen: %w", err)
 	}
 	// Kompilierte Schemas verwerfen — die Registrierungen sind weg.
 	s.schemaMu.Lock()
