@@ -496,6 +496,70 @@ curl -N -H "Authorization: Bearer $TOKEN" \
 Query-Parameter: `recursive` (Default `true`), `lowerBound`, `upperBound`,
 `type` (wiederholbar), `watch=true`. Auth läuft weiter über den Bearer-Header.
 
+### Aktueller Zustand einer Entität (`GET /state/<subject>`)
+
+Ein Subject ist oft eine **Entität**, die auf dem Zeitstrahl Events erfährt. Statt
+die Historie selbst zu falten, liefert `GET /api/v1/state/<subject>` direkt den
+**aktuellen Zustand**: die `data`-Payloads aller Events des Subjects werden in
+Schreibreihenfolge per **Last-Write-Wins-Deep-Merge** zu einem Objekt verschmolzen
+(ADR-039).
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" \
+  http://127.0.0.1:3000/api/v1/state/orders/1
+# -> {"subject":"/orders/1","state":{"status":"shipped","amount":250,
+#     "customer":{"id":7,"name":"Ada Lovelace"}},
+#     "revision":"3","eventCount":3,"firstEventId":"1","lastEventId":"3",
+#     "lastEventType":"shipped","lastEventTime":"2026-06-26T..."}
+
+# Zeitreise: Stand „as of" einer Revision (inklusive obere Event-ID)
+curl -H "Authorization: Bearer $TOKEN" \
+  "http://127.0.0.1:3000/api/v1/state/orders/1?at=2"
+
+# Nur bestimmte Event-Typen in den Fold einbeziehen (wiederholbar)
+curl -H "Authorization: Bearer $TOKEN" \
+  "http://127.0.0.1:3000/api/v1/state/orders/1?type=created&type=shipped"
+```
+
+**Merge-Semantik (Default):** Objekte werden rekursiv pro Schlüssel verschmolzen;
+Skalare, Arrays und Typwechsel ersetzen den bisherigen Wert; JSON `null` ist ein
+**Tombstone** und löscht den Schlüssel. Bewusst **single-subject** (nicht
+rekursiv): ein Subject = ein Aggregat. Ein Subject ohne passende Events ergibt
+`404`. Die nackte Abfrage wird über einen In-Memory-Cache bedient und
+lazy-inkrementell fortgeschrieben (ADR-040).
+
+#### Feld-Strategien per Reduce-Spec (ADR-041)
+
+Statt reinem Last-Write-Wins lassen sich pro **Subject-Prefix** deklarative
+Feld-Strategien registrieren — für Zähler, Summen, Extremwerte, Listen und Mengen.
+Für ein Subject gilt die Spec des längsten passenden Prefix; ohne Spec bleibt es
+beim Default-Merge.
+
+```bash
+# Strategien für alle Subjects unter /orders registrieren (Scope write)
+curl -X POST http://127.0.0.1:3000/api/v1/register-reduce-spec \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"prefix":"/orders","spec":{
+        "fields":{"amount":"sum","tags":"union","log":"append","createdBy":"first"},
+        "default":"lww"}}'
+
+# Wirksame Spec für ein Subject ansehen
+curl -H "Authorization: Bearer $TOKEN" \
+  "http://127.0.0.1:3000/api/v1/read-reduce-spec?subject=/orders/1"
+
+# Spec eines Prefix löschen
+curl -X DELETE -H "Authorization: Bearer $TOKEN" \
+  "http://127.0.0.1:3000/api/v1/reduce-spec?prefix=/orders"
+```
+
+Strategien: `lww` (Default), `sum`, `min`, `max`, `append` (Array; Array-Werte
+elementweise), `union` (mengenartig, dedupliziert), `first` (ersten nicht-null-Wert
+behalten). Die `GET /state`-Antwort nennt im Feld `reducer` den wirksamen Prefix.
+Eine Reduce-Spec ist mutable **Lese-Konfiguration** (überschreib-/löschbar) — sie
+ändert nur abgeleitete Sichten, nie gespeicherte Events. Für Reduktionen jenseits
+dieses Vokabulars oder Cross-Subject-Aggregation baut man weiterhin ein externes
+Read-Model (CQRS, siehe unten).
+
 ### Events live beobachten
 
 `observe-events` liefert zuerst die passende History und hält die Verbindung

@@ -313,6 +313,92 @@ paths:
             application/problem+json:
               schema: { $ref: "#/components/schemas/ProblemDetails" }
 
+  /api/v1/register-reduce-spec:
+    post:
+      tags: [Events]
+      summary: Reduce-Spec der Zustandssicht registrieren (ADR-041)
+      description: |
+        Registriert (oder überschreibt) die deklarativen Faltungs-Strategien für
+        einen Subject-Prefix. Wirkt auf `GET /state/<subject>` für alle Subjects
+        unter dem Prefix (längster Prefix gewinnt). Scope `write`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [prefix, spec]
+              properties:
+                prefix: { type: string, example: "/orders" }
+                spec: { $ref: "#/components/schemas/ReduceSpec" }
+      responses:
+        "200":
+          description: Registriert
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  prefix: { type: string }
+                  status: { type: string, example: "registered" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/v1/read-reduce-spec:
+    get:
+      tags: [Events]
+      summary: Reduce-Specs lesen (ADR-041)
+      description: |
+        `?prefix=` liefert die exakt registrierte Spec (404, wenn keine),
+        `?subject=` die für ein Subject wirksame Spec (längster Prefix, 404 wenn
+        keine), ohne Parameter alle Specs als NDJSON. Scope `read`.
+      parameters:
+        - name: prefix
+          in: query
+          schema: { type: string }
+        - name: subject
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: Eine Spec (mit `prefix`/`subject`) bzw. NDJSON-Liste (ohne Parameter)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReduceSpecInfo" }
+            application/x-ndjson:
+              schema: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/v1/reduce-spec:
+    delete:
+      tags: [Events]
+      summary: Reduce-Spec eines Prefix löschen (ADR-041)
+      parameters:
+        - name: prefix
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Gelöscht
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  prefix: { type: string }
+                  status: { type: string, example: "deleted" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
   /api/v1/backup:
     get:
       tags: [Admin]
@@ -758,6 +844,57 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "500": { $ref: "#/components/responses/InternalError" }
 
+  /api/v1/state/{subject}:
+    get:
+      tags: [Events]
+      summary: Gefalteter aktueller Zustand eines Subjects (ADR-039)
+      description: |
+        Faltet die `data`-Payloads aller Events eines Subjects in
+        Schreibreihenfolge per **Last-Write-Wins-Deep-Merge** zu einem aktuellen
+        Zustandsobjekt — die Komfort-Antwort auf „was ist der jetzige Stand dieser
+        Entität?", ohne die Event-Historie selbst zu falten.
+
+        Semantik: Objekte werden rekursiv pro Schlüssel verschmolzen; Skalare,
+        Arrays und Typwechsel ersetzen den bisherigen Wert; JSON `null` ist ein
+        **Tombstone** (löscht den Schlüssel). Bewusst **single-subject** (nicht
+        rekursiv): ein Subject = ein Aggregat (ADR-005). Teilbaum-Aggregation über
+        mehrere Subjects bleibt einem nachgelagerten Read-Model vorbehalten
+        (ADR-029/036).
+
+        Mit `at=<eventId>` wird der historische Stand „as of" dieser inklusiven
+        Event-ID rekonstruiert (Zeitreise). 404, wenn das Subject (im gewählten
+        Fenster) keine Events hat.
+
+        Ist für das Subject eine **Reduce-Spec** registriert (ADR-041), greifen deren
+        feldweise Strategien (sum/min/max/append/union/first) statt reinem LWW; das
+        Antwortfeld `reducer` nennt den wirksamen Prefix. Die nackte Abfrage (ohne
+        at/type) wird über einen In-Memory-Cache bedient (ADR-040).
+      parameters:
+        - name: subject
+          in: path
+          required: true
+          description: Subject-Pfad, z. B. `orders/1` (führt zu Subject `/orders/1`)
+          schema: { type: string }
+          example: "orders/1"
+        - name: at
+          in: query
+          description: Inklusive obere Event-ID-Grenze — Zustand „as of" diesem Revisionsstand
+          schema: { type: string }
+        - name: type
+          in: query
+          description: Nur Events dieses Typs in den Fold einbeziehen (wiederholbar)
+          schema: { type: array, items: { type: string } }
+      responses:
+        "200":
+          description: Gefalteter Zustand des Subjects
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SubjectState" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
   /api/v1/dev/reset-database:
     post:
       tags: [Dev]
@@ -909,6 +1046,11 @@ components:
           schema: { $ref: "#/components/schemas/ProblemDetails" }
     InternalError:
       description: Interner Fehler
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/ProblemDetails" }
+    NotFound:
+      description: Nicht gefunden
       content:
         application/problem+json:
           schema: { $ref: "#/components/schemas/ProblemDetails" }
@@ -1099,6 +1241,57 @@ components:
       type: string
       description: |
         NDJSON: ein `Event`-JSON-Objekt pro Zeile (kein JSON-Array).
+    SubjectState:
+      type: object
+      description: |
+        Gefalteter aktueller Zustand eines Subjects (ADR-039). `state` ist das per
+        Last-Write-Wins-Deep-Merge über die `data`-Payloads entstandene Objekt; die
+        übrigen Felder beschreiben, welche Events die Sicht erzeugt haben.
+      properties:
+        subject: { type: string, example: "/orders/1" }
+        state:
+          type: object
+          additionalProperties: true
+          description: Das gefaltete Zustandsobjekt (verschachtelt möglich).
+        revision:
+          type: string
+          description: Event-ID des zuletzt angewandten Events (== lastEventId).
+          example: "42"
+        eventCount: { type: integer, format: int64, example: 7 }
+        firstEventId: { type: string, example: "5" }
+        lastEventId: { type: string, example: "42" }
+        lastEventType: { type: string, example: "shipped" }
+        lastEventTime: { type: string, format: date-time }
+        reducer:
+          type: string
+          description: Subject-Prefix der wirksamen Reduce-Spec (ADR-041); leer = Default-LWW.
+          example: "/orders"
+        at:
+          type: string
+          description: Gesetzte obere Event-ID-Grenze (`?at=`), falls historischer Stand.
+          example: "42"
+    ReduceSpec:
+      type: object
+      description: |
+        Deklarative Faltungs-Strategien der Zustandssicht (ADR-041). `fields` bildet
+        punkt-separierte Feldpfade auf eine Strategie ab; `default` gilt für nicht
+        genannte Felder (leer = `lww`).
+      properties:
+        default:
+          type: string
+          enum: [lww, sum, min, max, append, union, first]
+          description: Strategie für nicht in `fields` genannte Felder.
+        fields:
+          type: object
+          additionalProperties:
+            type: string
+            enum: [lww, sum, min, max, append, union, first]
+          example: { "amount": "sum", "tags": "union", "createdAt": "first" }
+    ReduceSpecInfo:
+      type: object
+      properties:
+        prefix: { type: string, example: "/orders" }
+        spec: { $ref: "#/components/schemas/ReduceSpec" }
     Precondition:
       type: object
       required: [type, payload]

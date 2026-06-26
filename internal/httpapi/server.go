@@ -48,6 +48,9 @@ type Server struct {
 
 	// activity ist die in-memory Presence-/Aktivitäts-Registry (ADR-030).
 	activity *activity.Registry
+	// stateCache memoisiert gefaltete Subject-Zustände (ADR-040): ephemerer LRU,
+	// lazy-inkrementell fortgeschrieben, beim Dev-Reset geleert.
+	stateCache *stateCache
 	// deniedThrottle begrenzt access-denied-Events je kid (ADR-030, gegen Flutung).
 	deniedMu       sync.Mutex
 	deniedLastSeen map[string]time.Time
@@ -97,6 +100,7 @@ func New(cfg config.Config, st *store.Store, logger *slog.Logger, opts ...Option
 		devMode:         cfg.DevMode,
 		eventAuthorship: cfg.EventAuthorship,
 		activity:        activity.New(cfg.PresenceWindow),
+		stateCache:      newStateCache(defaultStateCacheSize),
 		deniedLastSeen:  make(map[string]time.Time),
 		bulkImportOpen:  cfg.DevMode,
 	}
