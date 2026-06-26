@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -221,5 +222,97 @@ func TestPartitionParallelWritesRace(t *testing.T) {
 	want := uint64(writers * perWrite)
 	if c, err := st.Count(); err != nil || c != want {
 		t.Errorf("Count = %d (err %v), want %d", c, err, want)
+	}
+}
+
+// TestPartitionEventPartitionField: gelesene Events tragen das Partition-Sicht-
+// Attribut passend zur Routing-Partition (ADR-036). Bei n=1 ist es 0.
+func TestPartitionEventPartitionField(t *testing.T) {
+	st := openParts(t, 8)
+	fixedClock(st)
+	a, b, ok := twoDistinctPartitionSources(st)
+	if !ok {
+		t.Skip("keine zwei Sources in verschiedenen Partitionen")
+	}
+	const subject = "/pf"
+	for _, src := range []string{a, b, a} {
+		if _, err := st.Append([]event.Candidate{cand(src, subject, "t")}, nil); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+	}
+	var got []event.Event
+	if err := st.ReadFunc(subject, false, ReadOptions{}, func(ev event.Event) bool {
+		got = append(got, ev)
+		return true
+	}); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("got %d events, want 3", len(got))
+	}
+	for _, ev := range got {
+		want := st.PartitionOf(ev.Source)
+		if ev.Partition != want {
+			t.Errorf("Event source=%s: Partition=%d, want %d", ev.Source, ev.Partition, want)
+		}
+	}
+}
+
+// TestPartitionLowerBoundsCursorResume: ReadOptions.LowerBounds resümiert je
+// Partition korrekt — eine Partition wird ab einer Sequenz geschnitten, eine nicht
+// im Cursor enthaltene Partition liefert alles (untere Grenze 0). Das ist der
+// per-Partition-Cursor (ADR-036), die Grundlage des observe-Reconnects bei N>1.
+func TestPartitionLowerBoundsCursorResume(t *testing.T) {
+	st := openParts(t, 8)
+	fixedClock(st)
+	a, b, ok := twoDistinctPartitionSources(st)
+	if !ok {
+		t.Skip("keine zwei Sources in verschiedenen Partitionen")
+	}
+	pa, pb := st.PartitionOf(a), st.PartitionOf(b)
+	const subject = "/cur"
+	parse := func(id string) uint64 { n, _ := strconv.ParseUint(id, 10, 64); return n }
+
+	var aseqs []uint64
+	for i := 0; i < 5; i++ {
+		ea, err := st.Append([]event.Candidate{cand(a, subject, "t")}, nil)
+		if err != nil {
+			t.Fatalf("append a: %v", err)
+		}
+		aseqs = append(aseqs, parse(ea[0].ID))
+		if _, err := st.Append([]event.Candidate{cand(b, subject, "t")}, nil); err != nil {
+			t.Fatalf("append b: %v", err)
+		}
+	}
+
+	// Cursor: Partition pa ab dem 3. a-Event (inklusive); pb nicht im Cursor → alles.
+	bounds := map[int]uint64{pa: aseqs[2]}
+	var got []event.Event
+	if err := st.ReadFunc(subject, false, ReadOptions{LowerBounds: bounds}, func(ev event.Event) bool {
+		got = append(got, ev)
+		return true
+	}); err != nil {
+		t.Fatalf("read cursor: %v", err)
+	}
+
+	var aCount, bCount int
+	for _, ev := range got {
+		switch ev.Partition {
+		case pa:
+			aCount++
+			if parse(ev.ID) < aseqs[2] {
+				t.Errorf("pa-Event seq %s unter der Cursor-Grenze %d", ev.ID, aseqs[2])
+			}
+		case pb:
+			bCount++
+		default:
+			t.Errorf("unerwartete Partition %d", ev.Partition)
+		}
+	}
+	if aCount != 3 { // aseqs[2..4] => 3 Events
+		t.Errorf("pa: %d Events ab Cursor, want 3", aCount)
+	}
+	if bCount != 5 { // pb nicht im Cursor → alle 5
+		t.Errorf("pb: %d Events, want 5 (untere Grenze 0)", bCount)
 	}
 }

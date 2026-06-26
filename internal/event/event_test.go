@@ -1,6 +1,7 @@
 package event
 
 import (
+	"bytes"
 	"encoding/json"
 	"testing"
 )
@@ -133,5 +134,36 @@ func TestDataOmittedWhenEmpty(t *testing.T) {
 	}
 	if _, ok := asMap["data"]; ok {
 		t.Errorf("data sollte bei leerem wert weggelassen werden")
+	}
+}
+
+// TestPartitionFieldOmittedWhenZero: das serverseitige Partition-Sicht-Attribut
+// erscheint nur bei Partition != 0 im JSON (omitempty) — so bleibt die
+// nicht-partitionierte Ablage (n=1, immer Partition 0) byte-identisch. Und es geht
+// NICHT in den Hash ein.
+func TestPartitionFieldOmittedWhenZero(t *testing.T) {
+	base := Event{SpecVersion: SpecVersion, ID: "1", Subject: "/a", Source: "s", Type: "t", PredecessorHash: GenesisHash}
+
+	raw0, err := json.Marshal(base)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if bytes.Contains(raw0, []byte("partition")) {
+		t.Errorf("Partition 0 sollte weggelassen werden, JSON: %s", raw0)
+	}
+
+	p := base
+	p.Partition = 3
+	raw3, err := json.Marshal(p)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !bytes.Contains(raw3, []byte(`"partition":3`)) {
+		t.Errorf("Partition 3 sollte erscheinen, JSON: %s", raw3)
+	}
+
+	// Hash-Neutralität: Partition ändert den Hash nicht.
+	if ComputeHash(base) != ComputeHash(p) {
+		t.Error("Partition darf den Hash nicht beeinflussen")
 	}
 }

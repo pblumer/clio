@@ -53,6 +53,15 @@ type Event struct {
 	PredecessorHash string  `json:"predecessorhash"`
 	Hash            string  `json:"hash"`
 	Signature       *string `json:"signature"`
+
+	// Partition ist die Partition, in der dieses Event liegt (ADR-034/036). Es ist
+	// ein **serverseitig abgeleitetes Sicht-Attribut**, das NUR beim Lesen/Streamen
+	// gesetzt wird — es wird NICHT gespeichert und geht NICHT in den Hash ein
+	// (ComputeHash ignoriert es). `omitempty` lässt es bei Partition 0 weg, sodass
+	// die nicht-partitionierte Ablage (n=1) byte-identisch bleibt. Konsumenten bilden
+	// daraus zusammen mit `id` (der per-Partition-Sequenz) den per-Partition-Cursor
+	// für Reconnect/Replay (INV-P3).
+	Partition int `json:"partition,omitempty"`
 }
 
 // ComputeHash berechnet den SHA-256-Hash des Events über seinen Inhalt und den

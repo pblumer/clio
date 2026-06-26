@@ -165,13 +165,27 @@ Realisiert [ADR-036](../adr/0036-read-path-cqrs-unter-partitionierung.md):
 Scatter-Gather mit streaming k-Wege-Merge, opaker per-Partition-Cursor-Vektor,
 explizite `order`-Klassifikation (INV-P3).
 
-**Bereits mit WP-2 umgesetzt:** Der Store-Lesepfad fächert über alle Partitionen
-(`readShards`) in **per-Partition-Reihenfolge** (der ADR-036-Default `order:
+**Mit WP-2 umgesetzt:** Der Store-Lesepfad fächert über alle Partitionen
+(`readShards`) in **per-Partition-Reihenfolge** (ADR-036-Default `order:
 per-partition`) und streamt je Partition (keine Voll-Materialisierung; Limit/Abbruch
-über Partitionsgrenzen). **Noch offen (eigenes Increment):** der externe
-**Cursor-Vektor** an der HTTP-API (observe/`lowerBound`, Dashboard, Postman, das
-`projection-worker`-Beispiel) — diese laufen vorerst auf dem skalaren Vertrag mit
-per-Partition-Semantik weiter; sowie die optionale `approximated`-Zeitmischung.
+über Partitionsgrenzen).
+
+**WP-3-Rest umgesetzt (Cursor-Vektor-Kern):**
+- `event.Event.Partition` — serverseitiges Sicht-Attribut (nicht gespeichert, **nicht
+  im Hash**, `omitempty` → n=1 byte-identisch), gesetzt am Lese-/Observe-/Write-Return.
+- `ReadOptions.LowerBounds` (partition → untere Grenze) + `forShard` — **per-Partition-
+  Cursor** im Fan-out; `Store.Partitions()`/`PartitionOf` als Konsumenten-Helfer.
+- **observe** dedupliziert und resümiert per `(partition, seq)` statt skalarer ID;
+  neues optionales `cursor`-Feld (`{partition: seq}`), `lowerBound` bleibt n=1-
+  abwärtskompatibel; Cursor-Validierung (Out-of-Range → 400).
+- Tests: per-Partition-Cursor-Resume, Partition-Sicht-Attribut, `omitempty`-Hash-
+  Neutralität, HTTP-Surface (read-events trägt `partition`, Mixed-Batch/Cursor-400).
+
+**Noch offen (eigenes Increment):** Client-Adoption des Cursors — **Dashboard-JS**
+(Reconnect baut den Cursor aus `partition`/`id`), **Postman** und das
+**`projection-worker`-Beispiel** (per-Partition-Checkpoint); `run-query`-Cursor-Vektor;
+die optionale `approximated`-Zeitmischung. Bei n=1 funktionieren alle bestehenden
+Clients unverändert weiter.
 
 - **Akzeptanz:** (a) Read/Query mit `source`/Key-Filter bleibt **single-partition**
   (kein Fan-out); ohne solchen Filter fächert er korrekt über die betroffenen
