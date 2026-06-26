@@ -182,6 +182,14 @@
   .ev-data { margin: 8px 0 0; padding: 9px 11px; background: var(--bg); border: 1px solid var(--border); border-radius: 7px;
              font-family: var(--mono); font-size: 12px; white-space: pre-wrap; word-break: break-word; display: none; }
   .ev.open .ev-data { display: block; }
+  /* Fremdschlüssel-Werte in Event-Payloads sind klickbare Links auf die
+     Event-Ansicht des referenzierten Subjects (siehe dashboard.js,
+     referenceCollection). Farbe NUR über das Theme-Token --accent; Unterstreichung
+     erst bei :hover/:focus-visible, damit referenzfreie Payloads unverändert wie
+     das JSON aussehen. Keine Literalfarbe. */
+  .ev-ref { color: var(--accent); cursor: pointer; text-decoration: none; }
+  .ev-ref:hover, .ev-ref:focus-visible { text-decoration: underline; }
+  .ev-ref:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
   /* Schmale Screens: Subject auf eine eigene volle Zeile, statt es zwischen
      ID/Typ/Zeit auf ~1 Zeichen zu quetschen (sonst senkrechter Zeichen-Umbruch). */
   @media (max-width: 600px) {
