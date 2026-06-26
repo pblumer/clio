@@ -80,9 +80,9 @@ func runWorker(ctx context.Context, client *clioClient, proj *projection, subjec
 		if err != nil {
 			return err
 		}
-		log.Printf("observe: verbinde ab sequenz %d", cp+1)
+		log.Printf("observe: verbinde ab cursor %v", cp)
 
-		err = client.observe(ctx, subject, cp+1, func(ev Event) error {
+		err = client.observe(ctx, subject, cp, func(ev Event) error {
 			if err := proj.apply(ctx, ev); err != nil {
 				return err
 			}
@@ -126,11 +126,17 @@ func lagMonitor(ctx context.Context, client *clioClient, proj *projection, subje
 			if err != nil {
 				continue
 			}
-			lag := int64(total) - int64(cp)
+			// Verarbeitet = Summe der per-Partition-Cursor; Lag = Store-Spitze minus
+			// verarbeitet (über alle Partitionen). Bei n=1 ist das genau wie zuvor.
+			var processed uint64
+			for _, seq := range cp {
+				processed += seq
+			}
+			lag := int64(total) - int64(processed)
 			if lag < 0 {
 				lag = 0
 			}
-			log.Printf("lag: storeHead=%d checkpoint=%d lag=%d | %s", total, cp, lag, proj.snapshotLog(ctx))
+			log.Printf("lag: storeHead=%d processed=%d lag=%d | %s", total, processed, lag, proj.snapshotLog(ctx))
 		}
 	}
 }

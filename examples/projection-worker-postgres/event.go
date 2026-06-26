@@ -7,12 +7,16 @@ import "encoding/json"
 // importierbar (internal/), und ein Read-Model-Consumer soll ohnehin nur von der
 // öffentlichen API/dem JSON-Format abhängen — nicht von clio-Interna.
 type Event struct {
-	ID      string          `json:"id"` // global monotone Sequenz (als String)
-	Source  string          `json:"source"`
-	Subject string          `json:"subject"` // z. B. /orders/o-42
-	Type    string          `json:"type"`    // z. B. order.placed
-	Time    string          `json:"time"`
-	Data    json.RawMessage `json:"data"`
+	ID string `json:"id"` // per-Partition monotone Sequenz (als String)
+	// Partition ist die Partition des Events (ADR-034/036). clio setzt es nur bei
+	// N>1 (omitempty); bei einer Partition fehlt es im JSON → 0. Zusammen mit `id`
+	// (der per-Partition-Sequenz) bildet es den Cursor für Reconnect/Idempotenz.
+	Partition int             `json:"partition"`
+	Source    string          `json:"source"`
+	Subject   string          `json:"subject"` // z. B. /orders/o-42
+	Type      string          `json:"type"`    // z. B. order.placed
+	Time      string          `json:"time"`
+	Data      json.RawMessage `json:"data"`
 }
 
 // orderPlaced ist die Payload von order.placed.

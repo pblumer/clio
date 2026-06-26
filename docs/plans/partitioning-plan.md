@@ -181,11 +181,19 @@ per-partition`) und streamt je Partition (keine Voll-Materialisierung; Limit/Abb
 - Tests: per-Partition-Cursor-Resume, Partition-Sicht-Attribut, `omitempty`-Hash-
   Neutralität, HTTP-Surface (read-events trägt `partition`, Mixed-Batch/Cursor-400).
 
-**Noch offen (eigenes Increment):** Client-Adoption des Cursors — **Dashboard-JS**
-(Reconnect baut den Cursor aus `partition`/`id`), **Postman** und das
-**`projection-worker`-Beispiel** (per-Partition-Checkpoint); `run-query`-Cursor-Vektor;
-die optionale `approximated`-Zeitmischung. Bei n=1 funktionieren alle bestehenden
-Clients unverändert weiter.
+**Client-Adoption (teilweise):** Das **`projection-worker`-Beispiel** ist auf den
+per-Partition-Cursor umgestellt (✅): `Event.partition`, per-Partition-Checkpoint-
+Tabelle (`(name, partition) → last_seq`), `observe` mit `cursor`, Idempotenz/Guard
+**pro Partition**, Lag = Σ per-Partition. Bei `CLIO_PARTITIONS=1` ein Eintrag für
+Partition 0 — unverändert.
+
+**Noch offen (eigenes Increment):** **Dashboard-JS** (nutzt den GET-observe-Pfad
+`/api/v1/events?watch=true` mit skalarer `lastId`/`eventsTotal`; braucht den Cursor
+plus serverseitige Unterstützung wie `fromNow`/GET-Cursor — größere, schwer testbare
+UI-Änderung), **Postman** (Smoke läuft auf n=1, unkritisch), der **ADR-040-Snapshot-
+Cache** (nimmt globale Sequenz an; bei n=1 korrekt), `run-query`-Cursor-Vektor und die
+optionale `approximated`-Zeitmischung. Bei n=1 funktionieren alle bestehenden Clients
+unverändert weiter.
 
 - **Akzeptanz:** (a) Read/Query mit `source`/Key-Filter bleibt **single-partition**
   (kein Fan-out); ohne solchen Filter fächert er korrekt über die betroffenen

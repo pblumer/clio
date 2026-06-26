@@ -27,16 +27,18 @@ func newClioClient(baseURL, token string) *clioClient {
 	}
 }
 
-// observe öffnet den observe-Stream ab lowerBound (inklusive) für subject
-// (rekursiv) und ruft fn für jedes empfangene Event auf. Leerzeilen sind
-// Heartbeats (ADR-028) und werden übersprungen. Der Aufruf kehrt zurück, wenn der
-// Context abgebrochen wird, der Server die Verbindung schließt oder fn einen
-// Fehler liefert (dann wird neu verbunden — siehe runWorker).
-func (c *clioClient) observe(ctx context.Context, subject string, lowerBound uint64, fn func(Event) error) error {
+// observe öffnet den observe-Stream für subject (rekursiv) ab dem per-Partition-
+// Cursor und ruft fn für jedes empfangene Event auf. cursor ist partition → zuletzt
+// verarbeitete Sequenz; der Server resümiert je Partition ab Sequenz+1 (ADR-036).
+// Ein leerer Cursor liefert die gesamte History. Leerzeilen sind Heartbeats
+// (ADR-028) und werden übersprungen. Der Aufruf kehrt zurück, wenn der Context
+// abgebrochen wird, der Server die Verbindung schließt oder fn einen Fehler liefert
+// (dann wird neu verbunden — siehe runWorker).
+func (c *clioClient) observe(ctx context.Context, subject string, cursor map[int]uint64, fn func(Event) error) error {
 	body := map[string]any{"subject": subject, "recursive": true}
-	if lowerBound > 0 {
-		// lowerBound ist inklusive; ab der nächsten unverarbeiteten Sequenz starten.
-		body["lowerBound"] = fmt.Sprintf("%d", lowerBound)
+	if len(cursor) > 0 {
+		// Per-Partition-Cursor: der Server liest je Partition ab cursor[p]+1.
+		body["cursor"] = cursor
 	}
 	buf, _ := json.Marshal(body)
 

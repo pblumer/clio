@@ -11,7 +11,7 @@ abgefragte PostgreSQL-Tabelle `orders`. Er zeigt die fünf Kernprinzipien:
 |---|---|
 | **Event Store = Source of Truth**, Projektion = *abgeleitetes* Read Model | gesamte Architektur — Postgres hält nur abgeleiteten Zustand |
 | **Live-Konsum über `observe`** (History + Live in einem Stream) | [`clio.go`](clio.go) `observe()` |
-| **Checkpointing** (zuletzt verarbeitete globale Sequenz, persistent) | [`projection.go`](projection.go) `checkpoint()` / `projection_checkpoint`-Tabelle |
+| **Checkpointing** (zuletzt verarbeitete Sequenz **je Partition**, persistent) | [`projection.go`](projection.go) `checkpoint()` / `projection_checkpoint`-Tabelle |
 | **Idempotenz / exactly-once** (Checkpoint + Daten in *einer* Tx, Guard) | [`projection.go`](projection.go) `apply()` |
 | **Replay / vollständiger Neuaufbau** | `--rebuild` → `rebuild()` ab Sequenz 0 |
 | **Lag / Monitoring** | [`main.go`](main.go) `lagMonitor()` |
@@ -20,14 +20,18 @@ abgefragte PostgreSQL-Tabelle `orders`. Er zeigt die fünf Kernprinzipien:
 
 ## Warum das funktioniert (das Wichtige in 3 Sätzen)
 
-1. clios Events tragen eine **global monotone `id`** (Sequenz). Der Worker
-   speichert die zuletzt verarbeitete `id` als **Checkpoint** und verbindet
-   `observe` mit `lowerBound = checkpoint+1` — so bekommt er Catch-up **und** Live
-   in einem Stream.
+1. clios Events tragen eine **per-Partition monotone `id`** (Sequenz) plus das Feld
+   **`partition`** (ADR-034/036; bei einer Partition fehlt es → 0). Der Worker
+   speichert die zuletzt verarbeitete `id` **je Partition** als **Cursor** und
+   verbindet `observe` mit diesem `cursor` — der Server resümiert je Partition ab
+   Sequenz+1, also Catch-up **und** Live in einem Stream. (Bei `CLIO_PARTITIONS=1`
+   ist das genau ein Eintrag für Partition 0 — unverändert zum Single-Instance-Fall.)
 2. Jedes Event wird in **einer** Postgres-Transaktion angewendet, die **zugleich**
-   den Checkpoint fortschreibt. Stürzt der Worker ab, liefert clio bei Reconnect
-   ggf. Events erneut — der Guard (`id <= checkpoint → skip`) verwirft sie. Ergebnis:
-   **exactly-once auf dem Read Model**.
+   den Checkpoint **seiner Partition** fortschreibt. Stürzt der Worker ab, liefert
+   clio bei Reconnect ggf. Events erneut — der Guard (`seq <= Partitions-Checkpoint →
+   skip`) verwirft sie. Die Idempotenz ist **pro Partition**, weil Sequenzen nur
+   innerhalb einer Partition eindeutig sind (ADR-034). Ergebnis: **exactly-once auf
+   dem Read Model**.
 3. Weil der Event-Strom **unveränderlich und vollständig** ist, lässt sich das
    Read Model jederzeit **per Replay neu aufbauen** (`--rebuild`) — z. B. nach
    einer Schema-/Mapping-Änderung.
