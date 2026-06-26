@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<style>
+  :root{
+    --bg:#05070f; --fg:#dbe7ff; --muted:#7b88b5;
+    --accent:#22d3ee; --accent-2:#f472b6; --border:#1c2c52; --ok:#34f5c5;
+    --mono: ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{width:1280px;height:640px}
+  body{
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    color:var(--fg); position:relative; overflow:hidden;
+    background:
+      radial-gradient(1200px 600px at 82% -10%, rgba(34,211,238,.16), transparent 60%),
+      radial-gradient(1000px 700px at 8% 120%, rgba(244,114,182,.14), transparent 60%),
+      linear-gradient(160deg,#070b18 0%, #05070f 55%, #04060d 100%);
+  }
+  /* feiner Grid-Hintergrund wie im Dashboard */
+  .grid{position:absolute;inset:0;opacity:.5;
+    background-image:
+      linear-gradient(rgba(28,44,82,.45) 1px,transparent 1px),
+      linear-gradient(90deg,rgba(28,44,82,.45) 1px,transparent 1px);
+    background-size:48px 48px;
+    -webkit-mask-image:radial-gradient(900px 520px at 30% 35%,#000 30%,transparent 78%);
+            mask-image:radial-gradient(900px 520px at 30% 35%,#000 30%,transparent 78%);
+  }
+  .wrap{position:relative;height:100%;display:flex;flex-direction:column;
+    justify-content:center;padding:78px 84px}
+  .kicker{font-family:var(--mono);font-size:21px;letter-spacing:5px;
+    text-transform:uppercase;color:var(--muted)}
+  .kicker b{color:var(--accent);font-weight:600}
+  h1{font-family:var(--mono);font-weight:800;font-size:168px;line-height:.92;
+    letter-spacing:-2px;margin:8px 0 0;color:var(--accent);
+    text-shadow:0 0 36px rgba(34,211,238,.45)}
+  h1 .muse{color:var(--accent-2);font-weight:300;
+    text-shadow:0 0 30px rgba(244,114,182,.55)}
+  .sub{font-size:35px;line-height:1.35;color:var(--fg);max-width:780px;margin-top:26px;font-weight:500}
+  .sub em{color:var(--accent-2);font-style:normal}
+  .badges{display:flex;gap:14px;margin-top:40px;flex-wrap:wrap}
+  .badge{font-family:var(--mono);font-size:23px;letter-spacing:1px;
+    padding:11px 20px;border:1px solid var(--border);border-radius:11px;
+    background:rgba(22,30,54,.55);color:#cfe0ff}
+  .badge b{color:var(--accent)}
+  /* Eventstrom-Welle unten – Echo des Dashboards */
+  .wave{position:absolute;left:0;right:0;bottom:0;height:190px}
+  .url{position:absolute;right:84px;bottom:46px;font-family:var(--mono);
+    font-size:24px;color:var(--muted);letter-spacing:.5px}
+  .url b{color:var(--accent)}
+</style>
+</head>
+<body>
+  <div class="grid"></div>
+
+  <svg class="wave" viewBox="0 0 1280 190" preserveAspectRatio="none">
+    <defs>
+      <linearGradient id="g" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0" stop-color="#22d3ee" stop-opacity="0"/>
+        <stop offset="0.5" stop-color="#22d3ee" stop-opacity="0.9"/>
+        <stop offset="1" stop-color="#f472b6" stop-opacity="0.9"/>
+      </linearGradient>
+    </defs>
+    <path d="M0,150 L120,150 L150,90 L180,150 L360,150 L390,50 L420,150 L600,150 L640,110 L680,150 L860,150 L900,30 L940,150 L1120,150 L1150,100 L1180,150 L1280,150"
+      fill="none" stroke="url(#g)" stroke-width="3" stroke-linejoin="round" opacity="0.85"/>
+    <g fill="#22d3ee">
+      <circle cx="150" cy="90" r="6"/><circle cx="390" cy="50" r="6"/>
+      <circle cx="900" cy="30" r="7" fill="#f472b6"/><circle cx="640" cy="110" r="5"/>
+    </g>
+  </svg>
+
+  <div class="wrap">
+    <div class="kicker">Event&nbsp;Store · <b>Go</b> · Single&nbsp;Binary</div>
+    <h1>Clio<span class="muse">.</span></h1>
+    <div class="sub">Ein abhängigkeitsfreier Event Store in Go.
+      Events schreiben, lesen und <em>live beobachten</em> — über eine schlanke HTTP-API.</div>
+    <div class="badges">
+      <div class="badge"><b>HTTP</b>&nbsp;API</div>
+      <div class="badge"><b>Live</b>-Stream</div>
+      <div class="badge">Dashboard&nbsp;<b>/ui</b></div>
+      <div class="badge">Zero&nbsp;<b>Deps</b></div>
+    </div>
+  </div>
+
+  <div class="url">github.com/<b>pblumer/clio</b></div>
+</body>
+</html>
