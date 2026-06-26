@@ -877,7 +877,7 @@ func (s *Server) handleEventsPath(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if watch {
-		s.doObserve(w, r, subject, recursive, lower, types)
+		s.doObserve(w, r, subject, recursive, lower, nil, types)
 		return
 	}
 
@@ -917,6 +917,13 @@ type observeEventsRequest struct {
 	Recursive  bool     `json:"recursive"`
 	LowerBound string   `json:"lowerBound"`
 	Types      []string `json:"types"`
+	// Cursor ist der per-Partition-Reconnect-Cursor (ADR-036, INV-P3): partition →
+	// zuletzt empfangene Sequenz. Ist er gesetzt, resümiert der Stream je Partition
+	// ab Sequenz+1 und dedupliziert per (partition, seq) — der korrekte Weg bei N>1.
+	// Leer/weggelassen: der skalare `lowerBound` gilt (Bestandsverhalten, n=1).
+	// Clients bilden den Cursor aus dem `partition`- und `id`-Feld der empfangenen
+	// Events.
+	Cursor map[int]uint64 `json:"cursor,omitempty"`
 }
 
 // handleObserveEvents liefert zuerst die passende History und hält die
@@ -944,14 +951,31 @@ func (s *Server) handleObserveEvents(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if err := s.validateCursor(req.Cursor); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
-	s.doObserve(w, r, req.Subject, req.Recursive, lower, req.Types)
+	s.doObserve(w, r, req.Subject, req.Recursive, lower, req.Cursor, req.Types)
+}
+
+// validateCursor stellt sicher, dass die Cursor-Partitionen im gültigen Bereich
+// 0..N-1 liegen. So fängt ein Tippfehler/veralteter Client früh einen 400 statt
+// still ignoriert zu werden.
+func (s *Server) validateCursor(cursor map[int]uint64) error {
+	n := s.store.Partitions()
+	for p := range cursor {
+		if p < 0 || p >= n {
+			return fmt.Errorf("cursor: partition %d außerhalb 0..%d", p, n-1)
+		}
+	}
+	return nil
 }
 
 // doObserve liefert zuerst die passende History und hält die Verbindung dann
 // offen für Live-Events. Gemeinsamer Kern von observe-events (POST) und der
 // GET-Pfad-Route mit ?watch=true.
-func (s *Server) doObserve(w http.ResponseWriter, r *http.Request, subject string, recursive bool, lower uint64, types []string) {
+func (s *Server) doObserve(w http.ResponseWriter, r *http.Request, subject string, recursive bool, lower uint64, cursor map[int]uint64, types []string) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		writeError(w, http.StatusInternalServerError, "streaming nicht unterstützt")
@@ -1008,23 +1032,36 @@ func (s *Server) doObserve(w http.ResponseWriter, r *http.Request, subject strin
 	}
 	flusher.Flush()
 
-	// lastID = höchste bereits ausgelieferte ID. Initial untere Grenze − 1,
-	// damit Live-Events ab lowerBound und nur neuer als die History kommen.
-	var lastID uint64
-	if lower > 0 {
-		lastID = lower - 1
+	// delivered = höchste je Partition bereits ausgelieferte Sequenz (per-Partition-
+	// Cursor, ADR-036/INV-P3). Dedup und Reconnect-Resume laufen über (partition,
+	// seq) statt über eine globale skalare ID — das ist bei N>1 korrekt, bei n=1
+	// (immer Partition 0) verhaltensgleich zur bisherigen lastID-Logik.
+	delivered := make(map[int]uint64)
+	ropts := store.ReadOptions{Types: types}
+	if cursor != nil {
+		lb := make(map[int]uint64, len(cursor))
+		for p, seq := range cursor {
+			delivered[p] = seq
+			lb[p] = seq + 1 // ab der nächsten unverarbeiteten Sequenz je Partition
+		}
+		ropts.LowerBounds = lb
+	} else {
+		if lower > 0 {
+			delivered[0] = lower - 1
+		}
+		ropts.LowerBound = lower
 	}
 	// History streamend ausliefern (nicht erst komplett in den Speicher laden) —
-	// ein Reconnect mit niedrigem lowerBound über einen breiten Scope bliebe sonst
-	// ein OOM-Pfad. Live-Events, die währenddessen eintreffen, puffert der Broker
-	// im Subscriber-Channel; die ID-Deduplizierung (lastID) verwirft Dubletten.
+	// ein Reconnect über einen breiten Scope bliebe sonst ein OOM-Pfad. Live-Events,
+	// die währenddessen eintreffen, puffert der Broker im Subscriber-Channel; die
+	// (partition,seq)-Deduplizierung verwirft Dubletten.
 	var encErr error
-	histErr := s.store.ReadFunc(subject, recursive, store.ReadOptions{LowerBound: lower, Types: types}, func(ev event.Event) bool {
+	histErr := s.store.ReadFunc(subject, recursive, ropts, func(ev event.Event) bool {
 		if encErr = enc.Encode(ev); encErr != nil {
 			return false
 		}
-		if id, perr := strconv.ParseUint(ev.ID, 10, 64); perr == nil && id > lastID {
-			lastID = id
+		if seq, perr := strconv.ParseUint(ev.ID, 10, 64); perr == nil && seq > delivered[ev.Partition] {
+			delivered[ev.Partition] = seq
 		}
 		return true
 	})
@@ -1046,8 +1083,8 @@ func (s *Server) doObserve(w http.ResponseWriter, r *http.Request, subject strin
 	// und neuer als lastID ist — ohne zu flushen. Liefert false nur bei einem
 	// Schreibfehler (Client weg); der Aufrufer beendet dann den Stream.
 	encodeIfMatch := func(ev event.Event) bool {
-		id, perr := strconv.ParseUint(ev.ID, 10, 64)
-		if perr != nil || id <= lastID {
+		seq, perr := strconv.ParseUint(ev.ID, 10, 64)
+		if perr != nil || seq <= delivered[ev.Partition] {
 			return true
 		}
 		if !store.MatchSubject(ev.Subject, subject, recursive) {
@@ -1061,7 +1098,7 @@ func (s *Server) doObserve(w http.ResponseWriter, r *http.Request, subject strin
 		if err := enc.Encode(ev); err != nil {
 			return false
 		}
-		lastID = id
+		delivered[ev.Partition] = seq
 		return true
 	}
 

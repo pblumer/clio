@@ -118,6 +118,23 @@ type ReadOptions struct {
 	// Reihenfolge — abwärtskompatibel für alle Aufrufer. Das gemeinsam mit einem
 	// Limit zu nutzen liefert die jüngsten n Treffer (statt der ältesten n).
 	Descending bool
+
+	// LowerBounds ist die per-Partition untere Sequenz-Grenze für den
+	// Cross-Partition-Cursor (ADR-036, INV-P3): partition.ID → inklusive untere
+	// Grenze. Ist es gesetzt (nicht nil), wird je Partition LowerBounds[id]
+	// verwendet (0 für nicht enthaltene Partitionen) und der skalare LowerBound
+	// ignoriert. nil = nur der skalare LowerBound gilt (n=1 / Bestandsverhalten).
+	LowerBounds map[int]uint64
+}
+
+// forShard liefert die für die Partition id wirksamen ReadOptions: ist LowerBounds
+// gesetzt, ersetzt der per-Partition-Wert den skalaren LowerBound (per-Partition-
+// Cursor). ReadOptions wird by-value übergeben, daher ist die Kopie unkritisch.
+func (o ReadOptions) forShard(id partition.ID) ReadOptions {
+	if o.LowerBounds != nil {
+		o.LowerBound = o.LowerBounds[int(id)]
+	}
+	return o
 }
 
 // typeSet baut aus Types ein Lookup-Set. nil bedeutet „kein Typ-Filter".
@@ -349,6 +366,17 @@ func (s *Store) path() string { return s.central.path() }
 // partitions liefert die Partitionsanzahl.
 func (s *Store) partitions() int { return len(s.shards) }
 
+// Partitions liefert die Anzahl der Partitionen (1 = Single-Instance). Konsumenten
+// nutzen das, um zu entscheiden, ob ein per-Partition-Cursor nötig ist.
+func (s *Store) Partitions() int { return len(s.shards) }
+
+// PartitionOf liefert die Partition (0..N-1), in der Events mit diesem
+// CloudEvents-`source` liegen (ADR-034). Deterministisch über den Hash-Ring; ohne
+// DB-Zugriff. Bei n=1 immer 0.
+func (s *Store) PartitionOf(source string) int {
+	return int(s.ring.PartitionForSource(source))
+}
+
 // shardForSource bildet einen CloudEvents-`source` über den konsistenten Hash-Ring
 // (ADR-038) auf die zuständige Partition ab. Bei n=1 immer shards[0].
 func (s *Store) shardForSource(source string) *shard {
@@ -376,12 +404,16 @@ func (s *Store) eachShardView(fn func(tx *bolt.Tx) error) error {
 // sie ruft yield je Treffer. Liefert fn false (Limit/Abbruch), wird über
 // Partitionsgrenzen hinweg gestoppt. Bei n=1 ist das ein einziger view-Durchlauf —
 // identisch zum bisherigen Streaming.
-func (s *Store) readShards(fn func(event.Event) bool, read func(tx *bolt.Tx, yield func(event.Event) bool) error) error {
+func (s *Store) readShards(fn func(event.Event) bool, read func(sh *shard, tx *bolt.Tx, yield func(event.Event) bool) error) error {
 	stopped := false
+	var curID partition.ID
 	yield := func(ev event.Event) bool {
 		if stopped {
 			return false
 		}
+		// Serverseitiges Sicht-Attribut: die Partition des Events (nicht gespeichert,
+		// nicht im Hash). Konsumenten bauen daraus + `id` den per-Partition-Cursor.
+		ev.Partition = int(curID)
 		if !fn(ev) {
 			stopped = true
 			return false
@@ -389,7 +421,8 @@ func (s *Store) readShards(fn func(event.Event) bool, read func(tx *bolt.Tx, yie
 		return true
 	}
 	for _, sh := range s.shards {
-		if err := sh.view(func(tx *bolt.Tx) error { return read(tx, yield) }); err != nil {
+		curID = sh.id
+		if err := sh.view(func(tx *bolt.Tx) error { return read(sh, tx, yield) }); err != nil {
 			return err
 		}
 		if stopped {
@@ -873,7 +906,8 @@ func backfillTypeIdx(tx *bolt.Tx) error {
 // Subject-Scope und weitere Prädikate prüft der Aufrufer. So werden bei
 // Typ-Filtern nur die Treffer geladen statt der gesamte Store gescannt.
 func (s *Store) ReadByTypesFunc(types []string, opts ReadOptions, fn func(event.Event) bool) error {
-	return s.readShards(fn, func(tx *bolt.Tx, yield func(event.Event) bool) error {
+	return s.readShards(fn, func(sh *shard, tx *bolt.Tx, yield func(event.Event) bool) error {
+		opts := opts.forShard(sh.id)
 		tidx := tx.Bucket(bucketTypeIdx)
 		evts := tx.Bucket(bucketEvents)
 		if tidx == nil {
@@ -1055,7 +1089,8 @@ func decodeJSONString(raw json.RawMessage) (string, bool) {
 // Subject-Scope und das vollständige Prädikat prüft der Aufrufer — dieser Index
 // liefert eine notwendige Bedingung (Gleichheit), nie ein zu enges Ergebnis.
 func (s *Store) ReadByDataFieldFunc(typ, field, value string, opts ReadOptions, fn func(event.Event) bool) error {
-	return s.readShards(fn, func(tx *bolt.Tx, yield func(event.Event) bool) error {
+	return s.readShards(fn, func(sh *shard, tx *bolt.Tx, yield func(event.Event) bool) error {
+		opts := opts.forShard(sh.id)
 		didx := tx.Bucket(bucketDataIdx)
 		evts := tx.Bucket(bucketEvents)
 		if didx == nil {
@@ -1388,6 +1423,12 @@ func (s *Store) AppendAuthored(candidates []event.Candidate, preconditions []Pre
 		return nil, fmt.Errorf("events schreiben: %w", err)
 	}
 
+	// Partition als Sicht-Attribut auf die zurückgegebenen Events setzen (nach dem
+	// Speicher-Marshal, damit die gespeicherten Bytes partitionsfrei und bei n=1
+	// byte-identisch bleiben). Live-Observer erhalten so die Partition jedes Events.
+	for i := range events {
+		events[i].Partition = int(pid)
+	}
 	return events, nil
 }
 
@@ -1684,11 +1725,12 @@ func (s *Store) Read(query string, recursive bool, opts ReadOptions) ([]event.Ev
 // durchsetzen, ohne erst den gesamten Scope zu laden. Der Speicherbedarf bleibt
 // damit konstant, unabhängig von der Größe der Historie.
 func (s *Store) ReadFunc(query string, recursive bool, opts ReadOptions, fn func(event.Event) bool) error {
-	return s.readShards(fn, func(tx *bolt.Tx, yield func(event.Event) bool) error {
+	return s.readShards(fn, func(sh *shard, tx *bolt.Tx, yield func(event.Event) bool) error {
+		o := opts.forShard(sh.id)
 		if recursive {
-			return readRecursive(tx, query, opts, yield)
+			return readRecursive(tx, query, o, yield)
 		}
-		return readSubjectIndex(tx, query, opts, yield)
+		return readSubjectIndex(tx, query, o, yield)
 	})
 }
 
