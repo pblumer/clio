@@ -143,6 +143,7 @@ Alle Routen nutzen **POST** (außer ggf. `ping`), weil Parameter im Request-Body
 | `GET /api/v1/read-subjects` | Alle bisher beschriebenen Subjects/Streams (Anzahl); optionaler `prefix`-Query für rekursiven Scope, `tree=true` für einen hierarchischen Baum (`count`/`total`) | 3 |
 | `POST /api/v1/register-event-schema` · `GET /api/v1/read-event-schema` | JSON-Schema je Typ registrieren/lesen; Validierung beim Write (ADR-014) | 3 |
 | `GET /api/v1/events/<subject>` | Komfort-Leseroute: Subject = URL-Pfad; Optionen als Query (`recursive` (Default true), `lowerBound`, `upperBound`, `type` (wiederholbar), `watch=true` für Live). `GET /api/v1/events` = Wurzel | 3 |
+| `GET /api/v1/state/<subject>` | Gefalteter aktueller Zustand **eines** Subjects: `data`-Payloads per Last-Write-Wins-Deep-Merge zu einem Objekt verschmolzen (single-subject, nicht rekursiv; `at=<eventId>` für Zeitreise, `type` wiederholbar). Nicht-persistierte Lese-Komfortschicht, kein materialisiertes Read-Model (ADR-039) | 3 |
 | `POST /api/v1/run-query` | CEL-basierte Abfrage (Scope + Prädikat), NDJSON (ADR-017) | 4 |
 | `GET /api/v1/event-stats` | Histogramm der Eventmengen über die Zeit (nach Event-Zeit, beim Start aus der Historie aufgebaut; Start, Bucket-Breite, Zähler) — fürs `/ui`-Dashboard, ohne die Historie zu streamen | 3 |
 | `GET /openapi.yaml` · `GET /docs` | OpenAPI-3-Spec bzw. interaktive Swagger UI (eingebettet, ohne Auth) | 3 |

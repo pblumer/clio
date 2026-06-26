@@ -496,6 +496,39 @@ curl -N -H "Authorization: Bearer $TOKEN" \
 Query-Parameter: `recursive` (Default `true`), `lowerBound`, `upperBound`,
 `type` (wiederholbar), `watch=true`. Auth läuft weiter über den Bearer-Header.
 
+### Aktueller Zustand einer Entität (`GET /state/<subject>`)
+
+Ein Subject ist oft eine **Entität**, die auf dem Zeitstrahl Events erfährt. Statt
+die Historie selbst zu falten, liefert `GET /api/v1/state/<subject>` direkt den
+**aktuellen Zustand**: die `data`-Payloads aller Events des Subjects werden in
+Schreibreihenfolge per **Last-Write-Wins-Deep-Merge** zu einem Objekt verschmolzen
+(ADR-039).
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" \
+  http://127.0.0.1:3000/api/v1/state/orders/1
+# -> {"subject":"/orders/1","state":{"status":"shipped","amount":250,
+#     "customer":{"id":7,"name":"Ada Lovelace"}},
+#     "revision":"3","eventCount":3,"firstEventId":"1","lastEventId":"3",
+#     "lastEventType":"shipped","lastEventTime":"2026-06-26T..."}
+
+# Zeitreise: Stand „as of" einer Revision (inklusive obere Event-ID)
+curl -H "Authorization: Bearer $TOKEN" \
+  "http://127.0.0.1:3000/api/v1/state/orders/1?at=2"
+
+# Nur bestimmte Event-Typen in den Fold einbeziehen (wiederholbar)
+curl -H "Authorization: Bearer $TOKEN" \
+  "http://127.0.0.1:3000/api/v1/state/orders/1?type=created&type=shipped"
+```
+
+**Merge-Semantik:** Objekte werden rekursiv pro Schlüssel verschmolzen; Skalare,
+Arrays und Typwechsel ersetzen den bisherigen Wert; JSON `null` ist ein
+**Tombstone** und löscht den Schlüssel. Bewusst **single-subject** (nicht
+rekursiv): ein Subject = ein Aggregat. Der Zustand wird bei jedem Aufruf frisch
+gefaltet (nichts wird materialisiert); ein Subject ohne passende Events ergibt
+`404`. Für eigene Reduktionen (Summen, Listen) oder Cross-Subject-Aggregation baut
+man weiterhin ein externes Read-Model (CQRS, siehe unten).
+
 ### Events live beobachten
 
 `observe-events` liefert zuerst die passende History und hält die Verbindung

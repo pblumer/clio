@@ -66,6 +66,12 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/events", s.requireScope(auth.ScopeRead, s.handleEventsPath))
 	s.mux.HandleFunc("GET /api/v1/events/{subject...}", s.requireScope(auth.ScopeRead, s.handleEventsPath))
 
+	// Zustands-/Aggregationssicht eines Subjects (ADR-039): GET /api/v1/state/<subject>
+	// faltet die data-Payloads der Events des Subjects per Last-Write-Wins zu einem
+	// aktuellen Zustand. Optionen als Query-Parameter (at, type). Single-Subject —
+	// kein rekursiver Teilbaum-Read.
+	s.mux.HandleFunc("GET /api/v1/state/{subject...}", s.requireScope(auth.ScopeRead, s.handleState))
+
 	// Betriebs-Dashboard (ADR-020): statische, eingebettete Seite unter /ui plus
 	// ausgelagerte Assets (z. B. /ui/css/dashboard.css) unter /ui/<pfad>.
 	// Wie /docs bewusst ohne Auth (nicht sensibel); die Daten holt die Seite

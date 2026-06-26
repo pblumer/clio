@@ -758,6 +758,52 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "500": { $ref: "#/components/responses/InternalError" }
 
+  /api/v1/state/{subject}:
+    get:
+      tags: [Events]
+      summary: Gefalteter aktueller Zustand eines Subjects (ADR-039)
+      description: |
+        Faltet die `data`-Payloads aller Events eines Subjects in
+        Schreibreihenfolge per **Last-Write-Wins-Deep-Merge** zu einem aktuellen
+        Zustandsobjekt — die Komfort-Antwort auf „was ist der jetzige Stand dieser
+        Entität?", ohne die Event-Historie selbst zu falten.
+
+        Semantik: Objekte werden rekursiv pro Schlüssel verschmolzen; Skalare,
+        Arrays und Typwechsel ersetzen den bisherigen Wert; JSON `null` ist ein
+        **Tombstone** (löscht den Schlüssel). Bewusst **single-subject** (nicht
+        rekursiv): ein Subject = ein Aggregat (ADR-005). Teilbaum-Aggregation über
+        mehrere Subjects bleibt einem nachgelagerten Read-Model vorbehalten
+        (ADR-029/036).
+
+        Mit `at=<eventId>` wird der historische Stand „as of" dieser inklusiven
+        Event-ID rekonstruiert (Zeitreise). 404, wenn das Subject (im gewählten
+        Fenster) keine Events hat.
+      parameters:
+        - name: subject
+          in: path
+          required: true
+          description: Subject-Pfad, z. B. `orders/1` (führt zu Subject `/orders/1`)
+          schema: { type: string }
+          example: "orders/1"
+        - name: at
+          in: query
+          description: Inklusive obere Event-ID-Grenze — Zustand „as of" diesem Revisionsstand
+          schema: { type: string }
+        - name: type
+          in: query
+          description: Nur Events dieses Typs in den Fold einbeziehen (wiederholbar)
+          schema: { type: array, items: { type: string } }
+      responses:
+        "200":
+          description: Gefalteter Zustand des Subjects
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SubjectState" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
   /api/v1/dev/reset-database:
     post:
       tags: [Dev]
@@ -909,6 +955,11 @@ components:
           schema: { $ref: "#/components/schemas/ProblemDetails" }
     InternalError:
       description: Interner Fehler
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/ProblemDetails" }
+    NotFound:
+      description: Nicht gefunden
       content:
         application/problem+json:
           schema: { $ref: "#/components/schemas/ProblemDetails" }
@@ -1099,6 +1150,31 @@ components:
       type: string
       description: |
         NDJSON: ein `Event`-JSON-Objekt pro Zeile (kein JSON-Array).
+    SubjectState:
+      type: object
+      description: |
+        Gefalteter aktueller Zustand eines Subjects (ADR-039). `state` ist das per
+        Last-Write-Wins-Deep-Merge über die `data`-Payloads entstandene Objekt; die
+        übrigen Felder beschreiben, welche Events die Sicht erzeugt haben.
+      properties:
+        subject: { type: string, example: "/orders/1" }
+        state:
+          type: object
+          additionalProperties: true
+          description: Das gefaltete Zustandsobjekt (verschachtelt möglich).
+        revision:
+          type: string
+          description: Event-ID des zuletzt angewandten Events (== lastEventId).
+          example: "42"
+        eventCount: { type: integer, format: int64, example: 7 }
+        firstEventId: { type: string, example: "5" }
+        lastEventId: { type: string, example: "42" }
+        lastEventType: { type: string, example: "shipped" }
+        lastEventTime: { type: string, format: date-time }
+        at:
+          type: string
+          description: Gesetzte obere Event-ID-Grenze (`?at=`), falls historischer Stand.
+          example: "42"
     Precondition:
       type: object
       required: [type, payload]

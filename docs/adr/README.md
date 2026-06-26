@@ -75,6 +75,7 @@ Datums-Spalte: Die Bestands-ADRs in §7 tragen **kein** Einzeldatum; dort steht 
 | ADR-036 | Read-Path & CQRS unter Partitionierung (Scatter-Gather + Cursor-Vektor) | Akzeptiert | 2026-06-24 | [`0036-read-path-cqrs-unter-partitionierung.md`](./0036-read-path-cqrs-unter-partitionierung.md) |
 | ADR-037 | Storage-Engine unter Partitionierung (bbolt-Datei pro Partition) | Akzeptiert | 2026-06-24 | [`0037-storage-engine-unter-partitionierung.md`](./0037-storage-engine-unter-partitionierung.md) |
 | ADR-038 | Distribution & Consensus: Partition-Ownership, Leases & Rebalancing | Akzeptiert | 2026-06-24 | [`0038-distribution-consensus-partition-ownership.md`](./0038-distribution-consensus-partition-ownership.md) |
+| ADR-039 | Gefaltete Zustandssicht eines Subjects über REST (`GET /state/<subject>`) | Akzeptiert | 2026-06-26 | [`0039-zustandssicht-eines-subjects-ueber-rest.md`](./0039-zustandssicht-eines-subjects-ueber-rest.md) |
 
-**Nächste freie Nummer: ADR-039.** (ADR-027 ist als Folge-ADR aus ADR-026
+**Nächste freie Nummer: ADR-040.** (ADR-027 ist als Folge-ADR aus ADR-026
 reserviert, aber noch unentschieden — nicht neu vergeben.)
