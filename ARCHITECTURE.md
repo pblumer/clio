@@ -259,6 +259,19 @@ Zweites getaggtes Release (nach v0.1.0). Bündelt die Arbeit aus den Stufen 4–
 - **UI-Ausbau** — Keys-Tab (ADR-025), Storage-Headroom-/Compaction-Status im Dashboard, Eventstrom-Diagramm (Box-Zoom, Lin/Log, Source-Aufschlüsselung); Assets via `embed.FS` aus der HTML ausgelagert.
 - **Robustheit** — `run-query`-Streaming mit Default-Limit, speichergedeckelte rekursive Reads, Anti-Buffering gegen puffernde Proxies; Gesamt-Coverage > 90 %.
 
+### Release-Meilenstein v0.3.0 ✅
+
+Drittes getaggtes Release (nach v0.2.0). Bündelt Betriebs-/Sicherheits-Features, eine neue State-Lese-Schicht und die Grundlagen der horizontalen Skalierung:
+
+- **Aktivität & Presence (ADR-030)** — In-Memory-Presence-/Aktivitäts-Registry, `GET /api/v1/activity` (Scope `admin`), Auth-Lifecycle-Events (`CLIO_AUTH_EVENTS`) und ein eigener UI-Tab „Aktivität": wer ist online, wer tut was.
+- **Persistentes Audit-Log (ADR-031)** — administrative Aktionen werden nachvollziehbar protokolliert.
+- **Key-Lifecycle (ADR-025)** — Rotation, Ablauf und Metadaten benannter API-Keys plus eine Offline-CLI zur Schlüsselverwaltung.
+- **Backup / Restore / Verify** — als echtes Produktfeature statt manuellem Datei-Kopieren.
+- **Subject-/Prefix-basierte Scopes (ADR-033)** — feingranulare Berechtigungen wie `read:/orders/*`; additiv und rückwärtskompatibel zum bestehenden Scope-System.
+- **Gefaltete Zustandssicht eines Subjects per REST (ADR-039)** — Read-Model über `event.data`-Faltung, beschleunigt durch **Reduce-Specs (ADR-041)** und einen **In-Memory-Snapshot-Cache (ADR-040)**. Query erhält zudem eine optionale Sortierreihenfolge (älteste/neueste zuerst).
+- **Horizontale Skalierung — Grundlagen (ADR-034…038)** — Partitionierungsmodell, Storage-Engine pro Partition, Read-Path/CQRS und Distribution/Consensus akzeptiert (löst ADR-002/003 ab); umgesetzt ist WP-1 (konsistentes Hash-Routing in `internal/partition`). **Opt-in:** Default bleibt Single-Instance (`CLIO_PARTITIONS=1`) und ist verhaltensgleich zum bisherigen Betrieb.
+- **UI & Robustheit** — klickbare Fremdschlüssel-Links in Event-Payloads (ADR-020), Subject-Autovervollständigung im Query-Tab, lesbare Event-Zähler im Explorer, Layout-Fix bei langen Event-Typ-Namen; `observe` nutzt Burst-Flush (kein Reconnect-Flattern unter hoher Last).
+
 ---
 
 ## 7. Architecture Decision Records (ADRs)
