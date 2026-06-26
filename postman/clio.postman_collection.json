@@ -313,6 +313,59 @@
           ]
         },
         {
+          "name": "Register reduce spec",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/register-reduce-spec",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "register-reduce-spec"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"prefix\": \"/smoke/books\",\n  \"spec\": { \"fields\": { \"reads\": \"sum\" }, \"default\": \"lww\" }\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('registered', () => pm.expect(pm.response.json().status).to.eql('registered'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Read reduce spec (subject)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/read-reduce-spec?subject=/smoke/books/42",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "read-reduce-spec"],
+              "query": [{ "key": "subject", "value": "/smoke/books/42" }]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('wirksamer prefix', () => pm.expect(pm.response.json().prefix).to.eql('/smoke/books'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
           "name": "Verify (Hash-Kette)",
           "request": {
             "method": "GET",

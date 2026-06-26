@@ -37,6 +37,11 @@ var (
 	bucketTypes      = []byte("types")
 	bucketSubjCount  = []byte("subj_count")
 	bucketSchemas    = []byte("schemas")
+	// bucketReduceSpecs hält die deklarativen Reduce-Specs der Zustandssicht
+	// (Subject-Prefix → JSON-Spec, ADR-041). Mutable Lese-Konfiguration (kein
+	// historisches Faktum): überschreib- und löschbar, ändert nur abgeleitete
+	// Sichten, nie gespeicherte Events. Vom Reset (ADR-022) mit-zurückgesetzt.
+	bucketReduceSpecs = []byte("reduce_specs")
 	// bucketDataIdx ist der deklarative Sekundärindex auf `event.data`-Felder
 	// (ADR-029): Schlüssel (typ, feld, wert, seq) → Event-Sequenz. Nur explizit
 	// per Options.DataIndexFields deklarierte (typ,feld)-Paare werden gepflegt.
@@ -271,7 +276,7 @@ func OpenWithOptions(path string, opts Options) (*Store, error) {
 	}
 
 	err = db.Update(func(tx *bolt.Tx) error {
-		for _, name := range [][]byte{bucketEvents, bucketSubjectIdx, bucketTypeIdx, bucketMeta, bucketTypes, bucketSubjCount, bucketSchemas, bucketDataIdx, bucketAuthKeys, bucketAuditLog} {
+		for _, name := range [][]byte{bucketEvents, bucketSubjectIdx, bucketTypeIdx, bucketMeta, bucketTypes, bucketSubjCount, bucketSchemas, bucketReduceSpecs, bucketDataIdx, bucketAuthKeys, bucketAuditLog} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return err
 			}
@@ -433,7 +438,7 @@ func (s *Store) Reset() (uint64, error) {
 		// (ADR-025) ist mutabler Steuerungs-State (würde der Reset ihn leeren,
 		// sperrte man sich aus), und das Audit-Log (ADR-032) muss die Spur des
 		// Resets selbst überleben — beide bleiben erhalten.
-		for _, name := range [][]byte{bucketEvents, bucketSubjectIdx, bucketTypeIdx, bucketMeta, bucketTypes, bucketSubjCount, bucketSchemas, bucketDataIdx} {
+		for _, name := range [][]byte{bucketEvents, bucketSubjectIdx, bucketTypeIdx, bucketMeta, bucketTypes, bucketSubjCount, bucketSchemas, bucketReduceSpecs, bucketDataIdx} {
 			if tx.Bucket(name) != nil {
 				if err := tx.DeleteBucket(name); err != nil {
 					return err
