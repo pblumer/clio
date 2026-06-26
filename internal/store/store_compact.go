@@ -27,13 +27,18 @@ func ensureFileSize(path string, size int64) error {
 	return os.Truncate(path, size)
 }
 
-// Size liefert die aktuelle Größe der Datenbankdatei in Bytes.
+// Size liefert die Summe der Dateigrößen aller Partitionen in Bytes. Bei n=1 ist
+// das genau die eine Datei (identisch zum bisherigen Verhalten).
 func (s *Store) Size() (int64, error) {
-	info, err := os.Stat(s.path())
-	if err != nil {
-		return 0, err
+	var total int64
+	for _, sh := range s.shards {
+		n, err := sh.size()
+		if err != nil {
+			return 0, err
+		}
+		total += n
 	}
-	return info.Size(), nil
+	return total, nil
 }
 
 // DBStats beschreibt die Speicherbelegung der bbolt-Datei. Wichtig bei
@@ -59,43 +64,30 @@ type DBStats struct {
 // genutzte Umfang ist die High-Water-Mark (tx.Size = pgid*pageSize), der freie
 // Anteil stammt aus der bbolt-Freelist (FreeAlloc).
 func (s *Store) Stats() (DBStats, error) {
-	// Eine RLock über die ganze Berechnung: hält den db-Pointer stabil und
-	// vermeidet verschachteltes RLock (daher os.Stat hier inline statt via Size()).
-	s.dbMu.RLock()
-	defer s.dbMu.RUnlock()
-
-	info, err := os.Stat(s.db.Path())
-	if err != nil {
-		return DBStats{}, err
+	// Über alle Partitionen aggregieren (Bytes/Seiten summieren, Füllgrad neu
+	// berechnen). Bei n=1 ist das exakt die Statistik der einen Datei. PageSize ist
+	// für alle Partitionen identisch (zentrale Partition als Referenz).
+	var agg DBStats
+	for _, sh := range s.shards {
+		st, err := sh.stats()
+		if err != nil {
+			return DBStats{}, err
+		}
+		agg.FileBytes += st.FileBytes
+		agg.DataBytes += st.DataBytes
+		agg.UsedBytes += st.UsedBytes
+		agg.FreeBytes += st.FreeBytes
+		agg.FreePages += st.FreePages
+		// PageSize aus der zentralen Partition (für alle identisch) — aus dem unter
+		// RLock gelesenen Ergebnis, nicht über einen ungeschützten Feldzugriff.
+		if sh == s.central {
+			agg.PageSize = st.PageSize
+		}
 	}
-	fileBytes := info.Size()
-
-	var dataBytes int64
-	if err := s.db.View(func(tx *bolt.Tx) error {
-		dataBytes = tx.Size()
-		return nil
-	}); err != nil {
-		return DBStats{}, err
+	if agg.DataBytes > 0 {
+		agg.FillPercent = float64(agg.UsedBytes) / float64(agg.DataBytes) * 100
 	}
-	st := s.db.Stats()
-	freeBytes := int64(st.FreeAlloc)
-	if freeBytes > dataBytes {
-		freeBytes = dataBytes
-	}
-	used := dataBytes - freeBytes
-	var fill float64
-	if dataBytes > 0 {
-		fill = float64(used) / float64(dataBytes) * 100
-	}
-	return DBStats{
-		FileBytes:   fileBytes,
-		DataBytes:   dataBytes,
-		UsedBytes:   used,
-		FreeBytes:   freeBytes,
-		FillPercent: fill,
-		FreePages:   st.FreePageN + st.PendingPageN,
-		PageSize:    s.pageSize,
-	}, nil
+	return agg, nil
 }
 
 // Compact schreibt die Datenbank unter path defragmentiert in eine temporäre
@@ -172,20 +164,30 @@ func Compact(path string) (oldSize, newSize int64, err error) {
 // dem Wiederöffnen, falls eine Vorbelegung (CLIO_DB_INITIAL_MB) die Datei direkt
 // wieder auf die Mindestgröße bringt — daher wird sie zusätzlich gemeldet.
 func (s *Store) CompactInPlace() (oldSize, newSize int64, err error) {
-	rerr := s.reopen(func(path string) error {
-		o, n, cerr := Compact(path)
-		if cerr != nil {
-			return cerr
+	// Jede Partition einzeln online kompaktieren (eigener Reopen-Guard je Datei,
+	// ADR-037). Die gemeldeten Größen sind die Summen über alle Partitionen; bei
+	// n=1 ist es genau die eine Datei. Der letzte Compact-Zeitpunkt wird je Partition
+	// vermerkt; LastCompaction meldet den jüngsten.
+	at := s.now().UTC()
+	for _, sh := range s.shards {
+		var o, n int64
+		rerr := sh.reopen(func(path string) error {
+			oo, nn, cerr := Compact(path)
+			if cerr != nil {
+				return cerr
+			}
+			o, n = oo, nn
+			return nil
+		})
+		if rerr != nil {
+			return 0, 0, rerr
 		}
-		oldSize, newSize = o, n
-		return nil
-	})
-	if rerr != nil {
-		return 0, 0, rerr
+		oldSize += o
+		newSize += n
+		sh.lastCompactMu.Lock()
+		sh.lastCompact = &CompactionInfo{At: at, OldBytes: o, NewBytes: n}
+		sh.lastCompactMu.Unlock()
 	}
-	s.lastCompactMu.Lock()
-	s.lastCompact = &CompactionInfo{At: s.now().UTC(), OldBytes: oldSize, NewBytes: newSize}
-	s.lastCompactMu.Unlock()
 	return oldSize, newSize, nil
 }
 
@@ -204,10 +206,16 @@ type CompactionInfo struct {
 // false, wenn in dieser Laufzeit noch keiner lief (offline-Compacts laufen in
 // einem separaten Prozess und sind hier nicht sichtbar).
 func (s *Store) LastCompaction() (CompactionInfo, bool) {
-	s.lastCompactMu.Lock()
-	defer s.lastCompactMu.Unlock()
-	if s.lastCompact == nil {
-		return CompactionInfo{}, false
+	var latest CompactionInfo
+	found := false
+	for _, sh := range s.shards {
+		sh.lastCompactMu.Lock()
+		lc := sh.lastCompact
+		sh.lastCompactMu.Unlock()
+		if lc != nil && (!found || lc.At.After(latest.At)) {
+			latest = *lc
+			found = true
+		}
 	}
-	return *s.lastCompact, true
+	return latest, found
 }

@@ -50,7 +50,7 @@ func TestCompactPreservesDataAndChain(t *testing.T) {
 
 func TestCompactFailsWhileOpen(t *testing.T) {
 	st := openTemp(t)
-	if _, _, err := Compact(st.db.Path()); err == nil {
+	if _, _, err := Compact(st.central.db.Path()); err == nil {
 		t.Fatal("Compact bei offener DB sollte fehlschlagen (lock)")
 	}
 }

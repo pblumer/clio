@@ -36,13 +36,21 @@ func (s *Store) RegisterSchema(typ string, schema json.RawMessage) error {
 		return fmt.Errorf("%w: schema kompaktieren: %v", ErrSchemaValidation, err)
 	}
 
-	err = s.update(func(tx *bolt.Tx) error {
-		schemas := tx.Bucket(bucketSchemas)
-		if schemas.Get([]byte(typ)) != nil {
-			return ErrSchemaExists
-		}
+	// Existenz vorab prüfen (Schemas liegen zentral, Partition 0).
+	var exists bool
+	if err := s.central.view(func(tx *bolt.Tx) error {
+		exists = tx.Bucket(bucketSchemas).Get([]byte(typ)) != nil
+		return nil
+	}); err != nil {
+		return err
+	}
+	if exists {
+		return ErrSchemaExists
+	}
 
-		// Bestehende Events dieses Typs müssen dem Schema genügen.
+	// Bestehende Events dieses Typs in ALLEN Partitionen müssen dem Schema genügen
+	// (ein Typ kann über mehrere Partitionen verteilt sein).
+	if err := s.eachShardView(func(tx *bolt.Tx) error {
 		c := tx.Bucket(bucketEvents).Cursor()
 		for k, v := c.First(); k != nil; k, v = c.Next() {
 			var ev event.Event
@@ -56,7 +64,17 @@ func (s *Store) RegisterSchema(typ string, schema json.RawMessage) error {
 				return fmt.Errorf("%w: event %s verletzt das schema: %v", ErrSchemaValidation, ev.ID, err)
 			}
 		}
+		return nil
+	}); err != nil {
+		return err
+	}
 
+	// Schema zentral registrieren (Re-Check gegen Race in derselben Tx).
+	err = s.central.update(func(tx *bolt.Tx) error {
+		schemas := tx.Bucket(bucketSchemas)
+		if schemas.Get([]byte(typ)) != nil {
+			return ErrSchemaExists
+		}
 		return schemas.Put([]byte(typ), canonical)
 	})
 	if err != nil {

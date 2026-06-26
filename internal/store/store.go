@@ -24,6 +24,7 @@ import (
 	bolt "go.etcd.io/bbolt"
 
 	"github.com/pblumer/clio/internal/event"
+	"github.com/pblumer/clio/internal/partition"
 	"github.com/pblumer/clio/internal/query"
 )
 
@@ -76,6 +77,12 @@ const subjectSep = 0x00
 // Schreiben nicht erfüllt ist (Optimistic Concurrency). Aufrufer können dies
 // per errors.Is erkennen und z. B. auf HTTP 409 abbilden.
 var ErrPreconditionFailed = errors.New("precondition nicht erfüllt")
+
+// ErrMixedPartition wird zurückgegeben, wenn ein einzelner Append-Aufruf Events
+// mit `source`-Werten aus verschiedenen Partitionen mischt (ADR-034). Ein Aufruf
+// muss genau eine Partition treffen, damit er atomar bleibt. Aufrufer bilden dies
+// auf HTTP 400 ab. Bei n=1 kann der Fehler nie auftreten.
+var ErrMixedPartition = errors.New("alle events eines schreibvorgangs müssen zur selben partition gehören (source)")
 
 // Precondition-Typen (siehe ADR / API-Kontrakt).
 const (
@@ -176,35 +183,34 @@ type Options struct {
 	// indiziert (Default). Neu deklarierte Felder werden beim Öffnen einmalig über
 	// die vorhandenen Events nachindiziert (siehe backfillDataIdx).
 	DataIndexFields map[string][]string
+
+	// Partitions ist die Anzahl der Partitionen (ADR-034, file-per-partition
+	// ADR-037). <=1 (Default) = eine Partition = verhaltensgleich zur bisherigen
+	// nicht-partitionierten Ablage (n=1 byte-/hash-identisch). Bei N>1 wird der
+	// Event-Strom nach CloudEvents-`source` über N Dateien verteilt.
+	Partitions int
+
+	// PartitionVNodes ist die Anzahl virtueller Knoten je Partition im konsistenten
+	// Hash-Ring (ADR-038). <=0 nutzt einen sinnvollen Default. Ohne Wirkung bei
+	// Partitions<=1.
+	PartitionVNodes int
 }
 
-// Store kapselt die bbolt-Datenbank.
+// Store kapselt eine oder mehrere partitionierte bbolt-Datenbanken (ADR-034/037).
 type Store struct {
-	// dbMu schützt den db-Pointer gegen den Austausch beim Online-Reopen
-	// (Compaction/Grow, ADR-015). Jeder DB-Zugriff hält RLock für die Dauer seiner
-	// Transaktion (view/update/batch); der Reopen nimmt Lock exklusiv und wartet
-	// damit, bis alle laufenden Transaktionen fertig sind, bevor er den Pointer
-	// tauscht. RLock wird bewusst nie verschachtelt (kein reentrant RLock).
-	dbMu sync.RWMutex
-	db   *bolt.DB
+	// ring bildet einen CloudEvents-`source` deterministisch auf eine Partition ab
+	// (konsistentes Hashing, ADR-038). Bei einer Partition liefert er immer 0.
+	ring *partition.Ring
 
-	// initialMmapSize merkt sich die vorab dimensionierte Mmap-/Dateigröße, damit
-	// der Reopen (nach Compaction) sie wiederherstellt (sonst kehren die Remaps
-	// zurück und die Datei schrumpft auf Datengröße).
-	initialMmapSize int
+	// shards sind die Partitionen, indexiert nach partition.ID (0..N-1). Jede trägt
+	// eine eigene bbolt-Datei mit eigener Sequenz und eigener Hash-Kette (INV-P1).
+	// shards[0] ist zugleich die zentrale Datei (siehe central).
+	shards []*shard
 
-	// pageSize cached die (für die Lebensdauer der Datei konstante) bbolt-
-	// Seitengröße. Bewusst NICHT live über db.Info() gelesen: Info() greift ohne
-	// mmaplock auf den db.data-Pointer zu und races damit gegen einen gleichzeitigen
-	// Write, der einen Mmap-Remap (munmap/mmap) auslöst. Unter dbMu gesetzt
-	// (Open/Reopen), lesbar ohne Lock, weil unveränderlich.
-	pageSize int
-
-	// lastCompact hält den zuletzt im laufenden Betrieb durchgeführten
-	// Online-Compact (CompactInPlace), für die Anzeige im Dashboard/Betrieb.
-	// nil = in dieser Laufzeit noch keiner.
-	lastCompactMu sync.Mutex
-	lastCompact   *CompactionInfo
+	// central ist die Datei der Partition 0; sie trägt zusätzlich die zentralen,
+	// partitionsübergreifenden Buckets (Schemas, Schlüsselbund, Audit-Log). Alle
+	// zentralen Operationen (view/update) laufen über sie.
+	central *shard
 
 	now      func() time.Time
 	syncMode SyncMode
@@ -270,53 +276,42 @@ func openBolt(path string, initialMmapSize int, syncMode SyncMode) (*bolt.DB, er
 // OpenWithOptions öffnet die Datenbank mit expliziten Optionen und legt die
 // nötigen Buckets an.
 func OpenWithOptions(path string, opts Options) (*Store, error) {
-	db, err := openBolt(path, opts.InitialMmapSize, opts.SyncMode)
+	n := opts.Partitions
+	if n < 1 {
+		n = 1
+	}
+	vnodes := opts.PartitionVNodes
+	if vnodes < 1 {
+		vnodes = defaultPartitionVNodes
+	}
+	ring, err := partition.NewRing(n, vnodes)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("partition-ring: %w", err)
 	}
 
-	err = db.Update(func(tx *bolt.Tx) error {
-		for _, name := range [][]byte{bucketEvents, bucketSubjectIdx, bucketTypeIdx, bucketMeta, bucketTypes, bucketSubjCount, bucketSchemas, bucketReduceSpecs, bucketDataIdx, bucketAuthKeys, bucketAuditLog} {
-			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
-				return err
+	// Partition 0 liegt unter path und trägt zusätzlich die zentralen Buckets;
+	// weitere Partitionen in Geschwisterdateien `<path>.p<id>` (ADR-037). Bei n=1
+	// ist das exakt die bisherige Single-Datei (byte-/hash-identisch).
+	shards := make([]*shard, 0, n)
+	for id := 0; id < n; id++ {
+		sh, err := openShard(path, partition.ID(id), opts, id == 0)
+		if err != nil {
+			for _, o := range shards { // bereits geöffnete Partitionen schließen
+				_ = o.close()
 			}
+			return nil, err
 		}
-		// Backfill für Stores, die schon Events enthielten, bevor der
-		// types-Bucket eingeführt wurde (ADR-014): ist der Zähler-Bucket leer,
-		// aber existieren Events, werden die Typ-Zähler einmalig aus den
-		// vorhandenen Events rekonstruiert. Idempotent — bei neuen oder bereits
-		// gepflegten Stores ist nichts zu tun.
-		if err := backfillTypeCounts(tx); err != nil {
-			return err
-		}
-		// Ebenso den Typ-Index (Typ → Event-Sequenzen) einmalig nachbauen, wenn
-		// er leer ist, aber Events existieren (für Stores aus der Zeit vor dem
-		// Index). Beschleunigt Typ-Filter in run-query auf Index-Geschwindigkeit.
-		if err := backfillTypeIdx(tx); err != nil {
-			return err
-		}
-		// Und die Subject-Zähler (Subject → Anzahl) für die kostenbasierte
-		// Index-Wahl in run-query (ADR-023) — ebenfalls idempotenter Backfill.
-		if err := backfillSubjCount(tx); err != nil {
-			return err
-		}
-		// Neu deklarierte data-Index-Felder (ADR-029) einmalig über die Historie
-		// nachindizieren — idempotent über den covered-Marker im meta-Bucket.
-		return backfillDataIdx(tx, normalizeDataIdxFields(opts.DataIndexFields))
-	})
-	if err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("buckets anlegen: %w", err)
+		shards = append(shards, sh)
 	}
 
 	s := &Store{
-		db:              db,
-		initialMmapSize: opts.InitialMmapSize,
-		pageSize:        db.Info().PageSize, // sicher: noch keine Nebenläufigkeit
-		now:             time.Now,
-		syncMode:        opts.SyncMode,
-		schemaCache:     make(map[string]*jsonschema.Schema),
-		dataIdxFields:   normalizeDataIdxFields(opts.DataIndexFields),
+		ring:          ring,
+		shards:        shards,
+		central:       shards[0],
+		now:           time.Now,
+		syncMode:      opts.SyncMode,
+		schemaCache:   make(map[string]*jsonschema.Schema),
+		dataIdxFields: normalizeDataIdxFields(opts.DataIndexFields),
 	}
 	if opts.SigningKey != nil {
 		s.signKey = opts.SigningKey
@@ -325,6 +320,10 @@ func OpenWithOptions(path string, opts Options) (*Store, error) {
 	s.compress = opts.Compress
 	return s, nil
 }
+
+// defaultPartitionVNodes ist die Default-Anzahl virtueller Knoten je Partition,
+// wenn OpenWithOptions ohne explizite PartitionVNodes aufgerufen wird.
+const defaultPartitionVNodes = 128
 
 // PublicKey liefert den öffentlichen Signaturschlüssel, sofern Signieren aktiv
 // ist.
@@ -335,90 +334,81 @@ func (s *Store) PublicKey() (ed25519.PublicKey, bool) {
 	return s.verifyKey, true
 }
 
-// view/update/batch führen eine bbolt-Transaktion aus und halten dabei den
-// Reopen-Guard (RLock), damit der db-Pointer für die Dauer der Transaktion
-// stabil bleibt. Sie dürfen NICHT verschachtelt werden (kein reentrant RLock):
-// keine dieser Callbacks ruft eine andere tx-öffnende Store-Methode auf.
-func (s *Store) view(fn func(*bolt.Tx) error) error {
-	s.dbMu.RLock()
-	defer s.dbMu.RUnlock()
-	return s.db.View(fn)
+// view/update/batch/write/path delegieren an die zentrale Partition (shards[0]),
+// die die zentralen Buckets (Schemas, Schlüsselbund, Audit-Log) trägt. Alle
+// nicht-Event-Operationen (auth, schema, audit) laufen unverändert über sie. Bei
+// n=1 ist die zentrale Partition zugleich die einzige Event-Partition.
+func (s *Store) view(fn func(*bolt.Tx) error) error   { return s.central.view(fn) }
+func (s *Store) update(fn func(*bolt.Tx) error) error { return s.central.update(fn) }
+func (s *Store) batch(fn func(*bolt.Tx) error) error  { return s.central.batch(fn) }
+func (s *Store) write(fn func(*bolt.Tx) error) error  { return s.central.write(fn) }
+
+// path liefert den Dateipfad der zentralen Partition (Partition 0 / Basis-Pfad).
+func (s *Store) path() string { return s.central.path() }
+
+// partitions liefert die Partitionsanzahl.
+func (s *Store) partitions() int { return len(s.shards) }
+
+// shardForSource bildet einen CloudEvents-`source` über den konsistenten Hash-Ring
+// (ADR-038) auf die zuständige Partition ab. Bei n=1 immer shards[0].
+func (s *Store) shardForSource(source string) *shard {
+	return s.shards[s.ring.PartitionForSource(source)]
 }
 
-func (s *Store) update(fn func(*bolt.Tx) error) error {
-	s.dbMu.RLock()
-	defer s.dbMu.RUnlock()
-	return s.db.Update(fn)
-}
-
-func (s *Store) batch(fn func(*bolt.Tx) error) error {
-	s.dbMu.RLock()
-	defer s.dbMu.RUnlock()
-	return s.db.Batch(fn)
-}
-
-// path liefert den DB-Dateipfad unter dem Reopen-Guard (der Pointer könnte sonst
-// während eines Reopen getauscht werden).
-func (s *Store) path() string {
-	s.dbMu.RLock()
-	defer s.dbMu.RUnlock()
-	return s.db.Path()
-}
-
-// write führt eine Schreibtransaktion gemäß dem konfigurierten SyncMode aus.
-// Im Group-Commit-Modus werden gleichzeitige Aufrufe von bbolt coalesced; die
-// übergebene Funktion kann dann mehrfach aufgerufen werden und muss daher
-// idempotent sein (sie baut ihr Ergebnis bei jedem Lauf frisch auf).
-func (s *Store) write(fn func(*bolt.Tx) error) error {
-	if s.syncMode == SyncGroup {
-		return s.batch(fn)
-	}
-	return s.update(fn)
-}
-
-// reopen schließt die laufende DB, lässt optional mutate die Datei verändern
-// (z. B. defragmentieren/ersetzen) und öffnet sie unter denselben Optionen neu —
-// alles unter dem exklusiven Reopen-Guard. Er wartet damit, bis alle laufenden
-// Transaktionen fertig sind, und blockiert neue, bis der Tausch abgeschlossen
-// ist (kurze "Downtime", siehe ADR-015). Schlägt das Wiederöffnen fehl, ist der
-// Store anschließend unbrauchbar — der Fehler wird zurückgegeben.
-func (s *Store) reopen(mutate func(path string) error) error {
-	s.dbMu.Lock()
-	defer s.dbMu.Unlock()
-
-	path := s.db.Path()
-	if err := s.db.Close(); err != nil {
-		return fmt.Errorf("db schließen: %w", err)
-	}
-
-	if mutate != nil {
-		if mErr := mutate(path); mErr != nil {
-			// Mutation fehlgeschlagen: Datei (idealerweise) unverändert — DB wieder
-			// öffnen, damit der Store nutzbar bleibt, und beide Fehler melden.
-			db, oErr := openBolt(path, s.initialMmapSize, s.syncMode)
-			if oErr != nil {
-				return errors.Join(mErr, fmt.Errorf("wiederöffnen: %w", oErr))
-			}
-			s.db = db
-			s.pageSize = db.Info().PageSize
-			return mErr
+// eachShardView ruft fn in der Lese-Transaktion JEDER Partition auf (aufsteigend
+// nach Partition-ID). Der erste Fehler bricht ab. Aggregierende Leser (Count,
+// Subjects, …) summieren/vereinigen so über alle Partitionen; bei n=1 ist es ein
+// einziger view-Aufruf (verhaltensgleich).
+func (s *Store) eachShardView(fn func(tx *bolt.Tx) error) error {
+	for _, sh := range s.shards {
+		if err := sh.view(fn); err != nil {
+			return err
 		}
 	}
-
-	db, err := openBolt(path, s.initialMmapSize, s.syncMode)
-	if err != nil {
-		return fmt.Errorf("wiederöffnen: %w", err)
-	}
-	s.db = db
-	s.pageSize = db.Info().PageSize // unter Lock, keine Nebenläufigkeit
 	return nil
 }
 
-// Close schließt die Datenbank.
+// readShards führt eine ordnende Lese-Operation über alle Partitionen aus und
+// reicht jedes Event an fn weiter. Die Reihenfolge ist per-Partition (Partition 0,
+// dann 1, …) — der Default `order: per-partition` aus ADR-036/INV-P3; innerhalb
+// einer Partition gilt die strikte Sequenz-Ordnung. read(tx, yield) ist die
+// bestehende per-Partition-Leselogik (Subject-Index, rekursiv, Typ-/Daten-Index);
+// sie ruft yield je Treffer. Liefert fn false (Limit/Abbruch), wird über
+// Partitionsgrenzen hinweg gestoppt. Bei n=1 ist das ein einziger view-Durchlauf —
+// identisch zum bisherigen Streaming.
+func (s *Store) readShards(fn func(event.Event) bool, read func(tx *bolt.Tx, yield func(event.Event) bool) error) error {
+	stopped := false
+	yield := func(ev event.Event) bool {
+		if stopped {
+			return false
+		}
+		if !fn(ev) {
+			stopped = true
+			return false
+		}
+		return true
+	}
+	for _, sh := range s.shards {
+		if err := sh.view(func(tx *bolt.Tx) error { return read(tx, yield) }); err != nil {
+			return err
+		}
+		if stopped {
+			break
+		}
+	}
+	return nil
+}
+
+// Close schließt alle Partitionsdateien. Der erste Fehler wird gemeldet, die
+// übrigen werden dennoch geschlossen.
 func (s *Store) Close() error {
-	s.dbMu.Lock()
-	defer s.dbMu.Unlock()
-	return s.db.Close()
+	var firstErr error
+	for _, sh := range s.shards {
+		if err := sh.close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
 }
 
 // Reset löscht alle Events samt Indizes, Typ-Zählern, Schemas und Ketten-Kopf —
@@ -432,13 +422,32 @@ func (s *Store) Close() error {
 // die Anzahl der gelöschten Events zurück.
 func (s *Store) Reset() (uint64, error) {
 	var deleted uint64
-	err := s.update(func(tx *bolt.Tx) error {
-		deleted = tx.Bucket(bucketEvents).Sequence()
-		// Bewusst OHNE bucketAuthKeys und bucketAuditLog: der Schlüsselbund
-		// (ADR-025) ist mutabler Steuerungs-State (würde der Reset ihn leeren,
-		// sperrte man sich aus), und das Audit-Log (ADR-032) muss die Spur des
-		// Resets selbst überleben — beide bleiben erhalten.
-		for _, name := range [][]byte{bucketEvents, bucketSubjectIdx, bucketTypeIdx, bucketMeta, bucketTypes, bucketSubjCount, bucketSchemas, bucketReduceSpecs, bucketDataIdx} {
+	// Event-Buckets in JEDER Partition verwerfen und frisch anlegen. Bewusst OHNE
+	// die zentralen Buckets bucketAuthKeys/bucketAuditLog (Schlüsselbund ADR-025 ist
+	// mutabler Steuerungs-State; Audit-Log ADR-032 muss den Reset überleben) — und
+	// jede Partitionssequenz beginnt wieder bei 0.
+	for _, sh := range s.shards {
+		if err := sh.update(func(tx *bolt.Tx) error {
+			deleted += tx.Bucket(bucketEvents).Sequence()
+			for _, name := range eventBuckets {
+				if tx.Bucket(name) != nil {
+					if err := tx.DeleteBucket(name); err != nil {
+						return err
+					}
+				}
+				if _, err := tx.CreateBucket(name); err != nil {
+					return err
+				}
+			}
+			return nil
+		}); err != nil {
+			return 0, fmt.Errorf("datenbank zurücksetzen: %w", err)
+		}
+	}
+	// Schemas und Reduce-Specs (zentral) wie bisher mit verwerfen; Schlüsselbund/
+	// Audit-Log bleiben erhalten.
+	if err := s.central.update(func(tx *bolt.Tx) error {
+		for _, name := range [][]byte{bucketSchemas, bucketReduceSpecs} {
 			if tx.Bucket(name) != nil {
 				if err := tx.DeleteBucket(name); err != nil {
 					return err
@@ -449,9 +458,8 @@ func (s *Store) Reset() (uint64, error) {
 			}
 		}
 		return nil
-	})
-	if err != nil {
-		return 0, fmt.Errorf("datenbank zurücksetzen: %w", err)
+	}); err != nil {
+		return 0, fmt.Errorf("zentrale buckets zurücksetzen: %w", err)
 	}
 	// Kompilierte Schemas verwerfen — die Registrierungen sind weg.
 	s.schemaMu.Lock()
@@ -460,11 +468,12 @@ func (s *Store) Reset() (uint64, error) {
 	return deleted, nil
 }
 
-// Count liefert die Anzahl gespeicherter Events (O(1) über die bbolt-Sequenz).
+// Count liefert die Anzahl gespeicherter Events (Summe der Partitionssequenzen,
+// O(Partitionen)).
 func (s *Store) Count() (uint64, error) {
 	var n uint64
-	err := s.view(func(tx *bolt.Tx) error {
-		n = tx.Bucket(bucketEvents).Sequence()
+	err := s.eachShardView(func(tx *bolt.Tx) error {
+		n += tx.Bucket(bucketEvents).Sequence()
 		return nil
 	})
 	return n, err
@@ -476,7 +485,7 @@ func (s *Store) Count() (uint64, error) {
 // Histogramms zu bestimmen, ohne die gesamte Historie zu scannen (das eigentliche
 // Seeding läuft danach asynchron, siehe httpapi.New).
 func (s *Store) FirstEventTime() (t time.Time, ok bool, err error) {
-	err = s.view(func(tx *bolt.Tx) error {
+	err = s.eachShardView(func(tx *bolt.Tx) error {
 		k, v := tx.Bucket(bucketEvents).Cursor().First()
 		if k == nil {
 			return nil
@@ -491,7 +500,11 @@ func (s *Store) FirstEventTime() (t time.Time, ok bool, err error) {
 		if perr != nil {
 			return nil
 		}
-		t, ok = parsed.UTC(), true
+		// Globales Minimum über die Partitionen (jede Partition liefert ihr ältestes
+		// Event zuerst). Bei n=1 ist das genau dessen erstes Event.
+		if pu := parsed.UTC(); !ok || pu.Before(t) {
+			t, ok = pu, true
+		}
 		return nil
 	})
 	return t, ok, err
@@ -502,7 +515,7 @@ func (s *Store) FirstEventTime() (t time.Time, ok bool, err error) {
 // Index-Wahl in run-query (ADR-023): die Kosten eines Typ-Index-Scans.
 func (s *Store) CountByTypes(types []string) (uint64, error) {
 	var total uint64
-	err := s.view(func(tx *bolt.Tx) error {
+	err := s.eachShardView(func(tx *bolt.Tx) error {
 		b := tx.Bucket(bucketTypes)
 		for _, t := range types {
 			if v := b.Get([]byte(t)); len(v) == 8 {
@@ -525,11 +538,11 @@ func (s *Store) CountSubject(subject string, recursive bool) (uint64, error) {
 		return s.Count() // Wurzel = alle Events
 	}
 	var total uint64
-	err := s.view(func(tx *bolt.Tx) error {
+	err := s.eachShardView(func(tx *bolt.Tx) error {
 		subjc := tx.Bucket(bucketSubjCount)
 		if !recursive {
 			if v := subjc.Get([]byte(subject)); len(v) == 8 {
-				total = binary.BigEndian.Uint64(v)
+				total += binary.BigEndian.Uint64(v)
 			}
 			return nil
 		}
@@ -561,7 +574,9 @@ func (s *Store) CountSubject(subject string, recursive bool) (uint64, error) {
 // danach ab). So kann ein asynchroner Seeder eine saubere Grenze gegen
 // gleichzeitig neu geschriebene Events ziehen (maxSeq = 0 → keine Grenze).
 func (s *Store) ForEachEventTimeSource(maxSeq uint64, fn func(time.Time, string)) error {
-	return s.view(func(tx *bolt.Tx) error {
+	// Über alle Partitionen (per-Partition-Reihenfolge; für ein Histogramm
+	// ordnungsunabhängig). maxSeq wirkt pro Partition (per-Partition-Sequenz).
+	return s.eachShardView(func(tx *bolt.Tx) error {
 		c := tx.Bucket(bucketEvents).Cursor()
 		for k, v := c.First(); k != nil; k, v = c.Next() {
 			if maxSeq != 0 && binary.BigEndian.Uint64(k) > maxSeq {
@@ -608,8 +623,12 @@ type SubjectInfo struct {
 // zurückgegeben (prefix selbst und alles darunter). Prefix-Geschwister wie
 // `/booksstore` zu `/books` werden via MatchSubject ausgeschlossen.
 func (s *Store) Subjects(prefix string) ([]SubjectInfo, error) {
-	var out []SubjectInfo
-	err := s.view(func(tx *bolt.Tx) error {
+	// Über alle Partitionen aggregieren: ein Subject kann (von verschiedenen
+	// Sources) in mehreren Partitionen Events haben, daher die Zähler je Subject
+	// partitionsübergreifend summieren und am Ende sortiert ausgeben. Bei n=1 ist
+	// die Ausgabe identisch zum bisherigen Einzel-Scan.
+	counts := map[string]uint64{}
+	err := s.eachShardView(func(tx *bolt.Tx) error {
 		c := tx.Bucket(bucketSubjectIdx).Cursor()
 		var seek []byte
 		if prefix != "" {
@@ -622,7 +641,7 @@ func (s *Store) Subjects(prefix string) ([]SubjectInfo, error) {
 		)
 		flush := func() {
 			if started && (prefix == "" || MatchSubject(curSubj, prefix, true)) {
-				out = append(out, SubjectInfo{Subject: curSubj, Count: cnt})
+				counts[curSubj] += cnt
 			}
 		}
 		// Seek(nil) verhält sich wie First(). Bei gesetztem prefix bricht der
@@ -650,6 +669,11 @@ func (s *Store) Subjects(prefix string) ([]SubjectInfo, error) {
 	if err != nil {
 		return nil, err
 	}
+	out := make([]SubjectInfo, 0, len(counts))
+	for subj, cnt := range counts {
+		out = append(out, SubjectInfo{Subject: subj, Count: cnt})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Subject < out[j].Subject })
 	return out, nil
 }
 
@@ -685,33 +709,16 @@ func (s *Store) Children(parent, after string, limit int) ([]ChildInfo, bool, er
 	afterSub := []byte(after)
 	afterChild := []byte(after + "/")
 
-	var (
-		out  []ChildInfo
-		more bool
-	)
-	err := s.view(func(tx *bolt.Tx) error {
+	// Über alle Partitionen aggregieren (ein Kind-Subtree kann auf mehrere
+	// Partitionen verteilt sein), dann sortieren und seitenweise schneiden. Bei n=1
+	// ist die Ausgabe identisch zum bisherigen Einzel-Scan-mit-Limit.
+	merged := map[string]*ChildInfo{}
+	err := s.eachShardView(func(tx *bolt.Tx) error {
 		c := tx.Bucket(bucketSubjCount).Cursor()
 		seek := sp
 		if after != "" {
 			seek = afterSub
 		}
-
-		var cur *ChildInfo
-		// finalize hängt das aktuelle (vollständige) Kind an out an. Ist das Limit
-		// erreicht, ist dieses Kind das erste „darüber hinaus" → more=true, stop.
-		finalize := func() bool {
-			if cur == nil {
-				return true
-			}
-			if limit > 0 && len(out) >= limit {
-				more = true
-				return false
-			}
-			out = append(out, *cur)
-			cur = nil
-			return true
-		}
-
 		for k, v := c.Seek(seek); k != nil && hasPrefix(k, sp); k, v = c.Next() {
 			// after und dessen gesamten Teilbaum überspringen.
 			if after != "" && (bytes.Equal(k, afterSub) || hasPrefix(k, afterChild)) {
@@ -727,30 +734,42 @@ func (s *Store) Children(parent, after string, limit int) ([]ChildInfo, bool, er
 			if deeper {
 				childPath = string(k[:len(sp)+slash])
 			}
-			if cur != nil && cur.Subject != childPath {
-				if !finalize() {
-					return nil
-				}
-			}
-			if cur == nil {
-				cur = &ChildInfo{Subject: childPath}
+			ci := merged[childPath]
+			if ci == nil {
+				ci = &ChildInfo{Subject: childPath}
+				merged[childPath] = ci
 			}
 			var cnt uint64
 			if len(v) == 8 {
 				cnt = binary.BigEndian.Uint64(v)
 			}
-			cur.Total += cnt
+			ci.Total += cnt
 			if deeper {
-				cur.HasChildren = true
+				ci.HasChildren = true
 			} else {
-				cur.Count = cnt
+				ci.Count = cnt
 			}
 		}
-		finalize()
 		return nil
 	})
 	if err != nil {
 		return nil, false, err
+	}
+
+	subjects := make([]string, 0, len(merged))
+	for sub := range merged {
+		subjects = append(subjects, sub)
+	}
+	sort.Strings(subjects)
+
+	var out []ChildInfo
+	more := false
+	for _, sub := range subjects {
+		if limit > 0 && len(out) >= limit {
+			more = true // mindestens ein Kind über das Limit hinaus
+			break
+		}
+		out = append(out, *merged[sub])
 	}
 	return out, more, nil
 }
@@ -760,9 +779,9 @@ func (s *Store) Children(parent, after string, limit int) ([]ChildInfo, bool, er
 // exaktes Subject behandelt (Events direkt auf "/"), nicht als Gesamtsumme.
 func (s *Store) DirectCount(subject string) (uint64, error) {
 	var n uint64
-	err := s.view(func(tx *bolt.Tx) error {
+	err := s.eachShardView(func(tx *bolt.Tx) error {
 		if v := tx.Bucket(bucketSubjCount).Get([]byte(subject)); len(v) == 8 {
-			n = binary.BigEndian.Uint64(v)
+			n += binary.BigEndian.Uint64(v)
 		}
 		return nil
 	})
@@ -773,22 +792,31 @@ func (s *Store) DirectCount(subject string) (uint64, error) {
 // Reihenfolge (bbolt-Schlüsselordnung) samt Anzahl und ob ein Schema registriert
 // ist.
 func (s *Store) EventTypes() ([]TypeInfo, error) {
-	var out []TypeInfo
-	err := s.view(func(tx *bolt.Tx) error {
-		schemas := tx.Bucket(bucketSchemas)
+	// Typ-Zähler über alle Partitionen summieren; das Schema-Flag stammt aus den
+	// zentralen Schemas (Partition 0). Bei n=1 identisch zum bisherigen Scan.
+	counts := map[string]uint64{}
+	if err := s.eachShardView(func(tx *bolt.Tx) error {
 		c := tx.Bucket(bucketTypes).Cursor()
 		for k, v := c.First(); k != nil; k, v = c.Next() {
-			out = append(out, TypeInfo{
-				Type:      string(k),
-				Count:     binary.BigEndian.Uint64(v),
-				HasSchema: schemas.Get(k) != nil,
-			})
+			if len(v) == 8 {
+				counts[string(k)] += binary.BigEndian.Uint64(v)
+			}
 		}
 		return nil
-	})
-	if err != nil {
+	}); err != nil {
 		return nil, err
 	}
+	out := make([]TypeInfo, 0, len(counts))
+	if err := s.central.view(func(tx *bolt.Tx) error {
+		schemas := tx.Bucket(bucketSchemas)
+		for typ, cnt := range counts {
+			out = append(out, TypeInfo{Type: typ, Count: cnt, HasSchema: schemas.Get([]byte(typ)) != nil})
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Type < out[j].Type })
 	return out, nil
 }
 
@@ -845,7 +873,7 @@ func backfillTypeIdx(tx *bolt.Tx) error {
 // Subject-Scope und weitere Prädikate prüft der Aufrufer. So werden bei
 // Typ-Filtern nur die Treffer geladen statt der gesamte Store gescannt.
 func (s *Store) ReadByTypesFunc(types []string, opts ReadOptions, fn func(event.Event) bool) error {
-	return s.view(func(tx *bolt.Tx) error {
+	return s.readShards(fn, func(tx *bolt.Tx, yield func(event.Event) bool) error {
 		tidx := tx.Bucket(bucketTypeIdx)
 		evts := tx.Bucket(bucketEvents)
 		if tidx == nil {
@@ -882,7 +910,7 @@ func (s *Store) ReadByTypesFunc(types []string, opts ReadOptions, fn func(event.
 					ferr = err
 					return false
 				}
-				if ok && !fn(ev) {
+				if ok && !yield(ev) {
 					return false
 				}
 				return true
@@ -907,7 +935,7 @@ func (s *Store) ReadByTypesFunc(types []string, opts ReadOptions, fn func(event.
 			if err != nil {
 				return err
 			}
-			if ok && !fn(ev) {
+			if ok && !yield(ev) {
 				return nil
 			}
 		}
@@ -1027,7 +1055,7 @@ func decodeJSONString(raw json.RawMessage) (string, bool) {
 // Subject-Scope und das vollständige Prädikat prüft der Aufrufer — dieser Index
 // liefert eine notwendige Bedingung (Gleichheit), nie ein zu enges Ergebnis.
 func (s *Store) ReadByDataFieldFunc(typ, field, value string, opts ReadOptions, fn func(event.Event) bool) error {
-	return s.view(func(tx *bolt.Tx) error {
+	return s.readShards(fn, func(tx *bolt.Tx, yield func(event.Event) bool) error {
 		didx := tx.Bucket(bucketDataIdx)
 		evts := tx.Bucket(bucketEvents)
 		if didx == nil {
@@ -1054,7 +1082,7 @@ func (s *Store) ReadByDataFieldFunc(typ, field, value string, opts ReadOptions, 
 				ferr = fmt.Errorf("event dekodieren: %w", err)
 				return false
 			}
-			return fn(ev)
+			return yield(ev)
 		})
 		return ferr
 	})
@@ -1223,10 +1251,38 @@ func (s *Store) AppendAuthored(candidates []event.Candidate, preconditions []Pre
 		return nil, nil
 	}
 
+	// Routing nach CloudEvents-source (ADR-034): alle Candidates eines Aufrufs
+	// müssen in dieselbe Partition fallen. Gemischte Batches werden abgelehnt
+	// (ErrMixedPartition → 400), damit ein Append-Aufruf atomar in genau einer
+	// Partition bleibt (ein Append ist eine bbolt-Transaktion und kann nicht atomar
+	// über mehrere Dateien laufen). Bei n=1 ist die Partition immer 0.
+	pid := s.ring.PartitionForSource(candidates[0].Source)
+	for _, c := range candidates[1:] {
+		if s.ring.PartitionForSource(c.Source) != pid {
+			return nil, ErrMixedPartition
+		}
+	}
+	sh := s.shards[pid]
+
+	// Schema-Validierung gegen die zentralen Schemas (Partition 0), vor dem Write —
+	// Schemas leben zentral, nicht je Partition. Validierung verändert keine
+	// Event-Bytes; bei n=1 sind Hashes/Sequenzen damit identisch zum bisherigen
+	// (innerhalb der Write-Tx validierenden) Verhalten.
+	if err := s.view(func(tx *bolt.Tx) error {
+		for _, c := range candidates {
+			if err := s.validateAgainstSchema(tx, c.Type, c.Data); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+
 	now := s.now().UTC().Format(time.RFC3339Nano)
 	var events []event.Event
 
-	err := s.write(func(tx *bolt.Tx) error {
+	err := sh.write(func(tx *bolt.Tx) error {
 		// Bei Group-Commit-Retries kann diese Funktion erneut laufen — Ergebnis
 		// daher bei jedem Lauf frisch aufbauen.
 		events = make([]event.Event, 0, len(candidates))
@@ -1243,8 +1299,8 @@ func (s *Store) AppendAuthored(candidates []event.Candidate, preconditions []Pre
 		subjc := tx.Bucket(bucketSubjCount)
 		didx := tx.Bucket(bucketDataIdx)
 
-		// Kopf der Hash-Kette lesen (Genesis, falls leer). Innerhalb einer
-		// (Group-Commit-)Transaktion sehen Folgeschreiber den aktualisierten
+		// Kopf der Hash-Kette dieser Partition lesen (Genesis, falls leer). Innerhalb
+		// einer (Group-Commit-)Transaktion sehen Folgeschreiber den aktualisierten
 		// Kopf, sodass die Kette auch über coalesced Aufrufe korrekt bleibt.
 		head := event.GenesisHash
 		if h := meta.Get(metaChainHead); len(h) > 0 {
@@ -1252,11 +1308,6 @@ func (s *Store) AppendAuthored(candidates []event.Candidate, preconditions []Pre
 		}
 
 		for _, c := range candidates {
-			// Gegen ein ggf. registriertes Schema validieren (vor dem Schreiben).
-			if err := s.validateAgainstSchema(tx, c.Type, c.Data); err != nil {
-				return err
-			}
-
 			seq, err := evts.NextSequence()
 			if err != nil {
 				return err
@@ -1366,16 +1417,32 @@ type VerifyResult struct {
 // die erste Bruchstelle. Eine intakte Kette beweist, dass kein historisches
 // Event nachträglich verändert wurde (Tamper-Evidence).
 func (s *Store) Verify() (VerifyResult, error) {
-	var res VerifyResult
-	err := s.view(func(tx *bolt.Tx) error {
-		r, e := verifyChain(tx, s.verifyKey)
-		res = r
-		return e
-	})
-	if err != nil {
-		return VerifyResult{}, err
+	// Jede Partition trägt eine eigene, unabhängige Kette (INV-P1/INV-P2). Das
+	// Gesamtergebnis ist die Konjunktion: OK nur, wenn jede Partitionskette intakt
+	// ist; Count die Summe. Bei n=1 ist es exakt die bisherige Einzelketten-Prüfung
+	// (inkl. Head). Das partitionsübergreifende Anchoring der n Ketten ist Gegenstand
+	// von ADR-035 (WP-5, noch nicht umgesetzt).
+	agg := VerifyResult{OK: true, Head: event.GenesisHash}
+	for _, sh := range s.shards {
+		var r VerifyResult
+		if err := sh.view(func(tx *bolt.Tx) error {
+			rr, e := verifyChain(tx, s.verifyKey)
+			r = rr
+			return e
+		}); err != nil {
+			return VerifyResult{}, err
+		}
+		if len(s.shards) == 1 {
+			return r, nil // n=1: unverändertes Einzelergebnis
+		}
+		agg.Count += r.Count
+		if !r.OK && agg.OK {
+			agg.OK = false
+			agg.BrokenAt = fmt.Sprintf("p%d:%s", sh.id, r.BrokenAt)
+			agg.Reason = fmt.Sprintf("partition %d: %s", sh.id, r.Reason)
+		}
 	}
-	return res, nil
+	return agg, nil
 }
 
 // verifyChain rechnet die Hash-Kette über die Events einer (Lese-)Transaktion
@@ -1617,11 +1684,11 @@ func (s *Store) Read(query string, recursive bool, opts ReadOptions) ([]event.Ev
 // durchsetzen, ohne erst den gesamten Scope zu laden. Der Speicherbedarf bleibt
 // damit konstant, unabhängig von der Größe der Historie.
 func (s *Store) ReadFunc(query string, recursive bool, opts ReadOptions, fn func(event.Event) bool) error {
-	return s.view(func(tx *bolt.Tx) error {
+	return s.readShards(fn, func(tx *bolt.Tx, yield func(event.Event) bool) error {
 		if recursive {
-			return readRecursive(tx, query, opts, fn)
+			return readRecursive(tx, query, opts, yield)
 		}
-		return readSubjectIndex(tx, query, opts, fn)
+		return readSubjectIndex(tx, query, opts, yield)
 	})
 }
 

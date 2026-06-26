@@ -73,7 +73,7 @@ func TestVerifyDetectsTamper(t *testing.T) {
 	)
 
 	// Event #2 direkt verändern, ohne den Hash neu zu berechnen.
-	err := st.db.Update(func(tx *bolt.Tx) error {
+	err := st.central.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(bucketEvents)
 		raw := b.Get(seqKey(2))
 		var ev event.Event
@@ -101,7 +101,7 @@ func TestVerifyDetectsHeadMismatch(t *testing.T) {
 	st := openTemp(t)
 	appendAll(t, st, event.Candidate{Source: "s", Subject: "/a", Type: "t"})
 
-	err := st.db.Update(func(tx *bolt.Tx) error {
+	err := st.central.db.Update(func(tx *bolt.Tx) error {
 		return tx.Bucket(bucketMeta).Put(metaChainHead, []byte("deadbeef"))
 	})
 	if err != nil {

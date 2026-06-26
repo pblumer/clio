@@ -25,8 +25,22 @@ type Config struct {
 	// initialer Admin-Key erzeugt wird (löst das Henne-Ei-Problem, ADR-025).
 	BootstrapAdminKey string
 
-	// DBPath ist der Pfad zur bbolt-Datenbankdatei (ADR-006).
+	// DBPath ist der Pfad zur bbolt-Datenbankdatei (ADR-006). Bei N>1 Partitionen
+	// (siehe Partitions) ist dies die Datei der Partition 0 (zugleich Träger der
+	// zentralen Buckets); die übrigen Partitionen liegen in Geschwisterdateien
+	// `<DBPath>.p1`, `<DBPath>.p2`, … (ADR-037).
 	DBPath string
+
+	// Partitions ist die Anzahl der Partitionen, über die der Event-Strom nach
+	// CloudEvents-`source` verteilt wird (ADR-034, file-per-partition ADR-037).
+	// Default 1 = Single-Instance, verhaltensgleich zur nicht-partitionierten
+	// Ablage (CLIO_PARTITIONS; ARCHITECTURE.md §4.1: Skalierung ist opt-in).
+	Partitions int
+
+	// PartitionVNodes ist die Anzahl virtueller Knoten je Partition im
+	// konsistenten Hash-Ring (CLIO_PARTITION_VNODES). Steuert nur die
+	// Gleichverteilung; ohne Wirkung bei Partitions==1. Default 128.
+	PartitionVNodes int
 
 	// DBInitialMB legt die anfängliche Mmap-Größe der bbolt-Datei in MiB fest
 	// (CLIO_DB_INITIAL_MB). bbolt mappt die Datei beim Wachsen neu und hält dabei
@@ -147,6 +161,8 @@ const (
 	envToken     = "CLIO_API_TOKEN"
 	envBootstrap = "CLIO_BOOTSTRAP_ADMIN_KEY"
 	envDBPath    = "CLIO_DB_PATH"
+	envPartition = "CLIO_PARTITIONS"
+	envPartVNode = "CLIO_PARTITION_VNODES"
 	envDBInitMB  = "CLIO_DB_INITIAL_MB"
 	envDBMonInt  = "CLIO_DB_MONITOR_INTERVAL"
 	envDBGrowPct = "CLIO_DB_GROW_THRESHOLD_PCT"
@@ -179,6 +195,12 @@ const (
 	defaultGrowPct        = 80
 	defaultCompactH       = 6
 	maxCompactH           = 168 // eine Woche
+
+	// Partitionierung (ADR-034/037).
+	defaultPartitions = 1
+	maxPartitions     = 4096 // großzügiger Schutz gegen Tippfehler / FD-Erschöpfung
+	defaultVNodes     = 128
+	maxVNodes         = 1 << 16
 )
 
 // validSync enthält die erlaubten Werte für CLIO_SYNC.
@@ -196,6 +218,8 @@ func FromEnv() (Config, error) {
 		APIToken:             os.Getenv(envToken),
 		BootstrapAdminKey:    os.Getenv(envBootstrap),
 		DBPath:               getenvDefault(envDBPath, defaultDBPath),
+		Partitions:           parseIntDefault(envPartition, defaultPartitions, 1, maxPartitions),
+		PartitionVNodes:      parseIntDefault(envPartVNode, defaultVNodes, 1, maxVNodes),
 		DBInitialMB:          parseIntDefault(envDBInitMB, 0, 0, maxInitMB),
 		DBGrowThresholdPct:   parseIntDefault(envDBGrowPct, defaultGrowPct, 1, 99),
 		DBCompactEnabled:     parseBoolDefault(envDBCompact, false),

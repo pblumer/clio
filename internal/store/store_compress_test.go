@@ -141,7 +141,7 @@ func eventValueBytes(t *testing.T, name string, compress bool, cands []event.Can
 	}
 
 	var total int64
-	err = st.db.View(func(tx *bolt.Tx) error {
+	err = st.central.db.View(func(tx *bolt.Tx) error {
 		c := tx.Bucket(bucketEvents).Cursor()
 		for k, v := c.First(); k != nil; k, v = c.Next() {
 			total += int64(len(v))

@@ -102,6 +102,10 @@ func (s *Server) handleDevBulkImportEvents(w http.ResponseWriter, r *http.Reques
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		if errors.Is(err, store.ErrMixedPartition) {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		s.logger.Error("dev bulk-import fehlgeschlagen", "err", err)
 		writeError(w, http.StatusInternalServerError, "interner fehler beim schreiben")
 		return

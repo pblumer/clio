@@ -681,7 +681,7 @@ func TestAppendMarshalError(t *testing.T) {
 func TestReadSubjectInconsistentIndex(t *testing.T) {
 	st := openTemp(t)
 	const seq = 999
-	err := st.db.Update(func(tx *bolt.Tx) error {
+	err := st.central.db.Update(func(tx *bolt.Tx) error {
 		return tx.Bucket(bucketSubjectIdx).Put(subjectKey("/x", seq), seqKey(seq))
 	})
 	if err != nil {
@@ -698,7 +698,7 @@ func TestReadSubjectInconsistentIndex(t *testing.T) {
 func TestReadSubjectDecodeError(t *testing.T) {
 	st := openTemp(t)
 	const seq = 500
-	err := st.db.Update(func(tx *bolt.Tx) error {
+	err := st.central.db.Update(func(tx *bolt.Tx) error {
 		if err := tx.Bucket(bucketEvents).Put(seqKey(seq), []byte("kein json")); err != nil {
 			return err
 		}
@@ -717,7 +717,7 @@ func TestReadSubjectDecodeError(t *testing.T) {
 // einen Fehler liefern.
 func TestReadRecursiveDecodeError(t *testing.T) {
 	st := openTemp(t)
-	err := st.db.Update(func(tx *bolt.Tx) error {
+	err := st.central.db.Update(func(tx *bolt.Tx) error {
 		return tx.Bucket(bucketEvents).Put(seqKey(1), []byte("kein json"))
 	})
 	if err != nil {
@@ -881,7 +881,7 @@ func TestSubjCountBackfill(t *testing.T) {
 		event.Candidate{Source: "s", Subject: "/movies/7", Type: "y"},
 	)
 	// Alt-DB simulieren: subj_count-Bucket leeren (als gäbe es ihn noch nicht).
-	if err := st.db.Update(func(tx *bolt.Tx) error {
+	if err := st.central.db.Update(func(tx *bolt.Tx) error {
 		if err := tx.DeleteBucket(bucketSubjCount); err != nil {
 			return err
 		}

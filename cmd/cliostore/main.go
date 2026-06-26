@@ -132,7 +132,13 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		return err
 	}
 
-	opts := store.Options{SyncMode: syncMode(cfg.Sync), Compress: cfg.Compress, DataIndexFields: cfg.DataIndexFields}
+	opts := store.Options{
+		SyncMode:        syncMode(cfg.Sync),
+		Compress:        cfg.Compress,
+		DataIndexFields: cfg.DataIndexFields,
+		Partitions:      cfg.Partitions,
+		PartitionVNodes: cfg.PartitionVNodes,
+	}
 	if cfg.DBInitialMB > 0 {
 		opts.InitialMmapSize = cfg.DBInitialMB << 20
 	}
@@ -155,7 +161,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 			logger.Error("store schließen fehlgeschlagen", "err", err)
 		}
 	}()
-	logger.Info("store geöffnet", "path", cfg.DBPath, "sync", cfg.Sync, "signing", signing, "compress", cfg.Compress, "initialMB", cfg.DBInitialMB)
+	logger.Info("store geöffnet", "path", cfg.DBPath, "sync", cfg.Sync, "signing", signing, "compress", cfg.Compress, "initialMB", cfg.DBInitialMB, "partitions", cfg.Partitions)
 
 	// Auth-Material sicherstellen (ADR-025): bei leerem Schlüsselbund aus dem
 	// Bootstrap-/Legacy-ENV einen Admin-Key anlegen, sonst Start verweigern.

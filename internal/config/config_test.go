@@ -103,6 +103,46 @@ func TestFromEnvDBInitialMB(t *testing.T) {
 	}
 }
 
+func TestFromEnvPartitions(t *testing.T) {
+	cases := []struct {
+		name      string
+		val       string
+		wantParts int
+	}{
+		{"default leer -> 1", "", defaultPartitions},
+		{"gesetzt", "8", 8},
+		{"unlesbar -> default", "viele", defaultPartitions},
+		{"null -> auf min 1 geklemmt", "0", 1},
+		{"negativ -> auf min 1 geklemmt", "-3", 1},
+		{"über max -> auf max geklemmt", strconv.Itoa(maxPartitions + 1), maxPartitions},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(envToken, "tok")
+			t.Setenv(envPartition, tc.val)
+			cfg, err := FromEnv()
+			if err != nil {
+				t.Fatalf("unerwarteter fehler: %v", err)
+			}
+			if cfg.Partitions != tc.wantParts {
+				t.Errorf("Partitions = %d, want %d", cfg.Partitions, tc.wantParts)
+			}
+		})
+	}
+}
+
+func TestFromEnvPartitionVNodesDefault(t *testing.T) {
+	t.Setenv(envToken, "tok")
+	t.Setenv(envPartVNode, "")
+	cfg, err := FromEnv()
+	if err != nil {
+		t.Fatalf("unerwarteter fehler: %v", err)
+	}
+	if cfg.PartitionVNodes != defaultVNodes {
+		t.Errorf("PartitionVNodes = %d, want %d", cfg.PartitionVNodes, defaultVNodes)
+	}
+}
+
 func TestFromEnvDBMonitorInterval(t *testing.T) {
 	t.Run("default", func(t *testing.T) {
 		t.Setenv(envToken, "tok")

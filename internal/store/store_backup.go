@@ -31,6 +31,13 @@ var ErrTargetExists = errors.New("ziel existiert bereits (mit --force überschre
 // clio-Datenbank ist (der events-Bucket fehlt).
 var ErrInvalidBackup = errors.New("keine gültige clio-datenbank (events-bucket fehlt)")
 
+// ErrBackupMultiPartition meldet, dass das store-weite Online-Backup bei mehr als
+// einer Partition (noch) nicht unterstützt wird: ein einzelner bbolt-Snapshot deckt
+// nur eine Datei ab. Der konsistente Snapshot über n Partitionsdateien ist ein
+// offener Punkt aus ADR-035/037 (WP-5). Bei n=1 (Default) greift die Einschränkung
+// nie.
+var ErrBackupMultiPartition = errors.New("store-weites backup über mehrere partitionen ist noch nicht unterstützt (nur n=1)")
+
 // BackupResult fasst das Ergebnis eines Backups zusammen. Bytes ist die Größe des
 // geschriebenen Snapshots, Events die Anzahl enthaltener Events und Head der Kopf
 // der Hash-Kette — alle drei stammen aus derselben Read-Transaktion wie der
@@ -74,6 +81,9 @@ func backupTx(tx *bolt.Tx, w io.Writer) (BackupResult, error) {
 // Schreiber (MVCC). Das ist der echte „Hot Backup"-Pfad — genutzt vom
 // HTTP-Endpunkt `GET /api/v1/backup`.
 func (s *Store) Backup(w io.Writer) (BackupResult, error) {
+	if s.partitions() > 1 {
+		return BackupResult{}, ErrBackupMultiPartition
+	}
 	var res BackupResult
 	err := s.view(func(tx *bolt.Tx) error {
 		r, e := backupTx(tx, w)

@@ -123,10 +123,27 @@ Konsistentes Hashing + Key-Ableitung als reines Paket.
 - **Umgesetzt:** `internal/partition` (`KeyFromSource`, `Ring`/`NewRing`,
   `Partition`/`PartitionForSource`, `Rebalance`); `make lint`/`test`/`race` grün.
 
-### WP-2 — Per-Partition-Writer & -Kette (Storage: ADR-037)
+### WP-2 — Per-Partition-Writer & -Kette (Storage: ADR-037) — ✅ KERN UMGESETZT
 
-Store-Kern auf n Ketten/Sequenzen umstellen; Storage-Substrat = **eine bbolt-Datei
+Store-Kern auf n Ketten/Sequenzen umgestellt; Storage-Substrat = **eine bbolt-Datei
 pro Partition** (ADR-037). Default `CLIO_PARTITIONS=1` = heutiges Verhalten.
+
+**Umgesetzt:** `internal/store/shard.go` (Partition = eigene bbolt-Datei, eigene
+Sequenz/Kette); Partition 0 = Basis-Datei + zentrale Buckets (Schemas/Schlüsselbund/
+Audit-Log), weitere Partitionen als `<db>.p<id>`. `AppendAuthored` routet nach
+`source`, lehnt Mixed-Batches ab (`ErrMixedPartition` → 400); Schema-Validierung
+gegen die zentralen Schemas. Alle Aggregat-/Lese-/Verify-Methoden fächern über die
+Partitionen (per-Partition-Reihenfolge, INV-P3-Default). Config `CLIO_PARTITIONS`/
+`CLIO_PARTITION_VNODES`. Tests (`store_partition_test.go`): n=1-Identität, Routing,
+per-Partition-`Verify`, Mixed-Batch-400, Fan-out-Read, paralleler Race-Test. `make
+lint`/`test`/`race` grün.
+
+**Bewusst zurückgestellt (Folge-Increments, dokumentiert):** (e) **Handle-Pool**
+(lazy open/close, LRU) — derzeit bleiben alle Partitionen offen (einfach & sicher);
+**store-weites Backup** über n Dateien ist bei N>1 gesperrt (`ErrBackupMultiPartition`,
+n=1 unverändert) → ADR-035-Snapshot-Punkt; der **Skalierungs-Benchmark** (n Writer >
+1) ist noch nicht als CI-Bench hinterlegt. (f) Die `storage-scaling-plan`-Hebel wirken
+bereits pro Partitionsdatei (`InitialMmapSize`/Compaction je Datei).
 
 - **Akzeptanz:** (a) Mit `CLIO_PARTITIONS=1` sind Hashes/Sequenzen **bit-identisch**
   zum Verhalten vor der Umstellung (Regressions-Golden-Test) — eine Datei, ein
@@ -142,11 +159,19 @@ pro Partition** (ADR-037). Default `CLIO_PARTITIONS=1` = heutiges Verhalten.
   (`InitialMmapSize`-Vorab-Mmap, Headroom-Monitor, Online-Compaction) wirken pro
   Partitionsdatei.
 
-### WP-3 — Read-Path, Scatter-Gather & Cursor (ADR-036, braucht WP-0)
+### WP-3 — Read-Path, Scatter-Gather & Cursor (ADR-036, braucht WP-0) — 🟡 TEILWEISE
 
 Realisiert [ADR-036](../adr/0036-read-path-cqrs-unter-partitionierung.md):
 Scatter-Gather mit streaming k-Wege-Merge, opaker per-Partition-Cursor-Vektor,
 explizite `order`-Klassifikation (INV-P3).
+
+**Bereits mit WP-2 umgesetzt:** Der Store-Lesepfad fächert über alle Partitionen
+(`readShards`) in **per-Partition-Reihenfolge** (der ADR-036-Default `order:
+per-partition`) und streamt je Partition (keine Voll-Materialisierung; Limit/Abbruch
+über Partitionsgrenzen). **Noch offen (eigenes Increment):** der externe
+**Cursor-Vektor** an der HTTP-API (observe/`lowerBound`, Dashboard, Postman, das
+`projection-worker`-Beispiel) — diese laufen vorerst auf dem skalaren Vertrag mit
+per-Partition-Semantik weiter; sowie die optionale `approximated`-Zeitmischung.
 
 - **Akzeptanz:** (a) Read/Query mit `source`/Key-Filter bleibt **single-partition**
   (kein Fan-out); ohne solchen Filter fächert er korrekt über die betroffenen

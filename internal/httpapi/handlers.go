@@ -618,6 +618,10 @@ func (s *Server) handleWriteEvents(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		if errors.Is(err, store.ErrMixedPartition) {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		s.logger.Error("write-events fehlgeschlagen", "err", err)
 		writeError(w, http.StatusInternalServerError, "interner fehler beim schreiben")
 		return
