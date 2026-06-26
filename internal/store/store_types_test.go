@@ -58,7 +58,7 @@ func TestEventTypesBackfill(t *testing.T) {
 	)
 
 	// types-Bucket leeren = Zustand vor Einführung des Zähler-Buckets.
-	if err := st.db.Update(func(tx *bolt.Tx) error {
+	if err := st.central.db.Update(func(tx *bolt.Tx) error {
 		if err := tx.DeleteBucket(bucketTypes); err != nil {
 			return err
 		}

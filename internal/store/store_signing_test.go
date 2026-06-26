@@ -85,7 +85,7 @@ func TestVerifyDetectsBadSignature(t *testing.T) {
 	appendAll(t, st, event.Candidate{Source: "s", Subject: "/a", Type: "t"})
 
 	// Signatur des gespeicherten Events verfälschen.
-	err := st.db.Update(func(tx *bolt.Tx) error {
+	err := st.central.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(bucketEvents)
 		raw := b.Get(seqKey(1))
 		var ev event.Event
