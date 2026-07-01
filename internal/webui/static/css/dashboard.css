@@ -16,18 +16,25 @@
       #05070f;
     background-attachment: fixed;
   }
-  /* Sternenfeld als feines, fixes Punkteraster (kein Bild, kein CDN) */
+  /* Sternenfeld als feines, fixes Punkteraster (kein Bild, kein CDN).
+     Die Ebene ragt um eine Kachel (480px) über den Viewport hinaus, damit die
+     transform-basierte Drift keine leeren Ränder freilegt. Bewusst per transform
+     statt background-position animiert: transform läuft rein auf dem Compositor
+     (GPU-günstig, kein Repaint), background-position würde die bildschirmfüllende
+     Ebene in jedem Frame neu rendern und die GPU dauerhaft auslasten. */
   body::before {
-    content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none; opacity: .5;
+    content: ""; position: fixed; inset: -480px; z-index: -1; pointer-events: none; opacity: .5;
     background-image:
       radial-gradient(1px 1px at 20% 30%, #fff, transparent), radial-gradient(1px 1px at 75% 18%, #cfe9ff, transparent),
       radial-gradient(1px 1px at 40% 70%, #fff, transparent), radial-gradient(1px 1px at 88% 55%, #bfe7ff, transparent),
       radial-gradient(1px 1px at 12% 85%, #fff, transparent), radial-gradient(1px 1px at 60% 92%, #e9d5ff, transparent),
       radial-gradient(1px 1px at 33% 12%, #fff, transparent), radial-gradient(1px 1px at 92% 80%, #fff, transparent);
     background-repeat: repeat; background-size: 480px 480px;
+    will-change: transform;
     animation: drift 120s linear infinite;
   }
-  @keyframes drift { from { background-position: 0 0; } to { background-position: 480px 480px; } }
+  /* Verschiebung um genau eine Kachel (480px) → nahtlose Endlosschleife. */
+  @keyframes drift { from { transform: translate3d(0, 0, 0); } to { transform: translate3d(480px, 480px, 0); } }
   * { box-sizing: border-box; }
   header {
     display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
@@ -337,6 +344,14 @@
     background: radial-gradient(circle at 50% 50%, #fff, #ffe9a8 18%, #ff8a5c 38%, #f472b6 55%, transparent 72%); }
   #supernova-flash.boom { animation: boom 1.2s ease-out forwards; }
   @keyframes boom { 0% { opacity: 0; transform: scale(.2); } 12% { opacity: 1; } 100% { opacity: 0; transform: scale(2.4); } }
+
+  /* Nutzer, die reduzierte Bewegung wünschen (oder GPU/Akku schonen wollen):
+     dekorative Endlos-Animationen komplett aus. */
+  @media (prefers-reduced-motion: reduce) {
+    body::before { animation: none; }
+    .dot.live { animation: none; }
+    .dz-fire.armed { animation: none; }
+  }
 
   /* Aktivität & Presence (ADR-030) */
   .act-events { display: flex; flex-direction: column; gap: 4px; max-height: 360px; overflow-y: auto; }
