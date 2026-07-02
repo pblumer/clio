@@ -61,8 +61,36 @@ curl -s -H "Authorization: Bearer $TOKEN" \
   https://clio-mcp.blumer.cloud/mcp
 ```
 
-## Events schreiben (via MCP)
+## Auth
 
+ADR-025 Keyring: `kid.secret`-Format. Agent-Token liegt unter
+`/home/pi/clio_token.txt`. Im Docker-Container via `CLIO_API_KEY`.
+
+## MCP Nutzung (bevorzugt via `mcp-bridge`)
+
+Das Tool `mcp-bridge` abstrahiert JSON-RPC 2.0 in einfache CLI-Befehle.
+Config liegt unter `~/.mcp-servers.json`, Token wird automatisch aus
+`/home/pi/clio_token.txt` gelesen.
+
+```bash
+# Tools listen
+mcp-bridge list clio
+
+# Tool ausführen
+mcp-bridge exec clio info '{}'
+mcp-bridge exec clio ping '{}'
+mcp-bridge exec clio read_events '{"subject": "/test/1"}'
+mcp-bridge exec clio write-events '{"events": [{"source":"/hermes","subject":"/test/1","type":"demo","data":{}}]}'
+mcp-bridge exec clio run_query '{"subject": "/", "where": "event.type == \"demo\""}'
+
+# Raw JSON-RPC call
+mcp-bridge call clio tools/list
+mcp-bridge call clio tools/call '{"name": "info", "arguments": {}}'
+```
+
+## Events schreiben (MCP direkt / Fallback)
+
+Falls `mcp-bridge` nicht verfügbar ist, direkt via `curl`:
 ```bash
 TOKEN=$(cat /home/pi/clio_token.txt)
 curl -s -H "Authorization: Bearer $TOKEN" \
