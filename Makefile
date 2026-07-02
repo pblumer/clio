@@ -6,6 +6,8 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 PKG     := ./cmd/cliostore
 BIN     := cliostore
+MCP_PKG := ./cmd/clio-mcp
+MCP_BIN := clio-mcp
 DIST    := dist
 
 # Zielplattformen für die Cross-Builds (Single-Binary, statisch gelinkt).
@@ -15,9 +17,10 @@ PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64
 
 all: lint test build
 
-## build: lokales Binary bauen
+## build: lokale Binaries bauen (cliostore + clio-mcp)
 build:
 	go build -ldflags "$(LDFLAGS)" -o $(BIN) $(PKG)
+	go build -ldflags "$(LDFLAGS)" -o $(MCP_BIN) $(MCP_PKG)
 
 ## run: lokal starten (CLIO_API_TOKEN muss gesetzt sein)
 run: build
@@ -74,9 +77,13 @@ dist: clean-dist
 		os=$${platform%/*}; arch=$${platform#*/}; \
 		ext=; [ "$$os" = "windows" ] && ext=.exe; \
 		out=$(DIST)/$(BIN)_$${os}_$${arch}$$ext; \
+		mcpout=$(DIST)/$(MCP_BIN)_$${os}_$${arch}$$ext; \
 		echo "build $$out"; \
 		CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch \
 			go build -trimpath -ldflags "$(LDFLAGS)" -o $$out $(PKG) || exit 1; \
+		echo "build $$mcpout"; \
+		CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch \
+			go build -trimpath -ldflags "$(LDFLAGS)" -o $$mcpout $(MCP_PKG) || exit 1; \
 	done
 	@echo "fertig: $(DIST)/"
 
@@ -89,13 +96,14 @@ package: dist
 		stage=$(BIN)_$(VERSION)_$${os}_$${arch}; \
 		mkdir -p $$stage; \
 		cp $(BIN)_$${os}_$${arch}$$ext $$stage/$(BIN)$$ext; \
+		cp $(MCP_BIN)_$${os}_$${arch}$$ext $$stage/$(MCP_BIN)$$ext; \
 		cp ../LICENSE ../README.md $$stage/; \
 		if [ "$$os" = "windows" ]; then \
 			zip -qr $$stage.zip $$stage; \
 		else \
 			tar -czf $$stage.tar.gz $$stage; \
 		fi; \
-		rm -rf $$stage $(BIN)_$${os}_$${arch}$$ext; \
+		rm -rf $$stage $(BIN)_$${os}_$${arch}$$ext $(MCP_BIN)_$${os}_$${arch}$$ext; \
 	done; \
 	if command -v sha256sum >/dev/null 2>&1; then \
 		sha256sum $(BIN)_$(VERSION)_*.tar.gz $(BIN)_$(VERSION)_*.zip > checksums.txt; \
@@ -112,4 +120,4 @@ clean-dist:
 	@rm -rf $(DIST)
 
 clean: clean-dist
-	@rm -f $(BIN) coverage.out
+	@rm -f $(BIN) $(MCP_BIN) coverage.out

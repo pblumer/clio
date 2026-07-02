@@ -78,6 +78,7 @@ Datums-Spalte: Die Bestands-ADRs in §7 tragen **kein** Einzeldatum; dort steht 
 | ADR-039 | Gefaltete Zustandssicht eines Subjects über REST (`GET /state/<subject>`) | Akzeptiert | 2026-06-26 | [`0039-zustandssicht-eines-subjects-ueber-rest.md`](./0039-zustandssicht-eines-subjects-ueber-rest.md) |
 | ADR-040 | In-Memory-Snapshot-Cache für die Zustandssicht (lazy-inkrementelle Fold-Memoisierung) | Akzeptiert | 2026-06-26 | [`0040-in-memory-snapshot-cache-zustandssicht.md`](./0040-in-memory-snapshot-cache-zustandssicht.md) |
 | ADR-041 | Deklarative Feld-Reduktionsstrategien für die Zustandssicht | Akzeptiert | 2026-06-26 | [`0041-deklarative-feld-reduktionsstrategien-zustandssicht.md`](./0041-deklarative-feld-reduktionsstrategien-zustandssicht.md) |
+| ADR-042 | MCP-Server als HTTP-Adapter (stdio + HTTP, eigenständig & eingebettet) | Akzeptiert (umgesetzt) | 2026-07-02 | [`0042-mcp-server.md`](./0042-mcp-server.md) |
 
-**Nächste freie Nummer: ADR-042.** (ADR-027 ist als Folge-ADR aus ADR-026
+**Nächste freie Nummer: ADR-043.** (ADR-027 ist als Folge-ADR aus ADR-026
 reserviert, aber noch unentschieden — nicht neu vergeben.)
