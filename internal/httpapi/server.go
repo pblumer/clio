@@ -110,6 +110,11 @@ func New(cfg config.Config, st *store.Store, logger *slog.Logger, opts ...Option
 		}
 	}
 
+	// Live-Publish an den Broker hängen (K2): der Store liefert committete Events
+	// selbst — streng in Sequenzreihenfolge je Partition — an die Observer. Vor dem
+	// Start des Listeners gesetzt, also vor jedem möglichen Write dieses Prozesses.
+	st.SetPublisher(s.broker.Publish)
+
 	// Eventmengen-Histogramm für das Dashboard. Der Origin (Beginn von Bucket 0)
 	// ist die Zeit des ersten Events — günstig per FirstEventTime (O(1)) ermittelt,
 	// damit historische Events korrekt über die Zeitachse verteilt werden.

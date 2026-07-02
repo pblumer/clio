@@ -630,8 +630,8 @@ func (s *Server) handleWriteEvents(w http.ResponseWriter, r *http.Request) {
 	s.metrics.AddEventsWritten(len(written))
 	s.recordEventStats(written)
 
-	// Live-Observer benachrichtigen (nach erfolgreichem, committetem Write).
-	s.broker.Publish(written)
+	// Live-Observer werden vom Store selbst benachrichtigt (K2): AppendAuthored
+	// publiziert committete Events streng in Sequenzreihenfolge je Partition.
 
 	writeNDJSON(w, s.logger, written)
 }

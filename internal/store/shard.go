@@ -143,6 +143,18 @@ func (sh *shard) path() string {
 	return sh.db.Path()
 }
 
+// currentSeq liefert die höchste bereits vergebene (committete) Event-Sequenz
+// dieser Partition — 0 bei leerer Partition. Grundlage für die Initialisierung des
+// Publish-Sequencers (die als Nächstes live zu publizierende Sequenz ist +1).
+func (sh *shard) currentSeq() (uint64, error) {
+	var seq uint64
+	err := sh.view(func(tx *bolt.Tx) error {
+		seq = tx.Bucket(bucketEvents).Sequence()
+		return nil
+	})
+	return seq, err
+}
+
 func (sh *shard) close() error {
 	sh.dbMu.Lock()
 	defer sh.dbMu.Unlock()
