@@ -116,6 +116,32 @@ eingebettet, kein Internet nötig:
 - **`http://127.0.0.1:3000/openapi.yaml`** — die OpenAPI-3-Spezifikation zum
   Import in eigene Tools (Postman, Insomnia, Codegen).
 
+### MCP-Server (clio als Werkzeug für KI-Agenten)
+
+clio spricht das **Model Context Protocol (MCP)**: ein KI-Agent (Claude Code
+o. ä.) kann clios Event-Store als native Werkzeugfläche entdecken und benutzen —
+Events schreiben/lesen, CEL-Queries stellen, die gefaltete Zustandssicht abrufen,
+Schemas verwalten. Hand-gerollt über JSON-RPC 2.0, ohne SDK (ADR-001, ADR-042).
+Der MCP-Server ist ein **dünner Adapter über die HTTP-API** — die Geschäftslogik
+und die Auth-Scopes (ADR-025/033) bleiben unverändert; jeder Tool-Call trägt den
+API-Key des Aufrufers.
+
+Zwei Modi mit identischer Tool-Fläche:
+
+- **Eigenständiges Binary `clio-mcp`** — spricht MCP über **stdio** (Default, für
+  lokale Agenten) oder **HTTP** (`-http host:port`) gegen eine — auch entfernte —
+  clio-Instanz:
+
+  ```bash
+  clio-mcp -base-url http://127.0.0.1:3000 -token kid_xxx.secret
+  ```
+
+- **Eingebettet in cliostore** unter `POST /mcp`, opt-in per `CLIO_MCP=1` (Default
+  aus, damit bestehende Deployments unverändert bleiben).
+
+Client-Konfiguration (stdio) und die vollständige Tool-Referenz stehen in
+[`docs/mcp.md`](./docs/mcp.md).
+
 ### Betriebs-Dashboard (`/ui`)
 
 Ein schlankes, ebenfalls eingebettetes Dashboard für Monitoring & Observing —
@@ -308,6 +334,7 @@ Build lokal mit `make package` proben.
 | `CLIO_PRESENCE_WINDOW` | nein | `60s` | Gleitendes „Online"-Fenster der Aktivitäts-/Presence-Sicht (ADR-030) als Go-Dauer. Ein Schlüssel ohne offene `observe`-Verbindung gilt als online, solange seine letzte erfolgreiche Aktivität jünger als dieses Fenster ist. `0` schaltet das zeitbasierte Fenster ab (dann zählt nur eine offene Live-Verbindung als online). Sichtbar über `GET /api/v1/activity` (Scope `admin`) und den `/ui`-Tab **Aktivität**. |
 | `CLIO_AUTH_EVENTS` | nein | `false` | Schreibt (truthy) **Auth-Lifecycle-Events** als CloudEvents in den reservierten, server-only Namespace `/_clio/auth/…` (ADR-030, Dogfooding): `session-started`/`session-ended` (Login-Äquivalent eines sessionlosen Token-Systems) sowie `key-created`/`key-revoked`. Damit sind Login-Zeiten und Schlüssel-Lebenszyklus mit `run-query`/`observe`/UI abfragbar. Bewusst **kein** Event pro Read/Write. Default aus = kein Eingriff in den Event-Strom (rückwärtskompatibel). Client-Writes auf `/_clio/` werden stets abgelehnt (`403`). |
 | `CLIO_AUTH_DENIED_EVENTS` | nein | `false` | Schreibt zusätzlich `access-denied`-Events (wiederholte 401/403 eines bekannten Schlüssels) unter `/_clio/auth/denied/…` — **rate-limitiert** je `kid` gegen Flutung. Greift nur zusammen mit `CLIO_AUTH_EVENTS`. |
+| `CLIO_MCP`        | nein    | `false`    | Mountet (truthy) den eingebetteten **MCP-Server** unter `POST /mcp` (ADR-042): clios Event-Store als native Werkzeugfläche für KI-Agenten über das Model Context Protocol. Der MCP-Layer authentifiziert nicht selbst, sondern reicht das Bearer des Aufrufers an die eigene API weiter — es greifen dieselben API-Key-Scopes (ADR-025/033). Default aus. Siehe [`docs/mcp.md`](./docs/mcp.md); alternativ das eigenständige Binary `clio-mcp` (stdio/HTTP). |
 
 \* **Auth-Material beim Start:** Ist der Schlüsselbund leer (frische DB), muss
 **eines** von `CLIO_BOOTSTRAP_ADMIN_KEY` oder `CLIO_API_TOKEN` gesetzt sein —

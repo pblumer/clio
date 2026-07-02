@@ -17,6 +17,12 @@ ARG TARGETARCH
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath \
 	-ldflags "-s -w -X main.version=${VERSION}" \
 	-o /cliostore ./cmd/cliostore
+# Zweites Binary: der eigenständige MCP-Server (ADR-042). Der eingebettete
+# MCP-Endpunkt (POST /mcp) steckt bereits in cliostore (opt-in via CLIO_MCP);
+# dieses Binary bedient zusätzlich den stdio-Transport für lokale Agenten.
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath \
+	-ldflags "-s -w -X main.version=${VERSION}" \
+	-o /clio-mcp ./cmd/clio-mcp
 
 # Datenverzeichnis dem nonroot-User (uid 65532) zuweisen, damit das per Volume
 # gemountete /data beschreibbar ist (bbolt legt dort die DB an).
@@ -34,4 +40,5 @@ COPY --from=build --chown=65532:65532 /data /data
 VOLUME ["/data"]
 
 COPY --from=build /cliostore /cliostore
+COPY --from=build /clio-mcp /clio-mcp
 ENTRYPOINT ["/cliostore"]

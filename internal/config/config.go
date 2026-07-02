@@ -142,6 +142,14 @@ type Config struct {
 	// CLIO_AUTH_DENIED_EVENTS; Default aus. Greift nur, wenn AuthEvents aktiv ist.
 	AuthDeniedEvents bool
 
+	// MCPEnabled mountet den eingebetteten MCP-Server unter POST /mcp (ADR-042):
+	// clios Event-Store wird für KI-Agenten als native Tool-Fläche über das Model
+	// Context Protocol erreichbar. Per CLIO_MCP; Default aus, damit bestehende
+	// Deployments unverändert bleiben. Der MCP-Layer authentifiziert nicht selbst,
+	// sondern reicht das Bearer des Aufrufers an die eigene API weiter — es greifen
+	// dieselben API-Key-Scopes (ADR-025/033) wie für die REST-Fläche.
+	MCPEnabled bool
+
 	// DataIndexFields deklariert pro Event-Typ die `event.data`-Felder, die in
 	// einen internen Sekundärindex aufgenommen werden (ADR-029). Ein
 	// `event.data.<feld> == '<wert>'`-Prädikat über einen so indizierten Typ wird
@@ -179,6 +187,7 @@ const (
 	envPresence  = "CLIO_PRESENCE_WINDOW"
 	envAuthEv    = "CLIO_AUTH_EVENTS"
 	envAuthDenEv = "CLIO_AUTH_DENIED_EVENTS"
+	envMCP       = "CLIO_MCP"
 
 	defaultAddr    = ":3000"
 	defaultDBPath  = "clio.db"
@@ -232,6 +241,7 @@ func FromEnv() (Config, error) {
 		ObservePreambleBytes: parseIntDefault(envObsvPre, defaultObsvPre, 0, maxObsvPre),
 		AuthEvents:           parseBoolDefault(envAuthEv, false),
 		AuthDeniedEvents:     parseBoolDefault(envAuthDenEv, false),
+		MCPEnabled:           parseBoolDefault(envMCP, false),
 	}
 
 	if !validSync[cfg.Sync] {

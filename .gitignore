@@ -1,5 +1,6 @@
 # Kompilierte Binaries
 /cliostore
+/clio-mcp
 /dist/
 
 # Go-Test-/Coverage-Artefakte

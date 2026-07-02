@@ -6,6 +6,7 @@ import (
 	"github.com/swaggest/swgui/v5emb"
 
 	"github.com/pblumer/clio/internal/auth"
+	"github.com/pblumer/clio/internal/mcp"
 	"github.com/pblumer/clio/internal/webui"
 )
 
@@ -86,6 +87,20 @@ func (s *Server) routes() {
 	// leitet weiterhin auf die kanonische /ui um (im AssetHandler).
 	s.mux.Handle("GET /ui", webui.Handler())
 	s.mux.Handle("GET /ui/{path...}", webui.AssetHandler())
+
+	// MCP-Server (ADR-042): optionaler Agent-Tool-Endpunkt, opt-in per CLIO_MCP.
+	// Der MCP-Layer authentifiziert nicht selbst — er reicht das Bearer des
+	// Aufrufers per In-Process-Transport an die eigene API weiter, sodass clios
+	// Scopes (ADR-025/033) greifen. Die Tool-Fläche ist damit exakt so mächtig wie
+	// der Schlüssel des Aufrufers. Der In-Process-Client zielt auf den nackten Mux
+	// (ohne Instrument-Middleware, um Doppel-Logging zu vermeiden).
+	if s.cfg.MCPEnabled {
+		mcpSrv := mcp.NewServer(
+			mcp.NewClient("http://clio", "", mcp.HandlerTransport(s.mux)),
+			mcp.WithVersion(s.version),
+		)
+		s.mux.Handle("POST /mcp", mcpSrv)
+	}
 
 	// API-Doku: OpenAPI-Spec + interaktive UI. Bewusst ohne Auth (nicht
 	// sensibel); „Try it out" nutzt das Bearer-Token, das der Nutzer eingibt.

@@ -165,6 +165,39 @@ paths:
             text/plain:
               schema: { type: string }
 
+  /mcp:
+    post:
+      tags: [System]
+      summary: MCP-Server (JSON-RPC 2.0) — clios Event-Store als Agent-Tool-Fläche
+      description: >-
+        Optionaler Endpunkt (opt-in per Umgebungsvariable CLIO_MCP; Default aus),
+        der clios Event-Store über das Model Context Protocol als native
+        Werkzeugfläche für KI-Agenten bereitstellt (ADR-042). Der Body ist eine
+        JSON-RPC-2.0-Nachricht (initialize, tools/list, tools/call …). Der
+        MCP-Layer authentifiziert nicht selbst: das Authorization-Bearer des
+        Aufrufers wird an clios eigene API durchgereicht, sodass dieselben
+        API-Key-Scopes (ADR-025/033) greifen wie für die REST-Fläche. Siehe
+        docs/mcp.md. Auch als eigenständiges Binary `clio-mcp` (stdio/HTTP)
+        verfügbar.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: Eine JSON-RPC-2.0-Anfrage.
+      responses:
+        "200":
+          description: JSON-RPC-2.0-Antwort
+          content:
+            application/json:
+              schema: { type: object }
+        "204":
+          description: Notification verarbeitet (keine Antwort)
+        "405":
+          description: Nur POST wird unterstützt
+
   /api/v1/read-subjects:
     get:
       tags: [Events]

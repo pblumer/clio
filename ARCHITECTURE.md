@@ -149,6 +149,7 @@ Alle Routen nutzen **POST** (außer ggf. `ping`), weil Parameter im Request-Body
 | `GET /api/v1/event-stats` | Histogramm der Eventmengen über die Zeit (nach Event-Zeit, beim Start aus der Historie aufgebaut; Start, Bucket-Breite, Zähler) — fürs `/ui`-Dashboard, ohne die Historie zu streamen | 3 |
 | `GET /openapi.yaml` · `GET /docs` | OpenAPI-3-Spec bzw. interaktive Swagger UI (eingebettet, ohne Auth) | 3 |
 | `GET /metrics` | Prometheus-Metriken (ohne Auth) | 3 |
+| `POST /mcp` | MCP-Server (JSON-RPC 2.0) — clios Event-Store als native Agent-Tool-Fläche (ADR-042). Opt-in per `CLIO_MCP`; der Transport ist ungeschützt, die Autorisierung liegt im durchgereichten API-Key (dieselben Scopes wie die REST-Fläche). Zusätzlich als eigenständiges Binary `clio-mcp` (stdio/HTTP) | 3 |
 
 **Auth:** Header `Authorization: Bearer kid.secret` gegen den Schlüsselbund (benannte API-Keys mit Scopes `read`/`write`/`admin`, ADR-025). Fehlender/ungültiger Schlüssel → 401, gültiger Schlüssel ohne nötigen Scope → 403. *(Historisch: ein einzelnes `Bearer <API_TOKEN>`, ADR-008 — abgelöst durch ADR-025; `CLIO_API_TOKEN` lebt nur noch als deprecated Bootstrap-Pfad fort.)*
 
@@ -271,6 +272,7 @@ Drittes getaggtes Release (nach v0.2.0). Bündelt Betriebs-/Sicherheits-Features
 - **Gefaltete Zustandssicht eines Subjects per REST (ADR-039)** — Read-Model über `event.data`-Faltung, beschleunigt durch **Reduce-Specs (ADR-041)** und einen **In-Memory-Snapshot-Cache (ADR-040)**. Query erhält zudem eine optionale Sortierreihenfolge (älteste/neueste zuerst).
 - **Horizontale Skalierung — Grundlagen (ADR-034…038)** — Partitionierungsmodell, Storage-Engine pro Partition, Read-Path/CQRS und Distribution/Consensus akzeptiert (löst ADR-002/003 ab); umgesetzt ist WP-1 (konsistentes Hash-Routing in `internal/partition`). **Opt-in:** Default bleibt Single-Instance (`CLIO_PARTITIONS=1`) und ist verhaltensgleich zum bisherigen Betrieb.
 - **UI & Robustheit** — klickbare Fremdschlüssel-Links in Event-Payloads (ADR-020), Subject-Autovervollständigung im Query-Tab, lesbare Event-Zähler im Explorer, Layout-Fix bei langen Event-Typ-Namen; `observe` nutzt Burst-Flush (kein Reconnect-Flattern unter hoher Last).
+- **MCP-Server (ADR-042)** — clios Event-Store als native Werkzeugfläche für KI-Agenten über das Model Context Protocol (JSON-RPC 2.0, stdio + HTTP), hand-gerollt ohne SDK (ADR-001). Volle Tool-Fläche (lesen + schreiben) als dünner Adapter über die HTTP-API — die Geschäftslogik bleibt in den Handlern, die Autorisierung im durchgereichten API-Key (ADR-025/033). Verfügbar als eigenständiges Binary `clio-mcp` **und** eingebettet unter `POST /mcp` (opt-in `CLIO_MCP`, Default aus).
 
 ---
 
