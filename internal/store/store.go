@@ -454,7 +454,6 @@ func (s *Store) PartitionOf(source string) int {
 	return int(s.ring.PartitionForSource(source))
 }
 
-
 // eachShardView ruft fn in der Lese-Transaktion JEDER Partition auf (aufsteigend
 // nach Partition-ID). Der erste Fehler bricht ab. Aggregierende Leser (Count,
 // Subjects, …) summieren/vereinigen so über alle Partitionen; bei n=1 ist es ein

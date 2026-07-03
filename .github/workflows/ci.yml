@@ -26,7 +26,9 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          # Explizit go1.25.8 (enthält die von govulncheck gemeldeten Stdlib-CVE-
+          # Fixes); der Sprach-Floor in go.mod bleibt go 1.24.
+          go-version: "1.25.8"
           cache: true
 
       - name: Check formatting
@@ -55,7 +57,9 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          # Explizit go1.25.8 (enthält die von govulncheck gemeldeten Stdlib-CVE-
+          # Fixes); der Sprach-Floor in go.mod bleibt go 1.24.
+          go-version: "1.25.8"
           cache: true
 
       - name: Verify dependencies
@@ -92,7 +96,9 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          # Explizit go1.25.8 (enthält die von govulncheck gemeldeten Stdlib-CVE-
+          # Fixes); der Sprach-Floor in go.mod bleibt go 1.24.
+          go-version: "1.25.8"
           cache: true
 
       - name: govulncheck
@@ -111,7 +117,9 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          # Explizit go1.25.8 (enthält die von govulncheck gemeldeten Stdlib-CVE-
+          # Fixes); der Sprach-Floor in go.mod bleibt go 1.24.
+          go-version: "1.25.8"
           cache: true
 
       - name: Set up Node

@@ -23,7 +23,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          # Explizit go1.25.8 (Stdlib-CVE-Fixes); Sprach-Floor in go.mod bleibt go 1.24.
+          go-version: "1.25.8"
           cache: true
 
       - name: Vet
@@ -50,7 +51,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          # Explizit go1.25.8 (Stdlib-CVE-Fixes); Sprach-Floor in go.mod bleibt go 1.24.
+          go-version: "1.25.8"
           cache: true
 
       - name: Cross-build & package (Archive + Checksums)

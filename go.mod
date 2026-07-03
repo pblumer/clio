@@ -2,6 +2,11 @@ module github.com/pblumer/clio
 
 go 1.24
 
+// Mit go1.25.8 gebaut/gescannt: die in dieser Version gefixten Standardbibliothek-
+// CVEs (os, net/url u. a., von govulncheck gemeldet) sind damit ausgeräumt. Der
+// Sprach-Floor bleibt bewusst bei go 1.24 (keine 1.25-Sprachfeatures nötig).
+toolchain go1.25.8
+
 require (
 	github.com/google/cel-go v0.28.1
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2

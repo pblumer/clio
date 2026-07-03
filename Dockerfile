@@ -1,6 +1,6 @@
 # Mehrstufiger Build: statisches Binary, dann minimales distroless-Image.
 
-FROM --platform=$BUILDPLATFORM golang:1.24 AS build
+FROM --platform=$BUILDPLATFORM golang:1.25 AS build
 WORKDIR /src
 
 # Abhängigkeiten zuerst (besseres Layer-Caching).
