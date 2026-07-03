@@ -40,15 +40,16 @@ Die vollständige Architektur, Roadmap und alle Entscheidungen stehen in
 > [`docs/threat-model.md`](./docs/threat-model.md) (wogegen clio schützt — und
 > wogegen nicht).
 
-**🎉 v0.3.0 veröffentlicht** — aktuelles Release. Neu gegenüber v0.2.0 u. a.:
-**Aktivität & Presence** (wer online ist, wer was tut — `GET /api/v1/activity`,
-ADR-030), **persistentes Audit-Log** administrativer Aktionen (ADR-031),
-**Key-Lifecycle** mit Rotation/Ablauf/Metadaten und Offline-CLI (ADR-025),
-**Backup/Restore/Verify** als Produktfeature, **Subject-/Prefix-Scopes**
-(`read:/orders/*`, ADR-033), eine **gefaltete Zustandssicht** eines Subjects per
-REST mit Reduce-Specs und Snapshot-Cache (ADR-039/040/041) sowie die Grundlagen
-für **horizontale Skalierung** (Partitionierungs-Cluster ADR-034…038, opt-in via
-`CLIO_PARTITIONS`; Default bleibt Single-Instance).
+**🎉 v0.4.0 veröffentlicht** — aktuelles Release. Fokus: **den Single-Instance-Pfad
+(n=1) produktionsreif härten** — Korrektheit im Live-Streaming und DoS-Widerstand.
+Neu gegenüber v0.3.0 u. a.: zwei kritische **Streaming-Bugfixes** (Live-Streams
+sterben nicht mehr nach 30 s; kein stiller Event-Verlust bei nebenläufigen
+Writern), **DoS-Härtung** (Request-Body-Limit `CLIO_MAX_BODY_BYTES`,
+Default-Query-Timeout + CEL-Kostenlimit, Fortschritts-Timeout je Stream-Write),
+ein **gesalzener KDF** (PBKDF2) für betreibergewählte Secrets, **HTTP-Härtung**
+(Security-Header + CSP fürs Dashboard, Backup-501 statt leerem 200, weniger
+Info-Leaks) sowie **CI-Gates** (golangci-lint, govulncheck, Coverage- und
+Release-Test-Gate, Dependabot).
 > **⚠️ N>1 ist experimentell.** Bei mehr als einer Partition sind
 > Preconditions/Optimistic-Concurrency, State-Cache, die skalaren Lese-Cursor und
 > Online-Backup/`verify` noch **nicht vollständig** — der Start verweigert daher bei
@@ -263,7 +264,7 @@ alles an ein GitHub-Release.
 Aus einem Release installieren (Beispiel Linux/amd64):
 
 ```bash
-VERSION=v0.3.0
+VERSION=v0.4.0
 curl -sSL -O https://github.com/pblumer/clio/releases/download/$VERSION/cliostore_${VERSION}_linux_amd64.tar.gz
 curl -sSL -O https://github.com/pblumer/clio/releases/download/$VERSION/checksums.txt
 sha256sum --check --ignore-missing checksums.txt   # Integrität prüfen
@@ -280,7 +281,7 @@ GitHub Container Registry:
 docker run --rm -p 3000:3000 \
   -e CLIO_BOOTSTRAP_ADMIN_KEY=dein-geheimnis \
   -v clio-data:/data \
-  ghcr.io/pblumer/clio:latest      # oder :v0.3.0
+  ghcr.io/pblumer/clio:latest      # oder :v0.4.0
 # Beim ersten Start wird der kid geloggt; der Schlüssel ist dann kid.secret.
 ```
 
@@ -300,8 +301,8 @@ Releases sind tag-getrieben — ein annotierter SemVer-Tag `vX.Y.Z` auf `main`
 genügt, der Rest läuft automatisch:
 
 ```bash
-git tag -a v0.3.0 -m "clio v0.3.0"
-git push origin v0.3.0
+git tag -a v0.4.0 -m "clio v0.4.0"
+git push origin v0.4.0
 ```
 
 Der Workflow [`release.yml`](.github/workflows/release.yml) baut daraufhin in
