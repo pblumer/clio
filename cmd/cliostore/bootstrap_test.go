@@ -37,7 +37,8 @@ func TestBootstrapFromAdminKey(t *testing.T) {
 	if k.Name != "bootstrap-admin" || !k.HasScope(auth.ScopeAdmin) || k.Status != auth.StatusActive {
 		t.Fatalf("unerwarteter key: %+v", k)
 	}
-	if k.SecretHash != auth.HashSecret("super-geheim") {
+	// Betreibergewähltes Bootstrap-Secret → gesalzener KDF (S-H2), über VerifySecret geprüft.
+	if !auth.VerifySecret(k.SecretHash, "super-geheim") {
 		t.Fatal("secret-hash passt nicht zum bootstrap-wert")
 	}
 
@@ -62,7 +63,7 @@ func TestBootstrapFromLegacyToken(t *testing.T) {
 	if len(keys) != 1 || keys[0].Name != "legacy-token" {
 		t.Fatalf("erwartete genau einen legacy-token-key, bekam %+v", keys)
 	}
-	if keys[0].SecretHash != auth.HashSecret("altes-token") {
+	if !auth.VerifySecret(keys[0].SecretHash, "altes-token") {
 		t.Fatal("legacy secret-hash passt nicht")
 	}
 	if !keys[0].HasScope(auth.ScopeAdmin) {

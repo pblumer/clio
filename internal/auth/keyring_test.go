@@ -135,8 +135,16 @@ func TestNewKeyWithSecret(t *testing.T) {
 	if !strings.HasPrefix(k.KID, kidPrefix) {
 		t.Fatalf("kid ohne präfix: %q", k.KID)
 	}
-	if k.SecretHash != HashSecret("operator-provided-secret") {
-		t.Fatal("hash passt nicht zum vorgegebenen secret")
+	// Betreibergewähltes Secret → gesalzener KDF (nicht der schnelle SHA-256):
+	// nicht-deterministisch, daher über VerifySecret geprüft.
+	if !strings.HasPrefix(k.SecretHash, kdfScheme+"$") {
+		t.Fatalf("erwartete KDF-Hash (%s), war %q", kdfScheme, k.SecretHash)
+	}
+	if !VerifySecret(k.SecretHash, "operator-provided-secret") {
+		t.Fatal("VerifySecret akzeptiert das vorgegebene secret nicht")
+	}
+	if VerifySecret(k.SecretHash, "falsches-secret") {
+		t.Fatal("VerifySecret akzeptiert ein falsches secret")
 	}
 	if k.Status != StatusActive || !k.HasScope(ScopeAdmin) {
 		t.Fatalf("unerwarteter key: %+v", k)

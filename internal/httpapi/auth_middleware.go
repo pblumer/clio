@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"context"
-	"crypto/subtle"
 	"net/http"
 	"strings"
 	"time"
@@ -104,12 +103,14 @@ func (s *Server) authenticate(w http.ResponseWriter, r *http.Request, scope auth
 	}
 
 	// Zeitkonstanter Vergleich — auch bei nicht gefundenem kid gegen einen
-	// Dummy-Hash gleicher Länge (kein Timing-Leak über die Existenz, §3).
+	// Dummy-Hash (kein Timing-Leak über die Existenz, §3). VerifySecret erkennt das
+	// Hash-Format (schneller SHA-256 für Zufalls-Secrets, gesalzener KDF für
+	// betreibergewählte, S-H2) und vergleicht zeitkonstant.
 	expectedHash := dummyHash
 	if found {
 		expectedHash = key.SecretHash
 	}
-	secretOK := subtle.ConstantTimeCompare([]byte(auth.HashSecret(secret)), []byte(expectedHash)) == 1
+	secretOK := auth.VerifySecret(expectedHash, secret)
 
 	auditKID := ""
 	if parsed {
