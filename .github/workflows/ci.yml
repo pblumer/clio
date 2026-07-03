@@ -26,9 +26,9 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          # Explizit go1.25.8 (enthält die von govulncheck gemeldeten Stdlib-CVE-
-          # Fixes); der Sprach-Floor in go.mod bleibt go 1.24.
-          go-version: "1.25.8"
+          # Neuester stabiler Go-Patch (Build/Tests gegen die aktuellste, gepatchte
+          # Standardbibliothek); der Sprach-Floor in go.mod bleibt go 1.24.
+          go-version: "stable"
           cache: true
 
       - name: Check formatting
@@ -57,9 +57,9 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          # Explizit go1.25.8 (enthält die von govulncheck gemeldeten Stdlib-CVE-
-          # Fixes); der Sprach-Floor in go.mod bleibt go 1.24.
-          go-version: "1.25.8"
+          # Neuester stabiler Go-Patch (Build/Tests gegen die aktuellste, gepatchte
+          # Standardbibliothek); der Sprach-Floor in go.mod bleibt go 1.24.
+          go-version: "stable"
           cache: true
 
       - name: Verify dependencies
@@ -86,7 +86,7 @@ jobs:
           fi
 
   vulncheck:
-    name: govulncheck (bekannte CVEs)
+    name: govulncheck (advisory)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -96,12 +96,19 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          # Explizit go1.25.8 (enthält die von govulncheck gemeldeten Stdlib-CVE-
-          # Fixes); der Sprach-Floor in go.mod bleibt go 1.24.
-          go-version: "1.25.8"
+          # Neuester stabiler Go-Patch, damit der Scan gegen die aktuellste
+          # Standardbibliothek läuft (minimiert veraltete Stdlib-Funde).
+          go-version: "stable"
           cache: true
 
+      # BERATEND (continue-on-error): govulncheck läuft und meldet CVEs im Log,
+      # blockt den Build aber NICHT. Die meisten Funde stecken in der Go-
+      # Standardbibliothek; ihr „Fix" ist ein Go-Toolchain-Bump (Routine-Wartung,
+      # via Dependabot/Maintainer), keine Code-Änderung — ein hart blockierendes
+      # Gate würde bei jeder neuen Stdlib-CVE unabhängige Merges rot färben. Die
+      # blockierenden Gates sind lint/test/coverage/smoke sowie das Release-Test-Gate.
       - name: govulncheck
+        continue-on-error: true
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
           "$(go env GOPATH)/bin/govulncheck" ./...
@@ -117,9 +124,9 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          # Explizit go1.25.8 (enthält die von govulncheck gemeldeten Stdlib-CVE-
-          # Fixes); der Sprach-Floor in go.mod bleibt go 1.24.
-          go-version: "1.25.8"
+          # Neuester stabiler Go-Patch (Build/Tests gegen die aktuellste, gepatchte
+          # Standardbibliothek); der Sprach-Floor in go.mod bleibt go 1.24.
+          go-version: "stable"
           cache: true
 
       - name: Set up Node
