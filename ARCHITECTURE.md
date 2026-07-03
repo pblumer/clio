@@ -274,6 +274,17 @@ Drittes getaggtes Release (nach v0.2.0). Bündelt Betriebs-/Sicherheits-Features
 - **UI & Robustheit** — klickbare Fremdschlüssel-Links in Event-Payloads (ADR-020), Subject-Autovervollständigung im Query-Tab, lesbare Event-Zähler im Explorer, Layout-Fix bei langen Event-Typ-Namen; `observe` nutzt Burst-Flush (kein Reconnect-Flattern unter hoher Last).
 - **MCP-Server (ADR-042)** — clios Event-Store als native Werkzeugfläche für KI-Agenten über das Model Context Protocol (JSON-RPC 2.0, stdio + HTTP), hand-gerollt ohne SDK (ADR-001). Volle Tool-Fläche (lesen + schreiben) als dünner Adapter über die HTTP-API — die Geschäftslogik bleibt in den Handlern, die Autorisierung im durchgereichten API-Key (ADR-025/033). Verfügbar als eigenständiges Binary `clio-mcp` **und** eingebettet unter `POST /mcp` (opt-in `CLIO_MCP`, Default aus).
 
+### Release-Meilenstein v0.4.0 ✅
+
+Viertes getaggtes Release (nach v0.3.0). Thema: **den Single-Instance-Pfad (n=1) ohne Sternchen produktionsreif härten** — Korrektheit im Live-Streaming und DoS-Widerstandsfähigkeit. Umsetzung der v0.4.0-Roadmap aus [`docs/plans/projekt-analyse-2026-07.md`](./docs/plans/projekt-analyse-2026-07.md) in sieben abgegrenzten Work-Packages, jedes mit Regressionstest und am laufenden Binary verifiziert:
+
+- **Streaming-Korrektheit (WP-4.1/4.2)** — `statusRecorder.Unwrap()` gibt den Streaming-Handlern (observe/read/query/backup) die Möglichkeit zurück, ihre Write-Deadline aufzuheben; vorher trennte die Server-`WriteTimeout` jeden Stream nach 30 s (K1). Live-Publish wandert in den Store und läuft je Partition über einen Sequencer **streng in Commit-/Sequenzreihenfolge** — behebt den stillen, permanenten Event-Verlust im observe-Stream bei nebenläufigen Writern (K2).
+- **DoS-Härtung (WP-4.3)** — Request-Body-Limit (`CLIO_MAX_BODY_BYTES`, Default 16 MiB → HTTP 413) plus `MaxHeaderBytes`; Query-Timeout jetzt Default-an (30 s) samt nativem CEL-Kostenlimit; Fortschritts-Timeout je Stream-Write (`CLIO_STREAM_WRITE_TIMEOUT`, Default 60 s) gibt die bbolt-Lesetransaktion eines stehenden Clients frei, ohne legitime Bulk-Reads zu kappen.
+- **Secret-Härtung (WP-4.4)** — betreibergewählte Secrets (Bootstrap/Legacy) werden mit gesalzenem PBKDF2-HMAC-SHA256 gehasht (keine neue Abhängigkeit); zufällige 160-Bit-Server-Secrets bleiben im Auth-Hot-Path bei schnellem SHA-256. `VerifySecret` erkennt beide Formate zeitkonstant.
+- **HTTP-Härtung (WP-4.5)** — Security-Header (nosniff, `X-Frame-Options: DENY`, Referrer-Policy) und eine CSP mit `script-src 'self'` fürs Dashboard; `CLIO_HSTS`-Opt-in; `handleBackup` liefert bei N>1 einen klaren **501** statt eines leeren 200; `databaseFilePath` nicht mehr in `/info`.
+- **CI- & Release-Gates (WP-4.6)** — golangci-lint, govulncheck und ein Coverage-Gate als CI-Jobs; der Release-Workflow publiziert nur noch hinter einem Test-Gate (`-race`); Dependabot ergänzt.
+- **N>1-Verriegelung (WP-4.7)** — `CLIO_PARTITIONS>1` verweigert ohne `CLIO_PARTITIONS_EXPERIMENTAL=true` den Start, solange Preconditions/State-Cache/Cursor/Backup bei N>1 noch unvollständig sind. Der Single-Instance-Default bleibt unverändert.
+
 ---
 
 ## 7. Architecture Decision Records (ADRs)
