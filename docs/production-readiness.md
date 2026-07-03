@@ -51,7 +51,11 @@ Diese Seite hilft zu entscheiden, ob das zu deinem Einsatz passt.
 - **Kein automatisches Failover.** Fällt der Node aus, steht der Dienst bis zum
   Neustart/Restore.
 - **Keine horizontale Skalierung.** Schreiben ist serialisiert (ein Writer);
-  Lesen skaliert nur vertikal.
+  Lesen skaliert nur vertikal. Die Partitionierung (`CLIO_PARTITIONS>1`, ADR-034…038)
+  ist **experimentell** und für den Produktivbetrieb **nicht freigegeben**: bei N>1
+  sind Preconditions, State-Cache, die skalaren Lese-Cursor und Online-Backup/`verify`
+  unvollständig. Der Start verweigert daher bei N>1 den Dienst, sofern nicht
+  ausdrücklich `CLIO_PARTITIONS_EXPERIMENTAL=true` gesetzt ist.
 - **Keine Mandantenplattform.** Scopes trennen Rechte, **nicht** Datenräume.
 - **Kein Ersatz für Kafka.** Keine Consumer Groups, Partitionen, Rebalancing.
 - **Kein Ersatz für Reporting/BI.** Keine Aggregation/Joins/Volltext im Kern —

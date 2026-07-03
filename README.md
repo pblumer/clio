@@ -49,6 +49,12 @@ ADR-030), **persistentes Audit-Log** administrativer Aktionen (ADR-031),
 REST mit Reduce-Specs und Snapshot-Cache (ADR-039/040/041) sowie die Grundlagen
 für **horizontale Skalierung** (Partitionierungs-Cluster ADR-034…038, opt-in via
 `CLIO_PARTITIONS`; Default bleibt Single-Instance).
+> **⚠️ N>1 ist experimentell.** Bei mehr als einer Partition sind
+> Preconditions/Optimistic-Concurrency, State-Cache, die skalaren Lese-Cursor und
+> Online-Backup/`verify` noch **nicht vollständig** — der Start verweigert daher bei
+> `CLIO_PARTITIONS>1` den Dienst, sofern nicht zusätzlich
+> `CLIO_PARTITIONS_EXPERIMENTAL=true` gesetzt ist. Für die Produktion
+> `CLIO_PARTITIONS=1` (Default) verwenden.
 Fertige Single-Binaries für alle Plattformen (Linux/macOS/Windows × amd64/arm64)
 als Archive **inkl. SHA-256-Checksums** sowie ein Multi-Arch-Docker-Image liegen
 unter [Releases](https://github.com/pblumer/clio/releases/latest) bzw. in der

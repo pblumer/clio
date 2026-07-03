@@ -42,6 +42,16 @@ type Config struct {
 	// Gleichverteilung; ohne Wirkung bei Partitions==1. Default 128.
 	PartitionVNodes int
 
+	// PartitionsExperimental bestätigt bewusst den Betrieb mit mehr als einer
+	// Partition (CLIO_PARTITIONS_EXPERIMENTAL). Die Partitionierung (ADR-034…038) ist
+	// erst als Fundament umgesetzt: bei N>1 sind mehrere Pfade bekannt fehlerhaft —
+	// Optimistic-Concurrency/Preconditions greifen nur partitionslokal, der
+	// State-Cache und die skalaren Lese-Cursor (lowerBound/at) sind bei N>1 nicht
+	// wohldefiniert, und Online-Backup/`verify` decken nur eine Partition ab. Ohne
+	// dieses ausdrückliche Opt-in verweigert der Start bei Partitions>1 den Dienst,
+	// damit N>1 nicht versehentlich produktiv scharf geschaltet wird (WP-4.7).
+	PartitionsExperimental bool
+
 	// DBInitialMB legt die anfängliche Mmap-Größe der bbolt-Datei in MiB fest
 	// (CLIO_DB_INITIAL_MB). bbolt mappt die Datei beim Wachsen neu und hält dabei
 	// kurz einen exklusiven Lock — bei großen, gefüllten Datenbanken unter Leselast
@@ -203,6 +213,7 @@ const (
 	envDBPath    = "CLIO_DB_PATH"
 	envPartition = "CLIO_PARTITIONS"
 	envPartVNode = "CLIO_PARTITION_VNODES"
+	envPartExp   = "CLIO_PARTITIONS_EXPERIMENTAL"
 	envDBInitMB  = "CLIO_DB_INITIAL_MB"
 	envDBMonInt  = "CLIO_DB_MONITOR_INTERVAL"
 	envDBGrowPct = "CLIO_DB_GROW_THRESHOLD_PCT"
@@ -275,31 +286,42 @@ var validSync = map[string]bool{"group": true, "always": true, "off": true}
 // optional mit Defaults.
 func FromEnv() (Config, error) {
 	cfg := Config{
-		Addr:                 getenvDefault(envAddr, defaultAddr),
-		APIToken:             os.Getenv(envToken),
-		BootstrapAdminKey:    os.Getenv(envBootstrap),
-		DBPath:               getenvDefault(envDBPath, defaultDBPath),
-		Partitions:           parseIntDefault(envPartition, defaultPartitions, 1, maxPartitions),
-		PartitionVNodes:      parseIntDefault(envPartVNode, defaultVNodes, 1, maxVNodes),
-		DBInitialMB:          parseIntDefault(envDBInitMB, 0, 0, maxInitMB),
-		DBGrowThresholdPct:   parseIntDefault(envDBGrowPct, defaultGrowPct, 1, 99),
-		DBCompactEnabled:     parseBoolDefault(envDBCompact, false),
-		DBCompactIntervalH:   parseIntDefault(envDBCompInt, defaultCompactH, 1, maxCompactH),
-		Sync:                 getenvDefault(envSync, defaultSync),
-		SigningKey:           os.Getenv(envSignKey),
-		DevMode:              parseBoolDefault(envDevMode, false),
-		Compress:             parseBoolDefault(envCompress, false),
-		EventAuthorship:      parseBoolDefault(envEventAuth, false),
-		ObservePreambleBytes: parseIntDefault(envObsvPre, defaultObsvPre, 0, maxObsvPre),
-		AuthEvents:           parseBoolDefault(envAuthEv, false),
-		AuthDeniedEvents:     parseBoolDefault(envAuthDenEv, false),
-		MCPEnabled:           parseBoolDefault(envMCP, false),
-		MaxBodyBytes:         parseInt64Default(envMaxBody, defaultMaxBodyBytes, 0, maxBodyCap),
-		HSTS:                 parseBoolDefault(envHSTS, false),
+		Addr:                   getenvDefault(envAddr, defaultAddr),
+		APIToken:               os.Getenv(envToken),
+		BootstrapAdminKey:      os.Getenv(envBootstrap),
+		DBPath:                 getenvDefault(envDBPath, defaultDBPath),
+		Partitions:             parseIntDefault(envPartition, defaultPartitions, 1, maxPartitions),
+		PartitionVNodes:        parseIntDefault(envPartVNode, defaultVNodes, 1, maxVNodes),
+		PartitionsExperimental: parseBoolDefault(envPartExp, false),
+		DBInitialMB:            parseIntDefault(envDBInitMB, 0, 0, maxInitMB),
+		DBGrowThresholdPct:     parseIntDefault(envDBGrowPct, defaultGrowPct, 1, 99),
+		DBCompactEnabled:       parseBoolDefault(envDBCompact, false),
+		DBCompactIntervalH:     parseIntDefault(envDBCompInt, defaultCompactH, 1, maxCompactH),
+		Sync:                   getenvDefault(envSync, defaultSync),
+		SigningKey:             os.Getenv(envSignKey),
+		DevMode:                parseBoolDefault(envDevMode, false),
+		Compress:               parseBoolDefault(envCompress, false),
+		EventAuthorship:        parseBoolDefault(envEventAuth, false),
+		ObservePreambleBytes:   parseIntDefault(envObsvPre, defaultObsvPre, 0, maxObsvPre),
+		AuthEvents:             parseBoolDefault(envAuthEv, false),
+		AuthDeniedEvents:       parseBoolDefault(envAuthDenEv, false),
+		MCPEnabled:             parseBoolDefault(envMCP, false),
+		MaxBodyBytes:           parseInt64Default(envMaxBody, defaultMaxBodyBytes, 0, maxBodyCap),
+		HSTS:                   parseBoolDefault(envHSTS, false),
 	}
 
 	if !validSync[cfg.Sync] {
 		return Config{}, fmt.Errorf("%s muss group, always oder off sein, war %q", envSync, cfg.Sync)
+	}
+
+	// N>1 ist experimentell (ADR-034…038 sind erst als Fundament umgesetzt): bei
+	// mehreren Partitionen sind Preconditions, State-Cache, Lese-Cursor und
+	// Backup/verify bekannt unvollständig. Ohne ausdrückliches Opt-in den Start
+	// verweigern, damit N>1 nicht versehentlich produktiv läuft (WP-4.7).
+	if cfg.Partitions > 1 && !cfg.PartitionsExperimental {
+		return Config{}, fmt.Errorf(
+			"%s=%d aktiviert die EXPERIMENTELLE Partitionierung (N>1): Preconditions/Optimistic-Concurrency greifen nur partitionslokal, State-Cache und skalare Lese-Cursor (lowerBound/at) sind bei N>1 nicht wohldefiniert, Online-Backup/verify decken nur eine Partition ab. Für Produktion CLIO_PARTITIONS=1 verwenden. Zum bewussten Erproben zusätzlich %s=true setzen",
+			envPartition, cfg.Partitions, envPartExp)
 	}
 
 	to, err := parseDurationDefault(envQueryTO, defaultQueryTimeout)
