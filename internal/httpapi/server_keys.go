@@ -63,8 +63,7 @@ type createKeyRequest struct {
 // abrufbar (nur sein Hash wird gespeichert).
 func (s *Server) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 	var req createKeyRequest
-	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	if strings.TrimSpace(req.Name) == "" {

@@ -200,6 +200,10 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		WriteTimeout: 30 * time.Second,
 		// IdleTimeout schließt im Leerlauf gehaltene Keep-Alive-Verbindungen.
 		IdleTimeout: 120 * time.Second,
+		// MaxHeaderBytes deckelt die Header-Größe (Schutz vor übergroßen Headern);
+		// der Request-BODY wird separat je Route via http.MaxBytesReader begrenzt
+		// (CLIO_MAX_BODY_BYTES, A3/WP-4.3). 1 MiB ist großzügig für legitime Header.
+		MaxHeaderBytes: 1 << 20,
 	}
 
 	errCh := make(chan error, 1)

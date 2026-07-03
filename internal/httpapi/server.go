@@ -155,9 +155,28 @@ func New(cfg config.Config, st *store.Store, logger *slog.Logger, opts ...Option
 }
 
 // Handler liefert den http.Handler des Servers, umschlossen von der
-// Observability-Middleware (Request-Logging + Metriken).
+// Observability-Middleware (Request-Logging + Metriken) und dem Body-Größenlimit
+// (Schutz vor Speicher-DoS, A3/WP-4.3).
 func (s *Server) Handler() http.Handler {
-	return s.instrument(s.mux)
+	return s.limitBody(s.instrument(s.mux))
+}
+
+// limitBody deckelt jeden Request-Body auf cfg.MaxBodyBytes via
+// http.MaxBytesReader. Wird das Limit überschritten, liefert der nachfolgende
+// Body-Read einen *http.MaxBytesError; decodeJSON übersetzt das in 413. Ein Limit
+// von 0 schaltet den Riegel ab (nicht empfohlen). Bewusst als äußere Schicht, damit
+// es für JEDE Route greift — auch für künftige, die den Body anders lesen.
+func (s *Server) limitBody(next http.Handler) http.Handler {
+	limit := s.cfg.MaxBodyBytes
+	if limit <= 0 {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Body != nil {
+			r.Body = http.MaxBytesReader(w, r.Body, limit)
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // StartBackground startet langlaufende Hintergrundaufgaben des API-Layers und

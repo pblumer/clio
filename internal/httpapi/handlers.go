@@ -404,8 +404,7 @@ func (s *Server) handleRegisterEventSchema(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	var req registerEventSchemaRequest
-	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	if strings.TrimSpace(req.Type) == "" {
@@ -516,7 +515,11 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 // Schreiber (echtes Hot-Backup). Die Schreib-Deadline wird wie bei den großen
 // Lese-Routen aufgehoben, sonst kappt WriteTimeout große Backups.
 func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
-	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
+	// Fortschritts-Timeout je Write (B3): ein Backup hält eine bbolt-Lesetransaktion
+	// für die gesamte Client-Download-Dauer; ein langsamer/stehender Admin-Client
+	// würde die Tx sonst unbegrenzt halten (Freelist-Blockade). Der streamWriter gibt
+	// sie frei, sobald der Client nicht mehr abnimmt.
+	sw := newStreamWriter(w, s.cfg.StreamWriteTimeout)
 
 	filename := "clio-" + time.Now().UTC().Format("20060102T150405Z") + ".clio"
 	w.Header().Set("Content-Type", "application/octet-stream")
@@ -525,7 +528,7 @@ func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 	// Sobald Backup zu schreiben beginnt, ist der 200-Header raus — ein Fehler
 	// mitten im Stream lässt sich dann nur noch loggen (der Client erkennt das
 	// abgeschnittene Artefakt an `verify`).
-	res, err := s.store.Backup(w)
+	res, err := s.store.Backup(sw)
 	if err != nil {
 		s.logger.Error("backup streamen fehlgeschlagen", "err", err)
 		s.recordAudit(r, store.AuditActionBackup, "", err.Error())
@@ -574,8 +577,7 @@ type writeEventsRequest struct {
 
 func (s *Server) handleWriteEvents(w http.ResponseWriter, r *http.Request) {
 	var req writeEventsRequest
-	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	if len(req.Events) == 0 {
@@ -694,8 +696,7 @@ type readEventsRequest struct {
 
 func (s *Server) handleReadEvents(w http.ResponseWriter, r *http.Request) {
 	var req readEventsRequest
-	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	if req.Subject == "" || req.Subject[0] != '/' {
@@ -766,29 +767,25 @@ func (s *Server) doRead(w http.ResponseWriter, subject string, recursive bool, o
 	}
 	w.WriteHeader(http.StatusOK)
 
-	// Streaming-Antwort variabler Dauer (datenabhängig, durch limit begrenzt) — die
-	// pauschale Server-WriteTimeout passt hier nicht; Deadline für diese Verbindung
-	// aufheben (Fehler ignorieren, s. doObserve). Die gepufferten Handler behalten
-	// den 30s-Schutz.
-	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
-
-	enc := json.NewEncoder(w)
-	flusher, _ := w.(http.Flusher)
+	// Streaming-Antwort variabler Dauer (datenabhängig, durch limit begrenzt): die
+	// pauschale Server-WriteTimeout passt hier nicht. Statt sie unbegrenzt aufzuheben,
+	// greift ein Fortschritts-Timeout je Write (B3) — ein stehender Client gibt so die
+	// Lesetransaktion frei, ein aktiver Client streamt beliebig lange.
+	sw := newStreamWriter(w, s.cfg.StreamWriteTimeout)
+	enc := json.NewEncoder(sw)
 	var n int
 	var encErr error
 	readErr := s.store.ReadFunc(subject, recursive, opts, func(ev event.Event) bool {
 		if encErr = enc.Encode(ev); encErr != nil {
-			return false // Schreiben fehlgeschlagen (Client weg) → abbrechen
+			return false // Schreiben fehlgeschlagen (Client weg/stehend) → abbrechen
 		}
 		n++
-		if flusher != nil && n%512 == 0 {
-			flusher.Flush()
+		if n%512 == 0 {
+			sw.Flush()
 		}
 		return limit == 0 || n < limit
 	})
-	if flusher != nil {
-		flusher.Flush()
-	}
+	sw.Flush()
 	switch {
 	case readErr != nil:
 		// Header sind bereits gesendet; nur noch loggen.
@@ -931,8 +928,7 @@ type observeEventsRequest struct {
 // Reconnect erfolgt clientseitig über lowerBound.
 func (s *Server) handleObserveEvents(w http.ResponseWriter, r *http.Request) {
 	var req observeEventsRequest
-	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	if req.Subject == "" || req.Subject[0] != '/' {
@@ -976,16 +972,17 @@ func (s *Server) validateCursor(cursor map[int]uint64) error {
 // offen für Live-Events. Gemeinsamer Kern von observe-events (POST) und der
 // GET-Pfad-Route mit ?watch=true.
 func (s *Server) doObserve(w http.ResponseWriter, r *http.Request, subject string, recursive bool, lower uint64, cursor map[int]uint64, types []string) {
-	flusher, ok := w.(http.Flusher)
-	if !ok {
+	if _, ok := w.(http.Flusher); !ok {
 		writeError(w, http.StatusInternalServerError, "streaming nicht unterstützt")
 		return
 	}
 
-	// observe ist ein potenziell unendlicher Stream — die Server-WriteTimeout darf
-	// ihn nicht kappen. Schreib-Deadline für diese Verbindung aufheben (Fehler
-	// ignorieren: nicht jeder ResponseWriter unterstützt das, z. B. im Test).
-	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
+	// observe ist ein potenziell unendlicher Stream — die pauschale Server-WriteTimeout
+	// darf ihn nicht kappen. Statt sie unbegrenzt aufzuheben, greift ein Fortschritts-
+	// Timeout je Write (B3): der Heartbeat (< Timeout) hält eine ruhige, aber lebende
+	// Verbindung offen; ein toter/stehender Client läuft in die Deadline und wird
+	// samt seiner Ressourcen freigegeben.
+	sw := newStreamWriter(w, s.cfg.StreamWriteTimeout)
 
 	// Offene Observe-Verbindung als Presence verbuchen (ADR-030): solange die
 	// Verbindung steht, gilt der Schlüssel als online. Die Identität setzt
@@ -1012,7 +1009,7 @@ func (s *Server) doObserve(w http.ResponseWriter, r *http.Request, subject strin
 	// komprimieren — Komprimieren erzwingt Pufferung und hält den Stream zurück.
 	w.Header().Set("Cache-Control", "no-store, no-transform")
 	w.WriteHeader(http.StatusOK)
-	enc := json.NewEncoder(w)
+	enc := json.NewEncoder(sw)
 
 	// Sofort flushen, damit der Client die offene Verbindung umgehend sieht — auch
 	// ohne History und ohne neue Events. Ohne diesen Anstoß hält ein puffernder
@@ -1023,14 +1020,14 @@ func (s *Server) doObserve(w http.ResponseWriter, r *http.Request, subject strin
 	// den Streaming-Modus. Whitespace-/Blankzeilen sind im NDJSON-Stream Protokoll
 	// (Heartbeat) und werden klientseitig ignoriert.
 	if n := s.cfg.ObservePreambleBytes; n > 0 {
-		if _, err := w.Write(bytes.Repeat([]byte(" "), n)); err != nil {
+		if _, err := sw.Write(bytes.Repeat([]byte(" "), n)); err != nil {
 			return
 		}
 	}
-	if _, err := w.Write([]byte("\n")); err != nil {
+	if _, err := sw.Write([]byte("\n")); err != nil {
 		return
 	}
-	flusher.Flush()
+	sw.Flush()
 
 	// delivered = höchste je Partition bereits ausgelieferte Sequenz (per-Partition-
 	// Cursor, ADR-036/INV-P3). Dedup und Reconnect-Resume laufen über (partition,
@@ -1073,7 +1070,7 @@ func (s *Server) doObserve(w http.ResponseWriter, r *http.Request, subject strin
 		s.logger.Error("observe history fehlgeschlagen (stream bereits begonnen)", "err", histErr)
 		return
 	}
-	flusher.Flush()
+	sw.Flush()
 
 	// Heartbeat: hält die Verbindung offen und stupst puffernde Proxies an.
 	beat := time.NewTicker(observeHeartbeat)
@@ -1110,10 +1107,10 @@ func (s *Server) doObserve(w http.ResponseWriter, r *http.Request, subject strin
 		case <-sub.Lost:
 			return
 		case <-beat.C:
-			if _, err := w.Write([]byte("\n")); err != nil {
+			if _, err := sw.Write([]byte("\n")); err != nil {
 				return
 			}
-			flusher.Flush()
+			sw.Flush()
 		case ev := <-sub.Events:
 			if !encodeIfMatch(ev) {
 				return
@@ -1132,7 +1129,7 @@ func (s *Server) doObserve(w http.ResponseWriter, r *http.Request, subject strin
 					drained = true
 				}
 			}
-			flusher.Flush()
+			sw.Flush()
 		}
 	}
 }
@@ -1159,8 +1156,7 @@ func (s *Server) handleRunQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req runQueryRequest
-	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	if req.Subject == "" || req.Subject[0] != '/' {
@@ -1276,9 +1272,13 @@ func (s *Server) handleRunQuery(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Clio-Result-Limit", strconv.Itoa(limit))
 	}
 	w.WriteHeader(http.StatusOK)
-	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
+	// Fortschritts-Timeout je Write (B3) statt pauschalem Aufheben der WriteTimeout:
+	// die scan-weite Deadline (CLIO_QUERY_TIMEOUT) bleibt der primäre Riegel, das
+	// Fortschritts-Timeout fängt zusätzlich einen stehenden Client zwischen zwei
+	// guard-Checks ab und gibt die Lesetransaktion frei.
+	sw := newStreamWriter(w, s.cfg.StreamWriteTimeout)
 
-	enc := json.NewEncoder(w)
+	enc := json.NewEncoder(sw)
 	flusher, _ := w.(http.Flusher)
 
 	// Sofort ein erstes Lebenszeichen flushen, damit die Header umgehend den Proxy
@@ -1287,8 +1287,8 @@ func (s *Server) handleRunQuery(w http.ResponseWriter, r *http.Request) {
 	// Body-Byte kommt — bei einem selektiven Prädikat erst am Scan-Ende. Leerzeile =
 	// Heartbeat, vom Client ignoriert (wie beim observe-Stream).
 	if flusher != nil {
-		_, _ = w.Write([]byte("\n"))
-		flusher.Flush()
+		_, _ = sw.Write([]byte("\n"))
+		sw.Flush()
 	}
 
 	var (
@@ -1307,11 +1307,11 @@ func (s *Server) handleRunQuery(w http.ResponseWriter, r *http.Request) {
 			return false
 		}
 		if flusher != nil && time.Since(lastWrite) >= queryHeartbeat {
-			if _, err := w.Write([]byte("\n")); err != nil {
+			if _, err := sw.Write([]byte("\n")); err != nil {
 				emitErr = err
 				return false
 			}
-			flusher.Flush()
+			sw.Flush()
 			lastWrite = time.Now()
 		}
 		return true
@@ -1341,7 +1341,7 @@ func (s *Server) handleRunQuery(w http.ResponseWriter, r *http.Request) {
 		n++
 		lastWrite = time.Now()
 		if flusher != nil && n%512 == 0 {
-			flusher.Flush()
+			sw.Flush()
 		}
 		return limit == 0 || n < limit
 	}
@@ -1419,7 +1419,7 @@ func (s *Server) handleRunQuery(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if flusher != nil {
-		flusher.Flush()
+		sw.Flush()
 	}
 	// Header/200 sind bereits gesendet — etwaige Fehler nur noch loggen. Ein
 	// Deadline-/Abbruch-Treffer beendet den Stream bewusst (der Client erhält ein

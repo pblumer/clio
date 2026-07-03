@@ -280,7 +280,7 @@ func TestFromEnvSyncInvalid(t *testing.T) {
 	}
 }
 
-func TestFromEnvQueryTimeoutDefaultOff(t *testing.T) {
+func TestFromEnvQueryTimeoutDefault(t *testing.T) {
 	t.Setenv(envToken, "tok")
 	t.Setenv(envQueryTO, "")
 
@@ -288,8 +288,22 @@ func TestFromEnvQueryTimeoutDefaultOff(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unerwarteter fehler: %v", err)
 	}
+	// WP-4.3/A4: Default ist jetzt 30s (nicht mehr aus), als DoS-Riegel.
+	if cfg.QueryTimeout != defaultQueryTimeout {
+		t.Errorf("QueryTimeout = %v, want %v (Default) ohne %s", cfg.QueryTimeout, defaultQueryTimeout, envQueryTO)
+	}
+}
+
+func TestFromEnvQueryTimeoutDisabled(t *testing.T) {
+	t.Setenv(envToken, "tok")
+	t.Setenv(envQueryTO, "0")
+
+	cfg, err := FromEnv()
+	if err != nil {
+		t.Fatalf("unerwarteter fehler: %v", err)
+	}
 	if cfg.QueryTimeout != 0 {
-		t.Errorf("QueryTimeout = %v, want 0 (aus) ohne %s", cfg.QueryTimeout, envQueryTO)
+		t.Errorf("QueryTimeout = %v, want 0 (explizit aus) bei %s=0", cfg.QueryTimeout, envQueryTO)
 	}
 }
 

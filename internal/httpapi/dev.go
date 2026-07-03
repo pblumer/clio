@@ -72,8 +72,7 @@ func (s *Server) handleDevBulkImportEvents(w http.ResponseWriter, r *http.Reques
 
 	// gleiche Semantik wie write-events, nur im dev-startfenster erlaubt.
 	var req writeEventsRequest
-	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	if len(req.Events) == 0 {

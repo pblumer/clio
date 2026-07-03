@@ -23,8 +23,7 @@ func (s *Server) handleRegisterReduceSpec(w http.ResponseWriter, r *http.Request
 		return
 	}
 	var req registerReduceSpecRequest
-	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	if req.Prefix == "" || req.Prefix[0] != '/' {

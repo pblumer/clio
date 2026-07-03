@@ -115,10 +115,24 @@ type Config struct {
 	// blockiert das die Wiederverwendung freier Seiten (DB-/Speicherwachstum). Die
 	// Deadline bricht solche Scans sauber ab, statt die Verbindung hängen zu
 	// lassen. Per CLIO_QUERY_TIMEOUT als Go-Dauer (z. B. "30s", "2m") einstellbar;
-	// 0 (Default) schaltet die Deadline ab — rückwärtskompatibel zum bisherigen,
-	// unbegrenzten Verhalten. Der run-query-Stream sendet unabhängig davon einen
-	// Heartbeat, der die Proxy-Verbindung während langer Scans offen hält.
+	// Default 30s (WP-4.3/A4: eine unbegrenzte Query ist eine CPU-/Speicher-DoS-
+	// Fläche für read-berechtigte Nutzer). 0 schaltet die Deadline explizit ab —
+	// für Spezialfälle mit legitim sehr langen Scans. Der run-query-Stream sendet
+	// unabhängig davon einen Heartbeat, der die Proxy-Verbindung offen hält.
 	QueryTimeout time.Duration
+
+	// StreamWriteTimeout ist das Fortschritts-Timeout der streamenden Antworten
+	// (read-events, observe-events, run-query): vor jedem Write auf die Verbindung
+	// wird eine frische Schreib-Deadline gesetzt. Solange der Client Bytes abnimmt,
+	// läuft der Stream unbegrenzt weiter (Bulk-Reads/Live-Streams bleiben möglich);
+	// ein stehender oder toter Client lässt einen Write in die Deadline laufen —
+	// der Handler bricht dann ab und gibt die bbolt-Lesetransaktion frei (WP-4.3/B3,
+	// gegen die Read-Tx-/Compaction-Blockade durch langsame Clients). Ersetzt das
+	// pauschale, unbegrenzte Aufheben der Server-WriteTimeout auf den Streams. Per
+	// CLIO_STREAM_WRITE_TIMEOUT als Go-Dauer; Default 60s (> observe-Heartbeat, damit
+	// eine ruhige, aber lebende Verbindung offen bleibt). 0 schaltet das
+	// Fortschritts-Timeout ab (unbegrenzt, altes Verhalten).
+	StreamWriteTimeout time.Duration
 
 	// PresenceWindow ist das gleitende „Online"-Fenster der Aktivitäts-/Presence-
 	// Registry (ADR-030): ein Schlüssel ohne offene Observe-Verbindung gilt als
@@ -149,6 +163,16 @@ type Config struct {
 	// sondern reicht das Bearer des Aufrufers an die eigene API weiter — es greifen
 	// dieselben API-Key-Scopes (ADR-025/033) wie für die REST-Fläche.
 	MCPEnabled bool
+
+	// MaxBodyBytes begrenzt die Größe eines Request-Bodys auf den Datenrouten
+	// (CLIO_MAX_BODY_BYTES). Ohne Limit kann ein einzelner authentifizierter Client
+	// (write-Scope) mit einem sehr großen `events`-Array den Prozess in den OOM
+	// treiben — der Body wird beim Dekodieren komplett materialisiert. Das Limit
+	// deckelt jeden Request-Body via http.MaxBytesReader; eine Überschreitung ergibt
+	// 413. Per CLIO_MAX_BODY_BYTES (Bytes) einstellbar; Default 16 MiB. 0 schaltet
+	// das Limit ab (nicht empfohlen; nur für Spezialfälle wie einen vorgelagerten,
+	// selbst limitierenden Proxy).
+	MaxBodyBytes int64
 
 	// DataIndexFields deklariert pro Event-Typ die `event.data`-Felder, die in
 	// einen internen Sekundärindex aufgenommen werden (ADR-029). Ein
@@ -188,6 +212,8 @@ const (
 	envAuthEv    = "CLIO_AUTH_EVENTS"
 	envAuthDenEv = "CLIO_AUTH_DENIED_EVENTS"
 	envMCP       = "CLIO_MCP"
+	envMaxBody   = "CLIO_MAX_BODY_BYTES"
+	envStreamWTO = "CLIO_STREAM_WRITE_TIMEOUT"
 
 	defaultAddr    = ":3000"
 	defaultDBPath  = "clio.db"
@@ -198,6 +224,23 @@ const (
 	// maxInitMB deckelt CLIO_DB_INITIAL_MB auf 64 TiB — großzügig genug für jede
 	// reale Platte, schützt aber vor versehentlichen Tippfehlern (und Overflow).
 	maxInitMB = 64 << 20
+
+	// defaultMaxBodyBytes deckelt Request-Bodies auf 16 MiB — großzügig für normale
+	// write-events-Batches, aber ein wirksamer Riegel gegen Speicher-DoS. maxBodyCap
+	// begrenzt den Konfigurationswert selbst (Schutz vor Tippfehlern/Overflow).
+	defaultMaxBodyBytes = 16 << 20 // 16 MiB
+	maxBodyCap          = 4 << 30  // 4 GiB
+
+	// defaultQueryTimeout begrenzt run-query-Scans standardmäßig (WP-4.3/A4). 30s
+	// ist großzügig für legitime Abfragen, riegelt aber unbegrenzte CPU-/Speicher-
+	// Bindung durch eine einzelne Query ab. 0 (per CLIO_QUERY_TIMEOUT) schaltet ab.
+	defaultQueryTimeout = 30 * time.Second
+
+	// defaultStreamWriteTimeout ist das Fortschritts-Timeout je Stream-Write
+	// (WP-4.3/B3). 60s liegt über dem observe-Heartbeat (15s), sodass eine ruhige,
+	// aber lebende Verbindung durch Heartbeats offen bleibt, ein toter/stehender
+	// Client aber zügig freigegeben wird.
+	defaultStreamWriteTimeout = 60 * time.Second
 
 	defaultMonInterval    = 60 * time.Second
 	defaultPresenceWindow = 60 * time.Second
@@ -242,13 +285,14 @@ func FromEnv() (Config, error) {
 		AuthEvents:           parseBoolDefault(envAuthEv, false),
 		AuthDeniedEvents:     parseBoolDefault(envAuthDenEv, false),
 		MCPEnabled:           parseBoolDefault(envMCP, false),
+		MaxBodyBytes:         parseInt64Default(envMaxBody, defaultMaxBodyBytes, 0, maxBodyCap),
 	}
 
 	if !validSync[cfg.Sync] {
 		return Config{}, fmt.Errorf("%s muss group, always oder off sein, war %q", envSync, cfg.Sync)
 	}
 
-	to, err := parseDurationDefault(envQueryTO, 0)
+	to, err := parseDurationDefault(envQueryTO, defaultQueryTimeout)
 	if err != nil {
 		return Config{}, err
 	}
@@ -265,6 +309,12 @@ func FromEnv() (Config, error) {
 		return Config{}, err
 	}
 	cfg.PresenceWindow = pw
+
+	swto, err := parseDurationDefault(envStreamWTO, defaultStreamWriteTimeout)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.StreamWriteTimeout = swto
 
 	fields, err := parseDataIndexFields(os.Getenv(envDataIdx))
 	if err != nil {
@@ -336,6 +386,27 @@ func parseIntDefault(key string, fallback, min, max int) int {
 		return fallback
 	}
 	n, err := strconv.Atoi(v)
+	if err != nil {
+		return fallback
+	}
+	if n < min {
+		n = min
+	}
+	if n > max {
+		n = max
+	}
+	return n
+}
+
+// parseInt64Default liest eine nicht-negative 64-Bit-Ganzzahl aus der Umgebung und
+// begrenzt sie auf [min,max]. Leer oder unlesbar ergibt fallback. Für Byte-Größen
+// (z. B. CLIO_MAX_BODY_BYTES), die den int32-Bereich überschreiten können.
+func parseInt64Default(key string, fallback, min, max int64) int64 {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
 	if err != nil {
 		return fallback
 	}
