@@ -429,14 +429,13 @@ func (s *Store) PublicKey() (ed25519.PublicKey, bool) {
 	return s.verifyKey, true
 }
 
-// view/update/batch/write/path delegieren an die zentrale Partition (shards[0]),
-// die die zentralen Buckets (Schemas, Schlüsselbund, Audit-Log) trägt. Alle
-// nicht-Event-Operationen (auth, schema, audit) laufen unverändert über sie. Bei
-// n=1 ist die zentrale Partition zugleich die einzige Event-Partition.
+// view/update/path delegieren an die zentrale Partition (shards[0]), die die
+// zentralen Buckets (Schemas, Schlüsselbund, Audit-Log) trägt. Alle nicht-Event-
+// Operationen (auth, schema, audit) laufen unverändert über sie. Bei n=1 ist die
+// zentrale Partition zugleich die einzige Event-Partition. Event-Schreibpfade
+// nutzen die per-Partition-Methoden des jeweiligen shard direkt.
 func (s *Store) view(fn func(*bolt.Tx) error) error   { return s.central.view(fn) }
 func (s *Store) update(fn func(*bolt.Tx) error) error { return s.central.update(fn) }
-func (s *Store) batch(fn func(*bolt.Tx) error) error  { return s.central.batch(fn) }
-func (s *Store) write(fn func(*bolt.Tx) error) error  { return s.central.write(fn) }
 
 // path liefert den Dateipfad der zentralen Partition (Partition 0 / Basis-Pfad).
 func (s *Store) path() string { return s.central.path() }
@@ -455,11 +454,6 @@ func (s *Store) PartitionOf(source string) int {
 	return int(s.ring.PartitionForSource(source))
 }
 
-// shardForSource bildet einen CloudEvents-`source` über den konsistenten Hash-Ring
-// (ADR-038) auf die zuständige Partition ab. Bei n=1 immer shards[0].
-func (s *Store) shardForSource(source string) *shard {
-	return s.shards[s.ring.PartitionForSource(source)]
-}
 
 // eachShardView ruft fn in der Lese-Transaktion JEDER Partition auf (aufsteigend
 // nach Partition-ID). Der erste Fehler bricht ab. Aggregierende Leser (Count,
@@ -2044,7 +2038,7 @@ func scanPrefix(cur *bolt.Cursor, prefix []byte, desc bool, yield func(k, v []by
 	var k, v []byte
 	if end := prefixSuccessor(prefix); end == nil {
 		k, v = cur.Last()
-	} else if k, v = cur.Seek(end); k == nil {
+	} else if k, _ = cur.Seek(end); k == nil {
 		k, v = cur.Last() // Prefix-Bereich liegt am Bucket-Ende → letzter Schlüssel
 	} else {
 		k, v = cur.Prev() // Seek landete hinter dem Prefix → ein Schritt zurück

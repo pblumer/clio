@@ -8,10 +8,46 @@ on:
 permissions:
   contents: read
 
+# Laufende Läufe desselben Refs abbrechen, wenn ein neuer Push kommt (spart Runner
+# und liefert schneller Feedback auf den jeweils neuesten Stand).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test:
-    name: build & test
+  lint:
+    name: lint (golangci-lint)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Check formatting
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "Folgende Dateien sind nicht gofmt-konform:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: golangci-lint
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh \
+            | sh -s -- -b "$(go env GOPATH)/bin" v2.5.0
+          "$(go env GOPATH)/bin/golangci-lint" run ./...
+
+  test:
+    name: build & test (race + coverage gate)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -25,15 +61,6 @@ jobs:
       - name: Verify dependencies
         run: go mod verify
 
-      - name: Check formatting
-        run: |
-          unformatted=$(gofmt -l .)
-          if [ -n "$unformatted" ]; then
-            echo "Folgende Dateien sind nicht gofmt-konform:"
-            echo "$unformatted"
-            exit 1
-          fi
-
       - name: Vet
         run: go vet ./...
 
@@ -43,12 +70,40 @@ jobs:
       - name: Test (race + coverage)
         run: go test -race -coverpkg=./... -coverprofile=coverage.out ./...
 
-      - name: Coverage summary
-        run: go tool cover -func=coverage.out | tail -1
+      - name: Coverage gate
+        env:
+          THRESHOLD: "80.0"
+        run: |
+          total=$(go tool cover -func=coverage.out | tail -1 | awk '{print $3}' | tr -d '%')
+          echo "Gesamt-Coverage: ${total}% (Schwellwert ${THRESHOLD}%)"
+          if awk "BEGIN{exit !(${total} < ${THRESHOLD})}"; then
+            echo "::error::Coverage ${total}% liegt unter dem Schwellwert ${THRESHOLD}%"
+            exit 1
+          fi
+
+  vulncheck:
+    name: govulncheck (bekannte CVEs)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          "$(go env GOPATH)/bin/govulncheck" ./...
 
   smoke:
     name: api smoke (postman/newman)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v4

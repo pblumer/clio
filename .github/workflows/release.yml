@@ -9,9 +9,36 @@ permissions:
   contents: read
 
 jobs:
+  # Test-Gate: ein Tag darf nur veröffentlicht werden, wenn Build/Vet/Tests grün sind
+  # (WP-4.6). Ohne dieses Gate würde ein Tag auf einem kaputten Commit trotzdem
+  # Binaries und ein Docker-Image publishen.
+  test:
+    name: test gate (race)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Build
+        run: go build ./...
+
+      - name: Test (race)
+        run: go test -race ./...
+
   binaries:
     name: build & publish binaries
     runs-on: ubuntu-latest
+    needs: test
     permissions:
       contents: write # GitHub-Release anlegen und Assets hochladen
     steps:
@@ -41,6 +68,7 @@ jobs:
   docker:
     name: build & push image (GHCR)
     runs-on: ubuntu-latest
+    needs: test
     permissions:
       contents: read
       packages: write # Image nach ghcr.io pushen
