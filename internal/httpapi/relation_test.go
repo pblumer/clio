@@ -3,8 +3,6 @@ package httpapi
 import (
 	"net/http"
 	"testing"
-
-	"github.com/pblumer/clio/internal/event"
 )
 
 // TestIdentityRelation schreibt employee- und mailbox-Aggregate und stellt
@@ -46,10 +44,7 @@ func TestIdentityRelation(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("query mailbox.attached = %d, want %d", rec.Code, http.StatusOK)
 	}
-	var r1 []event.Event
-	for _, ev := range decodeNDJSON(t, rec.Body.String()) {
-		r1 = append(r1, ev)
-	}
+	r1 := decodeNDJSON(t, rec.Body.String())
 	if len(r1) != 2 {
 		t.Fatalf("mailbox.attached events = %d, want 2", len(r1))
 	}
@@ -65,10 +60,7 @@ func TestIdentityRelation(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("query employee.assigned = %d, want %d", rec.Code, http.StatusOK)
 	}
-	var r2 []event.Event
-	for _, ev := range decodeNDJSON(t, rec.Body.String()) {
-		r2 = append(r2, ev)
-	}
+	r2 := decodeNDJSON(t, rec.Body.String())
 	if len(r2) != 2 {
 		t.Fatalf("employee.assigned events = %d, want 2", len(r2))
 	}
@@ -84,10 +76,7 @@ func TestIdentityRelation(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("query negative = %d, want %d", rec.Code, http.StatusOK)
 	}
-	var r3 []event.Event
-	for _, ev := range decodeNDJSON(t, rec.Body.String()) {
-		r3 = append(r3, ev)
-	}
+	r3 := decodeNDJSON(t, rec.Body.String())
 	if len(r3) != 0 {
 		t.Fatalf("negative events = %d, want 0", len(r3))
 	}

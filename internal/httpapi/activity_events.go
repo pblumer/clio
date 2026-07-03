@@ -87,7 +87,7 @@ func (s *Server) writeInternalEvent(subject, evType string, data map[string]any)
 	}
 	s.metrics.AddEventsWritten(len(written))
 	s.recordEventStats(written)
-	s.broker.Publish(written)
+	// Live-Publish erledigt der Store in Sequenzreihenfolge (K2, AppendAuthored).
 }
 
 // emitSessionStarted schreibt ein session-started-Event (Login-Äquivalent eines

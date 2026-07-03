@@ -6,11 +6,15 @@
 package auth
 
 import (
+	"crypto/pbkdf2"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base32"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -270,11 +274,90 @@ func ParseBearer(header string) (kid, secret string, ok bool) {
 	return token[:i], token[i+1:], true
 }
 
-// HashSecret bildet ein Geheimnis auf seinen hex-kodierten SHA-256-Hash ab. Der
-// Hash wird persistiert und zeitkonstant verglichen (siehe internal/httpapi).
+// HashSecret bildet ein Geheimnis auf seinen hex-kodierten SHA-256-Hash ab. Genutzt
+// für ZUFÄLLIGE, serverseitig erzeugte Geheimnisse mit voller Entropie (160 Bit):
+// dort ist ein rechenintensiver KDF unnötig (Brute-Force ist gegen 160-Bit-Zufall
+// aussichtslos) und der schnelle Hash hält den Auth-Hot-Path (Prüfung je Request)
+// schlank. Für vom Betreiber gewählte (evtl. schwache) Geheimnisse siehe
+// HashSecretKDF. Verifiziert wird formatunabhängig über VerifySecret.
 func HashSecret(secret string) string {
 	sum := sha256.Sum256([]byte(secret))
 	return hex.EncodeToString(sum[:])
+}
+
+const (
+	// kdfScheme kennzeichnet das Salted-KDF-Format im gespeicherten Hash.
+	kdfScheme = "pbkdf2-sha256"
+	// kdfIter ist die PBKDF2-Iterationszahl (OWASP-Richtwert 2023 für
+	// PBKDF2-HMAC-SHA256). Bewusst rechenintensiv: bremst Offline-Wörterbuchangriffe
+	// auf einen aus DB/Backup erbeuteten Hash eines schwachen, vom Betreiber
+	// gewählten Geheimnisses.
+	kdfIter = 600_000
+	// kdfSaltBytes/kdfKeyBytes dimensionieren Salt und abgeleiteten Schlüssel.
+	kdfSaltBytes = 16
+	kdfKeyBytes  = 32
+)
+
+// HashSecretKDF bildet ein Geheimnis über einen gesalzenen, rechenintensiven KDF
+// (PBKDF2-HMAC-SHA256, crypto/pbkdf2 aus der Standardbibliothek — keine externe
+// Abhängigkeit) ab. Für vom BETREIBER gewählte Geheimnisse (Bootstrap-/Legacy-Token),
+// die schwach oder wiederverwendet sein könnten: Salt verhindert Rainbow-Tables und
+// Hash-Korrelation, die hohe Iterationszahl macht Offline-Brute-Force teuer. Jeder
+// Aufruf zieht ein frisches Zufalls-Salt → das Ergebnis ist nicht-deterministisch.
+//
+// Format: "pbkdf2-sha256$<iter>$<salt_b64>$<dk_b64>" (base64 raw std).
+func HashSecretKDF(secret string) (string, error) {
+	salt := make([]byte, kdfSaltBytes)
+	if _, err := rand.Read(salt); err != nil {
+		return "", fmt.Errorf("salt erzeugen: %w", err)
+	}
+	dk, err := pbkdf2.Key(sha256.New, secret, salt, kdfIter, kdfKeyBytes)
+	if err != nil {
+		return "", fmt.Errorf("kdf ableiten: %w", err)
+	}
+	return fmt.Sprintf("%s$%d$%s$%s", kdfScheme, kdfIter,
+		base64.RawStdEncoding.EncodeToString(salt),
+		base64.RawStdEncoding.EncodeToString(dk)), nil
+}
+
+// VerifySecret prüft ein Klartext-Geheimnis zeitkonstant gegen einen gespeicherten
+// Hash — unabhängig vom Format (Migrationspfad): erkennt den gesalzenen KDF
+// (HashSecretKDF) und den alten/schnellen SHA-256-Hex-Hash (HashSecret) und wählt den
+// passenden Vergleich. Der Byte-Vergleich läuft stets über subtle.ConstantTimeCompare.
+// Für einen gegebenen gespeicherten Hash ist die Arbeit fix (kein Timing-Orakel über
+// die Existenz eines Schlüssels, wenn die Aufrufstelle bei unbekanntem kid gegen einen
+// Dummy-Hash gleichen Formats prüft).
+func VerifySecret(stored, secret string) bool {
+	if strings.HasPrefix(stored, kdfScheme+"$") {
+		return verifyKDF(stored, secret)
+	}
+	// Legacy/schneller Pfad: hex-kodierter, ungesalzener SHA-256-Hash.
+	return subtle.ConstantTimeCompare([]byte(HashSecret(secret)), []byte(stored)) == 1
+}
+
+// verifyKDF prüft ein Geheimnis gegen einen "pbkdf2-sha256$iter$salt$dk"-Hash.
+func verifyKDF(stored, secret string) bool {
+	parts := strings.Split(stored, "$")
+	if len(parts) != 4 {
+		return false
+	}
+	iter, err := strconv.Atoi(parts[1])
+	if err != nil || iter < 1 {
+		return false
+	}
+	salt, err := base64.RawStdEncoding.DecodeString(parts[2])
+	if err != nil {
+		return false
+	}
+	want, err := base64.RawStdEncoding.DecodeString(parts[3])
+	if err != nil {
+		return false
+	}
+	got, err := pbkdf2.Key(sha256.New, secret, salt, iter, len(want))
+	if err != nil {
+		return false
+	}
+	return subtle.ConstantTimeCompare(got, want) == 1
 }
 
 // idEncoding ist ein kleinbuchstabiges, padding-freies Base32-Alphabet für
@@ -301,17 +384,38 @@ func GenerateKey(name string, scopes []Scope) (Key, string, error) {
 
 // GenerateKeyWithMeta erzeugt wie GenerateKey einen neuen Schlüssel, übernimmt
 // aber zusätzlich die optionalen Metadaten (Ablauf, Beschreibung, Owner, Purpose).
+// Das Geheimnis ist serverseitig zufällig mit voller Entropie (160 Bit) — daher der
+// schnelle SHA-256-Hash (HashSecret): ein rechenintensiver KDF brächte hier keinen
+// Sicherheitsgewinn, würde aber den Auth-Hot-Path (Prüfung je Request) belasten.
 func GenerateKeyWithMeta(name string, scopes []Scope, meta KeyMeta) (Key, string, error) {
 	secret, err := randToken("", secretRandBytes)
 	if err != nil {
 		return Key{}, "", fmt.Errorf("secret erzeugen: %w", err)
 	}
-	k, err := NewKeyWithSecret(name, scopes, secret)
+	k, err := newKeyWithHash(name, scopes, HashSecret(secret))
 	if err != nil {
 		return Key{}, "", err
 	}
 	k.applyMeta(meta)
 	return k, secret, nil
+}
+
+// newKeyWithHash baut einen aktiven Schlüssel mit frischem kid und dem bereits
+// berechneten SecretHash. Gemeinsamer Kern der beiden Konstruktionswege (Zufalls-
+// Secret mit schnellem Hash vs. betreibergewähltes Secret mit KDF).
+func newKeyWithHash(name string, scopes []Scope, secretHash string) (Key, error) {
+	kid, err := randToken(kidPrefix, kidRandBytes)
+	if err != nil {
+		return Key{}, fmt.Errorf("kid erzeugen: %w", err)
+	}
+	return Key{
+		KID:        kid,
+		Name:       name,
+		SecretHash: secretHash,
+		Scopes:     scopes,
+		Status:     StatusActive,
+		CreatedAt:  time.Now().UTC(),
+	}, nil
 }
 
 // NewSecret erzeugt ein frisches Klartext-Geheimnis (ohne kid-Präfix) mit voller
@@ -331,21 +435,17 @@ func (k *Key) applyMeta(m KeyMeta) {
 
 // NewKeyWithSecret erzeugt einen Schlüssel mit zufälligem kid, aber einem vom
 // Aufrufer vorgegebenen Klartext-Geheimnis (z. B. beim Bootstrap, wo der
-// Betreiber das Geheimnis über eine ENV-Variable setzt). Gespeichert wird nur
-// der Hash. Der vollständige Leitungswert ist k.KID + "." + secret.
+// Betreiber das Geheimnis über eine ENV-Variable setzt). Da dieses Geheimnis vom
+// Menschen gewählt (und potenziell schwach) sein kann, wird es mit dem gesalzenen,
+// rechenintensiven KDF gehasht (HashSecretKDF) statt mit dem schnellen SHA-256 —
+// Schutz gegen Offline-Wörterbuchangriffe auf einen erbeuteten Hash (S-H2). Gespeichert
+// wird nur der Hash. Der vollständige Leitungswert ist k.KID + "." + secret.
 func NewKeyWithSecret(name string, scopes []Scope, secret string) (Key, error) {
-	kid, err := randToken(kidPrefix, kidRandBytes)
+	hash, err := HashSecretKDF(secret)
 	if err != nil {
-		return Key{}, fmt.Errorf("kid erzeugen: %w", err)
+		return Key{}, fmt.Errorf("secret hashen: %w", err)
 	}
-	return Key{
-		KID:        kid,
-		Name:       name,
-		SecretHash: HashSecret(secret),
-		Scopes:     scopes,
-		Status:     StatusActive,
-		CreatedAt:  time.Now().UTC(),
-	}, nil
+	return newKeyWithHash(name, scopes, hash)
 }
 
 // randToken liefert prefix + Base32-Kodierung von n Zufallsbytes.

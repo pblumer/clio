@@ -42,6 +42,16 @@ type Config struct {
 	// Gleichverteilung; ohne Wirkung bei Partitions==1. Default 128.
 	PartitionVNodes int
 
+	// PartitionsExperimental bestätigt bewusst den Betrieb mit mehr als einer
+	// Partition (CLIO_PARTITIONS_EXPERIMENTAL). Die Partitionierung (ADR-034…038) ist
+	// erst als Fundament umgesetzt: bei N>1 sind mehrere Pfade bekannt fehlerhaft —
+	// Optimistic-Concurrency/Preconditions greifen nur partitionslokal, der
+	// State-Cache und die skalaren Lese-Cursor (lowerBound/at) sind bei N>1 nicht
+	// wohldefiniert, und Online-Backup/`verify` decken nur eine Partition ab. Ohne
+	// dieses ausdrückliche Opt-in verweigert der Start bei Partitions>1 den Dienst,
+	// damit N>1 nicht versehentlich produktiv scharf geschaltet wird (WP-4.7).
+	PartitionsExperimental bool
+
 	// DBInitialMB legt die anfängliche Mmap-Größe der bbolt-Datei in MiB fest
 	// (CLIO_DB_INITIAL_MB). bbolt mappt die Datei beim Wachsen neu und hält dabei
 	// kurz einen exklusiven Lock — bei großen, gefüllten Datenbanken unter Leselast
@@ -115,10 +125,24 @@ type Config struct {
 	// blockiert das die Wiederverwendung freier Seiten (DB-/Speicherwachstum). Die
 	// Deadline bricht solche Scans sauber ab, statt die Verbindung hängen zu
 	// lassen. Per CLIO_QUERY_TIMEOUT als Go-Dauer (z. B. "30s", "2m") einstellbar;
-	// 0 (Default) schaltet die Deadline ab — rückwärtskompatibel zum bisherigen,
-	// unbegrenzten Verhalten. Der run-query-Stream sendet unabhängig davon einen
-	// Heartbeat, der die Proxy-Verbindung während langer Scans offen hält.
+	// Default 30s (WP-4.3/A4: eine unbegrenzte Query ist eine CPU-/Speicher-DoS-
+	// Fläche für read-berechtigte Nutzer). 0 schaltet die Deadline explizit ab —
+	// für Spezialfälle mit legitim sehr langen Scans. Der run-query-Stream sendet
+	// unabhängig davon einen Heartbeat, der die Proxy-Verbindung offen hält.
 	QueryTimeout time.Duration
+
+	// StreamWriteTimeout ist das Fortschritts-Timeout der streamenden Antworten
+	// (read-events, observe-events, run-query): vor jedem Write auf die Verbindung
+	// wird eine frische Schreib-Deadline gesetzt. Solange der Client Bytes abnimmt,
+	// läuft der Stream unbegrenzt weiter (Bulk-Reads/Live-Streams bleiben möglich);
+	// ein stehender oder toter Client lässt einen Write in die Deadline laufen —
+	// der Handler bricht dann ab und gibt die bbolt-Lesetransaktion frei (WP-4.3/B3,
+	// gegen die Read-Tx-/Compaction-Blockade durch langsame Clients). Ersetzt das
+	// pauschale, unbegrenzte Aufheben der Server-WriteTimeout auf den Streams. Per
+	// CLIO_STREAM_WRITE_TIMEOUT als Go-Dauer; Default 60s (> observe-Heartbeat, damit
+	// eine ruhige, aber lebende Verbindung offen bleibt). 0 schaltet das
+	// Fortschritts-Timeout ab (unbegrenzt, altes Verhalten).
+	StreamWriteTimeout time.Duration
 
 	// PresenceWindow ist das gleitende „Online"-Fenster der Aktivitäts-/Presence-
 	// Registry (ADR-030): ein Schlüssel ohne offene Observe-Verbindung gilt als
@@ -150,6 +174,24 @@ type Config struct {
 	// dieselben API-Key-Scopes (ADR-025/033) wie für die REST-Fläche.
 	MCPEnabled bool
 
+	// MaxBodyBytes begrenzt die Größe eines Request-Bodys auf den Datenrouten
+	// (CLIO_MAX_BODY_BYTES). Ohne Limit kann ein einzelner authentifizierter Client
+	// (write-Scope) mit einem sehr großen `events`-Array den Prozess in den OOM
+	// treiben — der Body wird beim Dekodieren komplett materialisiert. Das Limit
+	// deckelt jeden Request-Body via http.MaxBytesReader; eine Überschreitung ergibt
+	// 413. Per CLIO_MAX_BODY_BYTES (Bytes) einstellbar; Default 16 MiB. 0 schaltet
+	// das Limit ab (nicht empfohlen; nur für Spezialfälle wie einen vorgelagerten,
+	// selbst limitierenden Proxy).
+	MaxBodyBytes int64
+
+	// HSTS aktiviert den Strict-Transport-Security-Header (WP-4.5/SEC-M2). Standard
+	// aus: clio terminiert kein TLS (läuft hinter einem TLS-Proxy, der HSTS meist
+	// selbst setzt); HSTS über eine Klartext-HTTP-Verbindung ist wirkungslos und
+	// versehentlich über HTTPS gesetzt kann es Clients bei Fehlkonfiguration
+	// aussperren. Per CLIO_HSTS bewusst aktivierbar, wenn clio direkt über HTTPS (via
+	// Proxy) erreichbar ist und kein Proxy den Header setzt.
+	HSTS bool
+
 	// DataIndexFields deklariert pro Event-Typ die `event.data`-Felder, die in
 	// einen internen Sekundärindex aufgenommen werden (ADR-029). Ein
 	// `event.data.<feld> == '<wert>'`-Prädikat über einen so indizierten Typ wird
@@ -171,6 +213,7 @@ const (
 	envDBPath    = "CLIO_DB_PATH"
 	envPartition = "CLIO_PARTITIONS"
 	envPartVNode = "CLIO_PARTITION_VNODES"
+	envPartExp   = "CLIO_PARTITIONS_EXPERIMENTAL"
 	envDBInitMB  = "CLIO_DB_INITIAL_MB"
 	envDBMonInt  = "CLIO_DB_MONITOR_INTERVAL"
 	envDBGrowPct = "CLIO_DB_GROW_THRESHOLD_PCT"
@@ -188,6 +231,9 @@ const (
 	envAuthEv    = "CLIO_AUTH_EVENTS"
 	envAuthDenEv = "CLIO_AUTH_DENIED_EVENTS"
 	envMCP       = "CLIO_MCP"
+	envMaxBody   = "CLIO_MAX_BODY_BYTES"
+	envStreamWTO = "CLIO_STREAM_WRITE_TIMEOUT"
+	envHSTS      = "CLIO_HSTS"
 
 	defaultAddr    = ":3000"
 	defaultDBPath  = "clio.db"
@@ -198,6 +244,23 @@ const (
 	// maxInitMB deckelt CLIO_DB_INITIAL_MB auf 64 TiB — großzügig genug für jede
 	// reale Platte, schützt aber vor versehentlichen Tippfehlern (und Overflow).
 	maxInitMB = 64 << 20
+
+	// defaultMaxBodyBytes deckelt Request-Bodies auf 16 MiB — großzügig für normale
+	// write-events-Batches, aber ein wirksamer Riegel gegen Speicher-DoS. maxBodyCap
+	// begrenzt den Konfigurationswert selbst (Schutz vor Tippfehlern/Overflow).
+	defaultMaxBodyBytes = 16 << 20 // 16 MiB
+	maxBodyCap          = 4 << 30  // 4 GiB
+
+	// defaultQueryTimeout begrenzt run-query-Scans standardmäßig (WP-4.3/A4). 30s
+	// ist großzügig für legitime Abfragen, riegelt aber unbegrenzte CPU-/Speicher-
+	// Bindung durch eine einzelne Query ab. 0 (per CLIO_QUERY_TIMEOUT) schaltet ab.
+	defaultQueryTimeout = 30 * time.Second
+
+	// defaultStreamWriteTimeout ist das Fortschritts-Timeout je Stream-Write
+	// (WP-4.3/B3). 60s liegt über dem observe-Heartbeat (15s), sodass eine ruhige,
+	// aber lebende Verbindung durch Heartbeats offen bleibt, ein toter/stehender
+	// Client aber zügig freigegeben wird.
+	defaultStreamWriteTimeout = 60 * time.Second
 
 	defaultMonInterval    = 60 * time.Second
 	defaultPresenceWindow = 60 * time.Second
@@ -223,32 +286,45 @@ var validSync = map[string]bool{"group": true, "always": true, "off": true}
 // optional mit Defaults.
 func FromEnv() (Config, error) {
 	cfg := Config{
-		Addr:                 getenvDefault(envAddr, defaultAddr),
-		APIToken:             os.Getenv(envToken),
-		BootstrapAdminKey:    os.Getenv(envBootstrap),
-		DBPath:               getenvDefault(envDBPath, defaultDBPath),
-		Partitions:           parseIntDefault(envPartition, defaultPartitions, 1, maxPartitions),
-		PartitionVNodes:      parseIntDefault(envPartVNode, defaultVNodes, 1, maxVNodes),
-		DBInitialMB:          parseIntDefault(envDBInitMB, 0, 0, maxInitMB),
-		DBGrowThresholdPct:   parseIntDefault(envDBGrowPct, defaultGrowPct, 1, 99),
-		DBCompactEnabled:     parseBoolDefault(envDBCompact, false),
-		DBCompactIntervalH:   parseIntDefault(envDBCompInt, defaultCompactH, 1, maxCompactH),
-		Sync:                 getenvDefault(envSync, defaultSync),
-		SigningKey:           os.Getenv(envSignKey),
-		DevMode:              parseBoolDefault(envDevMode, false),
-		Compress:             parseBoolDefault(envCompress, false),
-		EventAuthorship:      parseBoolDefault(envEventAuth, false),
-		ObservePreambleBytes: parseIntDefault(envObsvPre, defaultObsvPre, 0, maxObsvPre),
-		AuthEvents:           parseBoolDefault(envAuthEv, false),
-		AuthDeniedEvents:     parseBoolDefault(envAuthDenEv, false),
-		MCPEnabled:           parseBoolDefault(envMCP, false),
+		Addr:                   getenvDefault(envAddr, defaultAddr),
+		APIToken:               os.Getenv(envToken),
+		BootstrapAdminKey:      os.Getenv(envBootstrap),
+		DBPath:                 getenvDefault(envDBPath, defaultDBPath),
+		Partitions:             parseIntDefault(envPartition, defaultPartitions, 1, maxPartitions),
+		PartitionVNodes:        parseIntDefault(envPartVNode, defaultVNodes, 1, maxVNodes),
+		PartitionsExperimental: parseBoolDefault(envPartExp, false),
+		DBInitialMB:            parseIntDefault(envDBInitMB, 0, 0, maxInitMB),
+		DBGrowThresholdPct:     parseIntDefault(envDBGrowPct, defaultGrowPct, 1, 99),
+		DBCompactEnabled:       parseBoolDefault(envDBCompact, false),
+		DBCompactIntervalH:     parseIntDefault(envDBCompInt, defaultCompactH, 1, maxCompactH),
+		Sync:                   getenvDefault(envSync, defaultSync),
+		SigningKey:             os.Getenv(envSignKey),
+		DevMode:                parseBoolDefault(envDevMode, false),
+		Compress:               parseBoolDefault(envCompress, false),
+		EventAuthorship:        parseBoolDefault(envEventAuth, false),
+		ObservePreambleBytes:   parseIntDefault(envObsvPre, defaultObsvPre, 0, maxObsvPre),
+		AuthEvents:             parseBoolDefault(envAuthEv, false),
+		AuthDeniedEvents:       parseBoolDefault(envAuthDenEv, false),
+		MCPEnabled:             parseBoolDefault(envMCP, false),
+		MaxBodyBytes:           parseInt64Default(envMaxBody, defaultMaxBodyBytes, 0, maxBodyCap),
+		HSTS:                   parseBoolDefault(envHSTS, false),
 	}
 
 	if !validSync[cfg.Sync] {
 		return Config{}, fmt.Errorf("%s muss group, always oder off sein, war %q", envSync, cfg.Sync)
 	}
 
-	to, err := parseDurationDefault(envQueryTO, 0)
+	// N>1 ist experimentell (ADR-034…038 sind erst als Fundament umgesetzt): bei
+	// mehreren Partitionen sind Preconditions, State-Cache, Lese-Cursor und
+	// Backup/verify bekannt unvollständig. Ohne ausdrückliches Opt-in den Start
+	// verweigern, damit N>1 nicht versehentlich produktiv läuft (WP-4.7).
+	if cfg.Partitions > 1 && !cfg.PartitionsExperimental {
+		return Config{}, fmt.Errorf(
+			"%s=%d aktiviert die EXPERIMENTELLE Partitionierung (N>1): Preconditions/Optimistic-Concurrency greifen nur partitionslokal, State-Cache und skalare Lese-Cursor (lowerBound/at) sind bei N>1 nicht wohldefiniert, Online-Backup/verify decken nur eine Partition ab. Für Produktion CLIO_PARTITIONS=1 verwenden. Zum bewussten Erproben zusätzlich %s=true setzen",
+			envPartition, cfg.Partitions, envPartExp)
+	}
+
+	to, err := parseDurationDefault(envQueryTO, defaultQueryTimeout)
 	if err != nil {
 		return Config{}, err
 	}
@@ -265,6 +341,12 @@ func FromEnv() (Config, error) {
 		return Config{}, err
 	}
 	cfg.PresenceWindow = pw
+
+	swto, err := parseDurationDefault(envStreamWTO, defaultStreamWriteTimeout)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.StreamWriteTimeout = swto
 
 	fields, err := parseDataIndexFields(os.Getenv(envDataIdx))
 	if err != nil {
@@ -336,6 +418,27 @@ func parseIntDefault(key string, fallback, min, max int) int {
 		return fallback
 	}
 	n, err := strconv.Atoi(v)
+	if err != nil {
+		return fallback
+	}
+	if n < min {
+		n = min
+	}
+	if n > max {
+		n = max
+	}
+	return n
+}
+
+// parseInt64Default liest eine nicht-negative 64-Bit-Ganzzahl aus der Umgebung und
+// begrenzt sie auf [min,max]. Leer oder unlesbar ergibt fallback. Für Byte-Größen
+// (z. B. CLIO_MAX_BODY_BYTES), die den int32-Bereich überschreiten können.
+func parseInt64Default(key string, fallback, min, max int64) int64 {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
 	if err != nil {
 		return fallback
 	}

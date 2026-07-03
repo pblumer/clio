@@ -7,7 +7,7 @@
 //
 // Aufbau: Das Markup liegt in static/dashboard.html, die ausgelagerten Assets
 // (z. B. static/css/dashboard.css) im static-Verzeichnis. Alles wird per
-// go:embed eingebettet; Handler() liefert die Seite unter /ui, AssetHandler()
+// `go:embed` eingebettet; Handler() liefert die Seite unter /ui, AssetHandler()
 // die übrigen Dateien unter /ui/<pfad>.
 package webui
 

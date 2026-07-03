@@ -5,18 +5,31 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
 )
 
 // ndjsonContentType ist der Content-Type für Newline-Delimited JSON.
 const ndjsonContentType = "application/x-ndjson"
 
-func decodeJSON(r *http.Request, dst any) error {
+// decodeJSON dekodiert den Request-Body strikt (unbekannte Felder = Fehler) in dst.
+// Bei Erfolg true; andernfalls schreibt es selbst die passende Fehlerantwort und
+// liefert false: 413 (Payload Too Large), wenn das Body-Größenlimit (limitBody,
+// http.MaxBytesReader) überschritten wurde, sonst 400. So bleibt die Statuswahl an
+// einer Stelle statt an jeder Aufrufstelle (behebt zugleich die frühere Duplikation).
+func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(dst); err != nil {
-		return errors.New("ungültiger request-body: " + err.Error())
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			writeError(w, http.StatusRequestEntityTooLarge,
+				"request-body überschreitet das Größenlimit ("+strconv.FormatInt(maxErr.Limit, 10)+" bytes)")
+			return false
+		}
+		writeError(w, http.StatusBadRequest, "ungültiger request-body: "+err.Error())
+		return false
 	}
-	return nil
+	return true
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {

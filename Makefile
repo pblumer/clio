@@ -13,7 +13,7 @@ DIST    := dist
 # Zielplattformen für die Cross-Builds (Single-Binary, statisch gelinkt).
 PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64
 
-.PHONY: all build run test race bench cover vet fmt fmt-check lint dist package docker clean smoke postman-gen
+.PHONY: all build run test race bench cover vet fmt fmt-check lint golangci vulncheck dist package docker clean smoke postman-gen
 
 all: lint test build
 
@@ -69,6 +69,15 @@ fmt-check:
 	fi
 
 lint: fmt-check vet
+
+## golangci: vollständiger Linter-Lauf wie in CI (setzt golangci-lint v2 voraus).
+## Installation: https://golangci-lint.run/ — die CI pinnt v2.5.0.
+golangci:
+	golangci-lint run ./...
+
+## vulncheck: bekannte CVEs in Abhängigkeiten (wie in CI).
+vulncheck:
+	go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
 ## dist: statische Single-Binaries für alle Plattformen nach $(DIST)/
 dist: clean-dist

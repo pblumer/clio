@@ -8,10 +8,17 @@ on:
 permissions:
   contents: read
 
+# Laufende Läufe desselben Refs abbrechen, wenn ein neuer Push kommt (spart Runner
+# und liefert schneller Feedback auf den jeweils neuesten Stand).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test:
-    name: build & test
+  lint:
+    name: lint (golangci-lint)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -19,11 +26,12 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
+          # BEWUSST an go.mod gebunden (nicht "stable"): golangci-lint (gepinnt auf
+          # v2.5.0) bringt seine eigene go/types-Version mit und panict, wenn die
+          # installierte Go-Toolchain neuer ist als die, gegen die es gebaut wurde.
+          # Die übrigen Jobs (test/smoke/vulncheck) laufen auf "stable".
           go-version-file: go.mod
           cache: true
-
-      - name: Verify dependencies
-        run: go mod verify
 
       - name: Check formatting
         run: |
@@ -34,6 +42,31 @@ jobs:
             exit 1
           fi
 
+      - name: golangci-lint
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh \
+            | sh -s -- -b "$(go env GOPATH)/bin" v2.5.0
+          "$(go env GOPATH)/bin/golangci-lint" run ./...
+
+  test:
+    name: build & test (race + coverage gate)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          # Neuester stabiler Go-Patch (Build/Tests gegen die aktuellste, gepatchte
+          # Standardbibliothek); der Sprach-Floor in go.mod bleibt go 1.24.
+          go-version: "stable"
+          cache: true
+
+      - name: Verify dependencies
+        run: go mod verify
+
       - name: Vet
         run: go vet ./...
 
@@ -43,12 +76,21 @@ jobs:
       - name: Test (race + coverage)
         run: go test -race -coverpkg=./... -coverprofile=coverage.out ./...
 
-      - name: Coverage summary
-        run: go tool cover -func=coverage.out | tail -1
+      - name: Coverage gate
+        env:
+          THRESHOLD: "80.0"
+        run: |
+          total=$(go tool cover -func=coverage.out | tail -1 | awk '{print $3}' | tr -d '%')
+          echo "Gesamt-Coverage: ${total}% (Schwellwert ${THRESHOLD}%)"
+          if awk "BEGIN{exit !(${total} < ${THRESHOLD})}"; then
+            echo "::error::Coverage ${total}% liegt unter dem Schwellwert ${THRESHOLD}%"
+            exit 1
+          fi
 
-  smoke:
-    name: api smoke (postman/newman)
+  vulncheck:
+    name: govulncheck (advisory)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -56,7 +98,37 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          # Neuester stabiler Go-Patch, damit der Scan gegen die aktuellste
+          # Standardbibliothek läuft (minimiert veraltete Stdlib-Funde).
+          go-version: "stable"
+          cache: true
+
+      # BERATEND (continue-on-error): govulncheck läuft und meldet CVEs im Log,
+      # blockt den Build aber NICHT. Die meisten Funde stecken in der Go-
+      # Standardbibliothek; ihr „Fix" ist ein Go-Toolchain-Bump (Routine-Wartung,
+      # via Dependabot/Maintainer), keine Code-Änderung — ein hart blockierendes
+      # Gate würde bei jeder neuen Stdlib-CVE unabhängige Merges rot färben. Die
+      # blockierenden Gates sind lint/test/coverage/smoke sowie das Release-Test-Gate.
+      - name: govulncheck
+        continue-on-error: true
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          "$(go env GOPATH)/bin/govulncheck" ./...
+
+  smoke:
+    name: api smoke (postman/newman)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          # Neuester stabiler Go-Patch (Build/Tests gegen die aktuellste, gepatchte
+          # Standardbibliothek); der Sprach-Floor in go.mod bleibt go 1.24.
+          go-version: "stable"
           cache: true
 
       - name: Set up Node

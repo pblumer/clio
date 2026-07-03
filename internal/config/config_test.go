@@ -120,6 +120,9 @@ func TestFromEnvPartitions(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv(envToken, "tok")
 			t.Setenv(envPartition, tc.val)
+			// N>1 ist per Opt-in verriegelt (WP-4.7); hier geht es nur um die
+			// Klemmung des Werts, daher das Experimental-Flag setzen.
+			t.Setenv(envPartExp, "true")
 			cfg, err := FromEnv()
 			if err != nil {
 				t.Fatalf("unerwarteter fehler: %v", err)
@@ -129,6 +132,41 @@ func TestFromEnvPartitions(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestFromEnvPartitionsExperimentalGuard prüft WP-4.7: N>1 verweigert ohne
+// ausdrückliches Opt-in den Start; N=1 läuft immer, und mit Opt-in läuft auch N>1.
+func TestFromEnvPartitionsExperimentalGuard(t *testing.T) {
+	t.Run("N>1 ohne Opt-in -> Fehler", func(t *testing.T) {
+		t.Setenv(envToken, "tok")
+		t.Setenv(envPartition, "4")
+		t.Setenv(envPartExp, "")
+		if _, err := FromEnv(); err == nil {
+			t.Fatal("erwartete einen Fehler bei N>1 ohne CLIO_PARTITIONS_EXPERIMENTAL")
+		}
+	})
+
+	t.Run("N>1 mit Opt-in -> ok", func(t *testing.T) {
+		t.Setenv(envToken, "tok")
+		t.Setenv(envPartition, "4")
+		t.Setenv(envPartExp, "true")
+		cfg, err := FromEnv()
+		if err != nil {
+			t.Fatalf("unerwarteter fehler bei aktivem Opt-in: %v", err)
+		}
+		if cfg.Partitions != 4 || !cfg.PartitionsExperimental {
+			t.Fatalf("unerwartete Config: Partitions=%d experimental=%v", cfg.Partitions, cfg.PartitionsExperimental)
+		}
+	})
+
+	t.Run("N=1 ohne Opt-in -> ok", func(t *testing.T) {
+		t.Setenv(envToken, "tok")
+		t.Setenv(envPartition, "1")
+		t.Setenv(envPartExp, "")
+		if _, err := FromEnv(); err != nil {
+			t.Fatalf("N=1 muss ohne Opt-in laufen, bekam: %v", err)
+		}
+	})
 }
 
 func TestFromEnvPartitionVNodesDefault(t *testing.T) {
@@ -280,7 +318,7 @@ func TestFromEnvSyncInvalid(t *testing.T) {
 	}
 }
 
-func TestFromEnvQueryTimeoutDefaultOff(t *testing.T) {
+func TestFromEnvQueryTimeoutDefault(t *testing.T) {
 	t.Setenv(envToken, "tok")
 	t.Setenv(envQueryTO, "")
 
@@ -288,8 +326,22 @@ func TestFromEnvQueryTimeoutDefaultOff(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unerwarteter fehler: %v", err)
 	}
+	// WP-4.3/A4: Default ist jetzt 30s (nicht mehr aus), als DoS-Riegel.
+	if cfg.QueryTimeout != defaultQueryTimeout {
+		t.Errorf("QueryTimeout = %v, want %v (Default) ohne %s", cfg.QueryTimeout, defaultQueryTimeout, envQueryTO)
+	}
+}
+
+func TestFromEnvQueryTimeoutDisabled(t *testing.T) {
+	t.Setenv(envToken, "tok")
+	t.Setenv(envQueryTO, "0")
+
+	cfg, err := FromEnv()
+	if err != nil {
+		t.Fatalf("unerwarteter fehler: %v", err)
+	}
 	if cfg.QueryTimeout != 0 {
-		t.Errorf("QueryTimeout = %v, want 0 (aus) ohne %s", cfg.QueryTimeout, envQueryTO)
+		t.Errorf("QueryTimeout = %v, want 0 (explizit aus) bei %s=0", cfg.QueryTimeout, envQueryTO)
 	}
 }
 

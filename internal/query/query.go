@@ -67,6 +67,16 @@ func (p *Predicate) RequiredTypes() ([]string, bool) {
 // eine Einfügereihenfolge — kein externes LRU-Paket).
 const defaultCacheSize = 256
 
+// maxEvalCost deckelt die CEL-Laufzeitkosten EINER Prädikat-Auswertung (gegen ein
+// einzelnes Event) über cel.CostLimit (WP-4.3/A4). Ein normales Prädikat kostet
+// wenige bis wenige tausend Einheiten; das großzügige Limit stoppt nur pathologische
+// Ausdrücke (tief verschachtelte map()/filter(), teure Regex) und verhindert so,
+// dass ein read-berechtigter Nutzer mit einer einzigen Query pro Event CPU bindet.
+// Übersteigt eine Auswertung das Limit, liefert prg.Eval einen Fehler (→ 400 statt
+// Endlos-CPU). Ergänzt die scan-weite Deadline (CLIO_QUERY_TIMEOUT) als zweite,
+// per-Event wirkende Schutzschicht.
+const maxEvalCost = 10_000_000
+
 // Compiler kompiliert CEL-Prädikate gegen eine feste Umgebung und cacht das
 // Ergebnis je Ausdruck. Nebenläufig sicher.
 type Compiler struct {
@@ -108,7 +118,7 @@ func (c *Compiler) Compile(expr string) (*Predicate, error) {
 	if !ast.OutputType().IsExactType(cel.BoolType) {
 		return nil, fmt.Errorf("ausdruck muss bool ergeben, ergibt %s", ast.OutputType())
 	}
-	prg, err := c.env.Program(ast)
+	prg, err := c.env.Program(ast, cel.CostLimit(maxEvalCost))
 	if err != nil {
 		return nil, fmt.Errorf("programm erzeugen: %w", err)
 	}

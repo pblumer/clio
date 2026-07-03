@@ -27,12 +27,6 @@ var allBuckets = [][]byte{
 	bucketSchemas, bucketReduceSpecs, bucketDataIdx, bucketAuthKeys, bucketAuditLog,
 }
 
-// centralBuckets sind die partitionsübergreifenden Buckets — sie leben einmalig in
-// der Datei der Partition 0, nicht je Partition: mutable Steuerdaten (Schlüsselbund
-// ADR-025), append-only Audit-Log (ADR-032), die Event-Schemas (ADR-014, global je
-// Typ) und die Reduce-Specs der Zustandssicht (ADR-041, global je Prefix).
-var centralBuckets = [][]byte{bucketSchemas, bucketReduceSpecs, bucketAuthKeys, bucketAuditLog}
-
 // shard kapselt den Speicher EINER Partition (ADR-034/037, file-per-partition):
 // eine eigene bbolt-Datei mit den Event-Buckets, eigener bbolt-Sequenz und eigener
 // Hash-Kette (eigener Ketten-Kopf im meta-Bucket). Die Partition 0 trägt zusätzlich
@@ -141,6 +135,18 @@ func (sh *shard) path() string {
 	sh.dbMu.RLock()
 	defer sh.dbMu.RUnlock()
 	return sh.db.Path()
+}
+
+// currentSeq liefert die höchste bereits vergebene (committete) Event-Sequenz
+// dieser Partition — 0 bei leerer Partition. Grundlage für die Initialisierung des
+// Publish-Sequencers (die als Nächstes live zu publizierende Sequenz ist +1).
+func (sh *shard) currentSeq() (uint64, error) {
+	var seq uint64
+	err := sh.view(func(tx *bolt.Tx) error {
+		seq = tx.Bucket(bucketEvents).Sequence()
+		return nil
+	})
+	return seq, err
 }
 
 func (sh *shard) close() error {

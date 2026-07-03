@@ -32,20 +32,6 @@ func parseReduceSpec(raw json.RawMessage) (*reduceSpec, error) {
 	return &reduceSpec{defaultStrategy: s.Default, fields: s.Fields}, nil
 }
 
-// strategyFor liefert die Strategie eines Feldpfads (Default, falls nicht genannt).
-func (rs *reduceSpec) strategyFor(path string) string {
-	if rs == nil {
-		return store.ReduceLWW
-	}
-	if strat, ok := rs.fields[path]; ok {
-		return strat
-	}
-	if rs.defaultStrategy != "" {
-		return rs.defaultStrategy
-	}
-	return store.ReduceLWW
-}
-
 // applyEvent faltet die data-Payload eines Events in den Akkumulator (ADR-041).
 // Ohne Spec (rs == nil) ist das exakt das LWW-Deep-Merge aus ADR-039. Mit Spec
 // werden zuerst die feldweise nicht-LWW-Strategien angewandt und ihre Pfade aus

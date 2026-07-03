@@ -1,0 +1,21 @@
+# golangci-lint-Konfiguration (WP-4.6). Bewusst der stabile Standard-Satz
+# (errcheck, govet, ineffassign, staticcheck, unused) — keine exotischen, über die
+# Zeit brüchigen Linter. Ausnahmen unten sind bewusst und minimal.
+version: "2"
+
+linters:
+  settings:
+    errcheck:
+      # Schreib-/Ausgabefunktionen auf Konsole bzw. HTTP-Response: ein Schreibfehler
+      # ist hier nicht sinnvoll behandelbar (Client weg / stdout defekt) und wird
+      # konventionell ignoriert. Ausschluss statt überall "_, _ =".
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+  exclusions:
+    rules:
+      # In Tests werden Rückgabewerte von Setup-/Hilfsaufrufen bewusst verworfen.
+      - path: '_test\.go'
+        linters:
+          - errcheck

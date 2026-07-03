@@ -35,6 +35,16 @@ func (r *statusRecorder) Flush() {
 	}
 }
 
+// Unwrap gibt den umschlossenen ResponseWriter frei, damit http.ResponseController
+// (net/http) an die darunterliegenden optionalen Interfaces gelangt — insbesondere
+// SetWriteDeadline. Ohne dieses Unwrap liefert der Controller ErrNotSupported und
+// die Deadline-Aufhebung der Streaming-Handler (observe-events, große read-/query-
+// Scans, backup) läuft ins Leere: der Server-WriteTimeout würde diese bewusst
+// langlaufenden bzw. unendlichen Ströme nach WriteTimeout hart kappen.
+func (r *statusRecorder) Unwrap() http.ResponseWriter {
+	return r.ResponseWriter
+}
+
 // instrument loggt jede Anfrage strukturiert und verbucht sie in den Metriken.
 func (s *Server) instrument(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

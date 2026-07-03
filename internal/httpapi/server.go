@@ -110,6 +110,11 @@ func New(cfg config.Config, st *store.Store, logger *slog.Logger, opts ...Option
 		}
 	}
 
+	// Live-Publish an den Broker hängen (K2): der Store liefert committete Events
+	// selbst — streng in Sequenzreihenfolge je Partition — an die Observer. Vor dem
+	// Start des Listeners gesetzt, also vor jedem möglichen Write dieses Prozesses.
+	st.SetPublisher(s.broker.Publish)
+
 	// Eventmengen-Histogramm für das Dashboard. Der Origin (Beginn von Bucket 0)
 	// ist die Zeit des ersten Events — günstig per FirstEventTime (O(1)) ermittelt,
 	// damit historische Events korrekt über die Zeitachse verteilt werden.
@@ -150,9 +155,55 @@ func New(cfg config.Config, st *store.Store, logger *slog.Logger, opts ...Option
 }
 
 // Handler liefert den http.Handler des Servers, umschlossen von der
-// Observability-Middleware (Request-Logging + Metriken).
+// Observability-Middleware (Request-Logging + Metriken), dem Body-Größenlimit
+// (Schutz vor Speicher-DoS, A3/WP-4.3) und den Sicherheits-Headern (WP-4.5).
 func (s *Server) Handler() http.Handler {
-	return s.instrument(s.mux)
+	return s.securityHeaders(s.limitBody(s.instrument(s.mux)))
+}
+
+// securityHeaders setzt defensive Response-Header (WP-4.5/SEC-M2). Basis-Header auf
+// JEDER Antwort: nosniff (kein MIME-Sniffing), X-Frame-Options: DENY und
+// Referrer-Policy (kein Referrer-Leak). Für das Dashboard unter /ui zusätzlich eine
+// Content-Security-Policy: script-src 'self' (kein Inline-Script — das Dashboard lädt
+// sein JS als eigene Datei; blockt XSS-Injektion und damit die Exfiltration des im
+// Browser gehaltenen Tokens) und style-src 'self' 'unsafe-inline' (das Dashboard nutzt
+// einige inline style-Attribute; Style-Injection ist ungleich harmloser als Script).
+// Die /docs-Swagger-UI bekommt bewusst KEINE strikte CSP (sie benötigt Inline-Assets).
+func (s *Server) securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Referrer-Policy", "no-referrer")
+		if s.cfg.HSTS {
+			h.Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+		}
+		if strings.HasPrefix(r.URL.Path, "/ui") {
+			h.Set("Content-Security-Policy",
+				"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "+
+					"img-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; "+
+					"frame-ancestors 'none'; form-action 'self'")
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// limitBody deckelt jeden Request-Body auf cfg.MaxBodyBytes via
+// http.MaxBytesReader. Wird das Limit überschritten, liefert der nachfolgende
+// Body-Read einen *http.MaxBytesError; decodeJSON übersetzt das in 413. Ein Limit
+// von 0 schaltet den Riegel ab (nicht empfohlen). Bewusst als äußere Schicht, damit
+// es für JEDE Route greift — auch für künftige, die den Body anders lesen.
+func (s *Server) limitBody(next http.Handler) http.Handler {
+	limit := s.cfg.MaxBodyBytes
+	if limit <= 0 {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Body != nil {
+			r.Body = http.MaxBytesReader(w, r.Body, limit)
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // StartBackground startet langlaufende Hintergrundaufgaben des API-Layers und

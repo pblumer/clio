@@ -249,6 +249,26 @@ type Store struct {
 	// Sekundärindex (ADR-029). Nach dem Öffnen unveränderlich, daher lock-frei
 	// lesbar. Leer = Index aus.
 	dataIdxFields map[string]map[string]struct{}
+
+	// publish liefert frisch committete Events an die Live-Observer (der Broker,
+	// gesetzt via SetPublisher). nil = kein Live-Publish (z. B. CLI-Nutzung ohne
+	// laufenden Server).
+	//
+	// K2-Fix: Das Publish läuft NICHT mehr aus der Handler-Goroutine, sondern hier
+	// im Store — und zwar strikt in Sequenzreihenfolge je Partition. Zwei
+	// nebenläufige Writer committen zwar serialisiert (bbolt), könnten ihr Publish
+	// aber vertauscht ausführen; ein Observer würde die später committeten Events
+	// zuerst sehen, seinen per-Partition-Cursor hochsetzen und die früheren dann als
+	// vermeintliche Duplikate dauerhaft verwerfen (auch der Reconnect via lowerBound
+	// holt sie nicht mehr nach). Der Sequencer unten erzwingt Publish-Reihenfolge ==
+	// Commit-Reihenfolge und schließt dieses Fenster.
+	publishMu   sync.Mutex
+	publishCond *sync.Cond
+	publish     func([]event.Event)
+	// nextPublish[pid] ist die als Nächstes zu publizierende Sequenz der Partition
+	// pid. Initial = höchste committete Sequenz + 1; ein Writer publiziert erst,
+	// wenn seine erste Sequenz an der Reihe ist.
+	nextPublish []uint64
 }
 
 // Open öffnet (oder erstellt) die Datenbank unter path mit Standardoptionen
@@ -335,7 +355,65 @@ func OpenWithOptions(path string, opts Options) (*Store, error) {
 		s.verifyKey = opts.SigningKey.Public().(ed25519.PublicKey)
 	}
 	s.compress = opts.Compress
+
+	// Publish-Sequencer initialisieren (K2): die als Nächstes live zu publizierende
+	// Sequenz je Partition ist die aktuell höchste committete + 1. So passt die erste
+	// Live-Publikation nach dem Öffnen exakt auf den ersten neuen Write.
+	s.publishCond = sync.NewCond(&s.publishMu)
+	s.nextPublish = make([]uint64, n)
+	for id, sh := range shards {
+		seq, err := sh.currentSeq()
+		if err != nil {
+			for _, o := range shards {
+				_ = o.close()
+			}
+			return nil, fmt.Errorf("publish-sequencer initialisieren (partition %d): %w", id, err)
+		}
+		s.nextPublish[id] = seq + 1
+	}
 	return s, nil
+}
+
+// SetPublisher hinterlegt die Senke für frisch committete Events (der Live-Broker).
+// Wird sie nicht gesetzt, publiziert der Store nicht (CLI/Offline-Nutzung). Muss vor
+// dem ersten AppendAuthored gesetzt werden (der Server tut das im Konstruktor, bevor
+// der HTTP-Listener startet).
+func (s *Store) SetPublisher(publish func([]event.Event)) {
+	s.publishMu.Lock()
+	s.publish = publish
+	s.publishMu.Unlock()
+}
+
+// publishInOrder liefert die committeten Events einer Partition streng in
+// Sequenzreihenfolge an die Live-Senke (K2). Der aufrufende Writer wartet, bis seine
+// erste Sequenz an der Reihe ist, publiziert dann und gibt die Reihe frei. Da jeder
+// committete Append eine lückenlose, zusammenhängende Sequenzspanne belegt (bbolt
+// serialisiert Commits; zurückgerollte Appends belegen keine committete Sequenz),
+// wird der Sequencer nie blockiert. events müssen alle zur selben Partition gehören
+// (AppendAuthored garantiert das) und nach Sequenz aufsteigend sortiert sein.
+func (s *Store) publishInOrder(pid partition.ID, events []event.Event) {
+	firstSeq, err := strconv.ParseUint(events[0].ID, 10, 64)
+	if err != nil {
+		return
+	}
+	lastSeq, err := strconv.ParseUint(events[len(events)-1].ID, 10, 64)
+	if err != nil {
+		return
+	}
+	s.publishMu.Lock()
+	defer s.publishMu.Unlock()
+	// Auf die eigene Reihe warten und den Cursor IMMER fortschreiben — auch ohne
+	// gesetzte Senke. So bleibt nextPublish lückenlos an der committeten Sequenz
+	// ausgerichtet und ein später via SetPublisher angehängter Broker startet
+	// konsistent. Der eigentliche Publish-Aufruf entfällt nur, wenn keine Senke da ist.
+	for s.nextPublish[pid] != firstSeq {
+		s.publishCond.Wait()
+	}
+	if s.publish != nil {
+		s.publish(events)
+	}
+	s.nextPublish[pid] = lastSeq + 1
+	s.publishCond.Broadcast()
 }
 
 // defaultPartitionVNodes ist die Default-Anzahl virtueller Knoten je Partition,
@@ -351,14 +429,13 @@ func (s *Store) PublicKey() (ed25519.PublicKey, bool) {
 	return s.verifyKey, true
 }
 
-// view/update/batch/write/path delegieren an die zentrale Partition (shards[0]),
-// die die zentralen Buckets (Schemas, Schlüsselbund, Audit-Log) trägt. Alle
-// nicht-Event-Operationen (auth, schema, audit) laufen unverändert über sie. Bei
-// n=1 ist die zentrale Partition zugleich die einzige Event-Partition.
+// view/update/path delegieren an die zentrale Partition (shards[0]), die die
+// zentralen Buckets (Schemas, Schlüsselbund, Audit-Log) trägt. Alle nicht-Event-
+// Operationen (auth, schema, audit) laufen unverändert über sie. Bei n=1 ist die
+// zentrale Partition zugleich die einzige Event-Partition. Event-Schreibpfade
+// nutzen die per-Partition-Methoden des jeweiligen shard direkt.
 func (s *Store) view(fn func(*bolt.Tx) error) error   { return s.central.view(fn) }
 func (s *Store) update(fn func(*bolt.Tx) error) error { return s.central.update(fn) }
-func (s *Store) batch(fn func(*bolt.Tx) error) error  { return s.central.batch(fn) }
-func (s *Store) write(fn func(*bolt.Tx) error) error  { return s.central.write(fn) }
 
 // path liefert den Dateipfad der zentralen Partition (Partition 0 / Basis-Pfad).
 func (s *Store) path() string { return s.central.path() }
@@ -375,12 +452,6 @@ func (s *Store) Partitions() int { return len(s.shards) }
 // DB-Zugriff. Bei n=1 immer 0.
 func (s *Store) PartitionOf(source string) int {
 	return int(s.ring.PartitionForSource(source))
-}
-
-// shardForSource bildet einen CloudEvents-`source` über den konsistenten Hash-Ring
-// (ADR-038) auf die zuständige Partition ab. Bei n=1 immer shards[0].
-func (s *Store) shardForSource(source string) *shard {
-	return s.shards[s.ring.PartitionForSource(source)]
 }
 
 // eachShardView ruft fn in der Lese-Transaktion JEDER Partition auf (aufsteigend
@@ -498,6 +569,17 @@ func (s *Store) Reset() (uint64, error) {
 	s.schemaMu.Lock()
 	s.schemaCache = make(map[string]*jsonschema.Schema)
 	s.schemaMu.Unlock()
+
+	// Publish-Sequencer zurücksetzen: jede Partitionssequenz beginnt wieder bei 0,
+	// der nächste Live-Publish also bei Sequenz 1 (K2). Dev-only; ohne diesen Reset
+	// würde der Sequencer nach einem Reset auf eine nie wieder erreichte Sequenz
+	// warten und Live-Publishes blockieren.
+	s.publishMu.Lock()
+	for id := range s.nextPublish {
+		s.nextPublish[id] = 1
+	}
+	s.publishCond.Broadcast()
+	s.publishMu.Unlock()
 	return deleted, nil
 }
 
@@ -1429,6 +1511,12 @@ func (s *Store) AppendAuthored(candidates []event.Candidate, preconditions []Pre
 	for i := range events {
 		events[i].Partition = int(pid)
 	}
+
+	// Live-Observer benachrichtigen — im Store, streng in Sequenzreihenfolge (K2).
+	// Bewusst NACH dem Commit und innerhalb von AppendAuthored (nicht mehr aus der
+	// Handler-Goroutine), damit Publish-Reihenfolge == Commit-Reihenfolge gilt.
+	s.publishInOrder(pid, events)
+
 	return events, nil
 }
 
@@ -1949,7 +2037,7 @@ func scanPrefix(cur *bolt.Cursor, prefix []byte, desc bool, yield func(k, v []by
 	var k, v []byte
 	if end := prefixSuccessor(prefix); end == nil {
 		k, v = cur.Last()
-	} else if k, v = cur.Seek(end); k == nil {
+	} else if k, _ = cur.Seek(end); k == nil {
 		k, v = cur.Last() // Prefix-Bereich liegt am Bucket-Ende → letzter Schlüssel
 	} else {
 		k, v = cur.Prev() // Seek landete hinter dem Prefix → ein Schritt zurück

@@ -51,7 +51,11 @@ Diese Seite hilft zu entscheiden, ob das zu deinem Einsatz passt.
 - **Kein automatisches Failover.** Fällt der Node aus, steht der Dienst bis zum
   Neustart/Restore.
 - **Keine horizontale Skalierung.** Schreiben ist serialisiert (ein Writer);
-  Lesen skaliert nur vertikal.
+  Lesen skaliert nur vertikal. Die Partitionierung (`CLIO_PARTITIONS>1`, ADR-034…038)
+  ist **experimentell** und für den Produktivbetrieb **nicht freigegeben**: bei N>1
+  sind Preconditions, State-Cache, die skalaren Lese-Cursor und Online-Backup/`verify`
+  unvollständig. Der Start verweigert daher bei N>1 den Dienst, sofern nicht
+  ausdrücklich `CLIO_PARTITIONS_EXPERIMENTAL=true` gesetzt ist.
 - **Keine Mandantenplattform.** Scopes trennen Rechte, **nicht** Datenräume.
 - **Kein Ersatz für Kafka.** Keine Consumer Groups, Partitionen, Rebalancing.
 - **Kein Ersatz für Reporting/BI.** Keine Aggregation/Joins/Volltext im Kern —
@@ -71,8 +75,14 @@ Diese Seite hilft zu entscheiden, ob das zu deinem Einsatz passt.
       ~Dateigröße) **+** Backups; bei Vorbelegung `CLIO_DB_INITIAL_MB` setzen.
 - [ ] **Compaction-Fenster**: `CLIO_DB_COMPACT_ENABLED` mit Intervall in einer
       ruhigen Phase (kurze Online-Downtime pro Lauf) **oder** geplant offline.
-- [ ] **Query-Timeout**: `CLIO_QUERY_TIMEOUT` **setzen** (Default aus!) gegen
-      breite Scans.
+- [ ] **Query-Timeout**: `CLIO_QUERY_TIMEOUT` begrenzt breite Scans — **Default
+      30 s** (nicht mehr aus); für legitim lange Scans erhöhen, mit `0` abschalten.
+- [ ] **Body-Limit**: `CLIO_MAX_BODY_BYTES` deckelt Request-Bodies — **Default
+      16 MiB** (Schutz vor Speicher-DoS, Überschreitung → 413); für große
+      write-Batches erhöhen.
+- [ ] **Stream-Fortschritts-Timeout**: `CLIO_STREAM_WRITE_TIMEOUT` gibt die
+      bbolt-Lesetransaktion eines stehenden/toten Streaming-Clients frei —
+      **Default 60 s** (je Write erneuert); `0` schaltet ab (unbegrenzt).
 - [ ] **Reverse Proxy**: TLS-Terminierung, Buffering aus, großzügige Timeouts für
       `observe`/`run-query` (siehe §6).
 - [ ] **Auth**: Bootstrap-Variable nach Erststart entfernen, benannte Keys mit
@@ -140,5 +150,7 @@ location /api/v1/ {
 ```
 
 Server-seitige Timeouts in clio (fix): `ReadHeaderTimeout` 5 s (Slowloris-Schutz),
-`WriteTimeout` 30 s (für Streams bewusst aufgehoben), `IdleTimeout` 120 s. Der
-Proxy sollte diese nicht unterschreiten.
+`WriteTimeout` 30 s (für die streamenden Routen durch ein **Fortschritts-Timeout**
+je Write ersetzt, `CLIO_STREAM_WRITE_TIMEOUT`, Default 60 s — ein aktiver Client
+streamt beliebig lange, ein stehender wird freigegeben), `IdleTimeout` 120 s,
+`MaxHeaderBytes` 1 MiB. Der Proxy sollte diese nicht unterschreiten.
