@@ -73,17 +73,19 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 		uptime = 0
 	}
 
+	// Bewusst OHNE databaseFilePath: der interne Dateipfad ist eine unnötige
+	// Informationspreisgabe an jeden read-berechtigten Nutzer (N3). Betreiber sehen
+	// den Pfad in der Konfiguration/den Logs.
 	body := map[string]any{
-		"name":             "cliostore",
-		"version":          s.version,
-		"startedAt":        s.startedAt.Format(time.RFC3339Nano),
-		"uptimeSeconds":    int64(uptime.Seconds()),
-		"serverTime":       now.Format(time.RFC3339Nano),
-		"eventsTotal":      count,
-		"syncMode":         s.cfg.Sync,
-		"httpListenAddr":   s.cfg.Addr,
-		"databaseFilePath": s.cfg.DBPath,
-		"devMode":          s.devMode,
+		"name":           "cliostore",
+		"version":        s.version,
+		"startedAt":      s.startedAt.Format(time.RFC3339Nano),
+		"uptimeSeconds":  int64(uptime.Seconds()),
+		"serverTime":     now.Format(time.RFC3339Nano),
+		"eventsTotal":    count,
+		"syncMode":       s.cfg.Sync,
+		"httpListenAddr": s.cfg.Addr,
+		"devMode":        s.devMode,
 	}
 
 	// Speicherbelegung der DB-Datei inkl. Füllgrad (Datei vs. wiederverwendbarer
@@ -515,6 +517,17 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 // Schreiber (echtes Hot-Backup). Die Schreib-Deadline wird wie bei den großen
 // Lese-Routen aufgehoben, sonst kappt WriteTimeout große Backups.
 func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
+	// Online-Backup wird bei N>1 (noch) nicht unterstützt (Backup() scheitert dann
+	// vor dem ersten Byte mit ErrBackupMultiPartition). Ohne diese Vorabprüfung
+	// schriebe Go ein leeres 200 mit Download-Headern — der Betreiber hielte eine
+	// 0-Byte-Datei für ein Backup (C-H4). Klar als 501 melden, bevor Header committen.
+	if s.store.Partitions() > 1 {
+		writeError(w, http.StatusNotImplemented,
+			"online-backup wird bei mehreren partitionen (CLIO_PARTITIONS>1) derzeit nicht unterstützt")
+		s.recordAudit(r, store.AuditActionBackup, "", "multi-partition nicht unterstützt")
+		return
+	}
+
 	// Fortschritts-Timeout je Write (B3): ein Backup hält eine bbolt-Lesetransaktion
 	// für die gesamte Client-Download-Dauer; ein langsamer/stehender Admin-Client
 	// würde die Tx sonst unbegrenzt halten (Freelist-Blockade). Der streamWriter gibt
@@ -525,13 +538,20 @@ func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
 
-	// Sobald Backup zu schreiben beginnt, ist der 200-Header raus — ein Fehler
-	// mitten im Stream lässt sich dann nur noch loggen (der Client erkennt das
-	// abgeschnittene Artefakt an `verify`).
 	res, err := s.store.Backup(sw)
 	if err != nil {
-		s.logger.Error("backup streamen fehlgeschlagen", "err", err)
 		s.recordAudit(r, store.AuditActionBackup, "", err.Error())
+		if !sw.Wrote() {
+			// Noch keine Bytes → der 200-Header ist NICHT committed: sauberen
+			// Fehlerstatus senden statt eines leeren „Backups".
+			w.Header().Del("Content-Disposition")
+			s.logger.Error("backup fehlgeschlagen (vor dem ersten byte)", "err", err)
+			writeError(w, http.StatusInternalServerError, "backup fehlgeschlagen")
+			return
+		}
+		// Bytes bereits geflossen (200 committed) → nur loggen; der Client erkennt das
+		// abgeschnittene Artefakt an `verify`.
+		s.logger.Error("backup streamen fehlgeschlagen (stream bereits begonnen)", "err", err)
 		return
 	}
 	if id, ok := identityFromContext(r); ok {

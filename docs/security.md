@@ -12,9 +12,24 @@ Leitung steht der zusammengesetzte Wert im Bearer-Header:
 Authorization: Bearer <kid>.<secret>
 ```
 
-Persistiert wird **ausschließlich der SHA-256-Hash** des Geheimnisses, nie der
-Klartext. Der Vergleich beim Login läuft **zeitkonstant** (kein Timing-Orakel
-über die Existenz eines `kid`).
+Persistiert wird **ausschließlich ein Hash** des Geheimnisses, nie der Klartext:
+
+- **Serverseitig erzeugte Schlüssel** (voll zufällig, 160 Bit) → schneller
+  **SHA-256**-Hash. Ein rechenintensiver KDF brächte hier keinen Gewinn (Brute-Force
+  gegen 160-Bit-Zufall ist aussichtslos) und würde den Auth-Hot-Path belasten.
+- **Vom Betreiber gewählte Geheimnisse** (Bootstrap-/Legacy-Token, evtl. schwach) →
+  gesalzener, rechenintensiver **PBKDF2-HMAC-SHA256** (Standardbibliothek, keine
+  externe Abhängigkeit). Salt gegen Rainbow-Tables/Korrelation, hohe Iterationszahl
+  gegen Offline-Wörterbuchangriffe auf einen aus DB/Backup erbeuteten Hash.
+
+Der Vergleich beim Login läuft **zeitkonstant** und formatunabhängig (kein
+Timing-Orakel über die Existenz eines `kid`).
+
+Auf HTTP-Ebene setzt clio defensive **Sicherheits-Header** (`X-Content-Type-Options:
+nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`); das Dashboard
+unter `/ui` erhält zusätzlich eine **Content-Security-Policy** (`script-src 'self'`).
+`Strict-Transport-Security` ist per `CLIO_HSTS` aktivierbar (Default aus, da clio
+kein TLS terminiert).
 
 ---
 

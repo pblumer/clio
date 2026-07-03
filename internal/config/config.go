@@ -174,6 +174,14 @@ type Config struct {
 	// selbst limitierenden Proxy).
 	MaxBodyBytes int64
 
+	// HSTS aktiviert den Strict-Transport-Security-Header (WP-4.5/SEC-M2). Standard
+	// aus: clio terminiert kein TLS (läuft hinter einem TLS-Proxy, der HSTS meist
+	// selbst setzt); HSTS über eine Klartext-HTTP-Verbindung ist wirkungslos und
+	// versehentlich über HTTPS gesetzt kann es Clients bei Fehlkonfiguration
+	// aussperren. Per CLIO_HSTS bewusst aktivierbar, wenn clio direkt über HTTPS (via
+	// Proxy) erreichbar ist und kein Proxy den Header setzt.
+	HSTS bool
+
 	// DataIndexFields deklariert pro Event-Typ die `event.data`-Felder, die in
 	// einen internen Sekundärindex aufgenommen werden (ADR-029). Ein
 	// `event.data.<feld> == '<wert>'`-Prädikat über einen so indizierten Typ wird
@@ -214,6 +222,7 @@ const (
 	envMCP       = "CLIO_MCP"
 	envMaxBody   = "CLIO_MAX_BODY_BYTES"
 	envStreamWTO = "CLIO_STREAM_WRITE_TIMEOUT"
+	envHSTS      = "CLIO_HSTS"
 
 	defaultAddr    = ":3000"
 	defaultDBPath  = "clio.db"
@@ -286,6 +295,7 @@ func FromEnv() (Config, error) {
 		AuthDeniedEvents:     parseBoolDefault(envAuthDenEv, false),
 		MCPEnabled:           parseBoolDefault(envMCP, false),
 		MaxBodyBytes:         parseInt64Default(envMaxBody, defaultMaxBodyBytes, 0, maxBodyCap),
+		HSTS:                 parseBoolDefault(envHSTS, false),
 	}
 
 	if !validSync[cfg.Sync] {
