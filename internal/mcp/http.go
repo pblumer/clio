@@ -7,10 +7,18 @@ import (
 	"strings"
 )
 
-// ServeHTTP implementiert den MCP-HTTP-Transport: ein POST trägt genau eine
-// JSON-RPC-Nachricht, die Antwort ist die zugehörige JSON-RPC-Antwort. Der
-// eingebettete Mount (POST /mcp) und das eigenständige Binary (-http) nutzen
-// denselben Handler.
+// ServeHTTP implementiert den MCP-HTTP-Transport („Streamable HTTP"): ein POST
+// trägt genau eine JSON-RPC-Nachricht, die Antwort ist die zugehörige
+// JSON-RPC-Antwort (Content-Type application/json) bzw. 202 Accepted ohne Body,
+// wenn die Nachricht eine Notification war. Der eingebettete Mount (/mcp) und
+// das eigenständige Binary (-http) nutzen denselben Handler.
+//
+// Andere Methoden beantwortet der Handler mit 405 und Allow: POST. Das ist kein
+// Mangel, sondern das von der Spec vorgesehene Signal: ein Client, der per GET
+// einen server-initiierten SSE-Strom öffnen (oder per DELETE eine Session
+// beenden) möchte, erkennt daran, dass dieser Server rein request/response
+// arbeitet, und bleibt bei POST. Ein 404 an dieser Stelle würde denselben Client
+// dagegen die Verbindung als gescheitert melden lassen.
 //
 // Der MCP-Layer selbst authentifiziert nicht: das Authorization-Bearer der
 // eingehenden Anfrage wird als Identität des Aufrufers an clios API
@@ -35,8 +43,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	resp, ok := s.handleMessage(ctx, body)
 	if !ok {
-		// Notification: verarbeitet, keine Antwort.
-		w.WriteHeader(http.StatusNoContent)
+		// Notification/Response: verarbeitet, kein Body. Die Streamable-HTTP-
+		// Spec verlangt hier ausdrücklich 202 Accepted — Clients (u. a. das
+		// MCP-TypeScript-SDK) verzweigen genau auf diesen Code, bevor sie den
+		// Body zu lesen versuchen. Ein 204 ist zwar semantisch ähnlich, fällt
+		// bei strikten Clients aber in den Zweig „unerwarteter Content-Type".
+		w.WriteHeader(http.StatusAccepted)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

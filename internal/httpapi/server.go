@@ -158,7 +158,7 @@ func New(cfg config.Config, st *store.Store, logger *slog.Logger, opts ...Option
 // Observability-Middleware (Request-Logging + Metriken), dem Body-Größenlimit
 // (Schutz vor Speicher-DoS, A3/WP-4.3) und den Sicherheits-Headern (WP-4.5).
 func (s *Server) Handler() http.Handler {
-	return s.securityHeaders(s.limitBody(s.instrument(s.mux)))
+	return s.securityHeaders(s.limitBody(s.instrument(problemFallback(s.mux))))
 }
 
 // securityHeaders setzt defensive Response-Header (WP-4.5/SEC-M2). Basis-Header auf

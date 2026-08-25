@@ -193,10 +193,16 @@ paths:
           content:
             application/json:
               schema: { type: object }
-        "204":
-          description: Notification verarbeitet (keine Antwort)
+        "202":
+          description: >-
+            Notification verarbeitet (kein Body). Der Streamable-HTTP-Transport
+            verlangt hier 202 Accepted.
         "405":
-          description: Nur POST wird unterstützt
+          description: >-
+            Nur POST wird unterstützt (Allow: POST). GET und DELETE — der
+            optionale server-initiierte SSE-Strom bzw. das Session-Ende — sind
+            bewusst nicht implementiert; 405 ist das Spec-Signal an den Client,
+            bei POST zu bleiben.
 
   /api/v1/read-subjects:
     get:

@@ -5,7 +5,7 @@
 //
 // Standardmäßig spricht es MCP über stdin/stdout (stdio-Transport, für lokale
 // Agenten wie Claude Code). Mit -http host:port lauscht es stattdessen unter
-// POST /mcp.
+// /mcp (POST; andere Methoden werden mit 405 + Allow: POST beantwortet).
 package main
 
 import (
@@ -63,10 +63,15 @@ func main() {
 	}
 }
 
-// serveHTTP startet den HTTP-Transport unter POST /mcp mit Graceful Shutdown.
+// serveHTTP startet den HTTP-Transport unter /mcp mit Graceful Shutdown.
 func serveHTTP(ctx context.Context, srv *mcp.Server, addr string, logger *slog.Logger) error {
+	// Ohne Methoden-Präfix registriert (wie im eingebetteten Mount): der Handler
+	// beantwortet GET/DELETE selbst mit 405 + Allow: POST — das Spec-Signal an
+	// Streamable-HTTP-Clients, dass dieser Server rein request/response arbeitet.
+	// Die Trailing-Slash-Variante fängt den häufigsten Konfigurationsfehler ab.
 	mux := http.NewServeMux()
-	mux.Handle("POST /mcp", srv)
+	mux.Handle("/mcp", srv)
+	mux.Handle("/mcp/{$}", srv)
 
 	httpSrv := &http.Server{
 		Addr:              addr,

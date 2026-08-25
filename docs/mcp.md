@@ -59,7 +59,7 @@ CLIO_MCP=1 CLIO_BOOTSTRAP_ADMIN_KEY=… cliostore
 
 ## Beispiel-Client-Konfiguration (Claude Code / Claude Desktop)
 
-stdio-Variante, die gegen eine lokale clio-Instanz spricht:
+### stdio — lokaler Agent, lokale oder entfernte Instanz
 
 ```json
 {
@@ -74,6 +74,26 @@ stdio-Variante, die gegen eine lokale clio-Instanz spricht:
   }
 }
 ```
+
+### HTTP — eine über das Netz erreichbare Instanz (`CLIO_MCP=1`)
+
+```bash
+claude mcp add --transport http clio https://clio.example.com/mcp \
+  --header "Authorization: Bearer kid_xxx.secret"
+```
+
+Der **Header ist nicht optional**: clios MCP-Layer authentifiziert nicht selbst,
+sondern reicht genau dieses Bearer an die eigene API weiter (siehe unten). Ohne
+ihn verbindet sich der Client zwar erfolgreich und sieht die volle Tool-Liste —
+aber jedes Tool außer `ping` antwortet mit `HTTP 401`, weil es keine Identität
+gibt. Die Tool-Liste ist bewusst nicht schlüsselabhängig; die Autorisierung
+greift beim Aufruf, nicht bei der Entdeckung.
+
+> **Custom Connectors auf claude.ai:** Dort lässt sich derzeit kein statischer
+> Header hinterlegen — die Oberfläche kennt nur OAuth, das clio nicht anbietet
+> (ADR-025: benannte API-Keys). Ein als Connector eingetragener `…/mcp` verbindet
+> sich daher, bleibt aber auf `ping` beschränkt. Für vollen Zugriff die
+> HTTP-Variante oben in Claude Code nutzen oder den stdio-Adapter `clio-mcp`.
 
 ## Authentifizierung & Sicherheit
 
@@ -124,3 +144,64 @@ Unterstützte Methoden: `initialize`, `notifications/initialized`, `ping`,
 `tools/list`, `tools/call`. Erfolgreiche Antworten kommen als Text-Content
 (clios JSON/NDJSON unverändert durchgereicht); Fehler als Content mit
 `isError=true`, damit der Agent die Meldung lesen und reagieren kann.
+
+Der HTTP-Transport ist **zustandslos**: keine Sessions, kein `Mcp-Session-Id`,
+kein server-initiierter Strom. Jede Nachricht ist ein eigener POST; die
+optionalen Teile der Spec (SSE-Strom per `GET`, Session-Ende per `DELETE`)
+beantwortet der Server mit `405 + Allow: POST` — genau das Signal, an dem ein
+Client erkennt, dass er bei POST bleiben soll.
+
+## Fehlersuche
+
+### Statuscodes, die der Endpunkt liefert
+
+Ein Streamable-HTTP-Client tastet beim Verbinden mehr ab als nur den POST. Diese
+Antworten sind erwartet — insbesondere die `405`, die dem Client sagen: „dieser
+Server arbeitet rein request/response":
+
+| Anfrage | Antwort | Bedeutung |
+|---|---|---|
+| `POST /mcp` mit JSON-RPC-Request | `200` + `application/json` | die Antwort auf die Nachricht |
+| `POST /mcp` mit Notification | `202` ohne Body | verarbeitet, nichts zu antworten |
+| `GET /mcp` | `405` + `Allow: POST` | kein server-initiierter SSE-Strom |
+| `DELETE /mcp` | `405` + `Allow: POST` | keine Sessions, nichts zu beenden |
+| `POST /mcp/` | wie `/mcp` | Trailing Slash wird mitbedient |
+| alles andere | `404` als `application/problem+json` | kein Endpunkt (RFC 7807, ADR-019) |
+
+Handshake zum Nachstellen — zwei Zeilen genügen:
+
+```bash
+curl -sS -X POST https://clio.example.com/mcp \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer kid_xxx.secret' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
+# → {"jsonrpc":"2.0","id":1,"result":{... "serverInfo":{"name":"clio-mcp" ...}}}
+```
+
+### „404" beim Verbinden
+
+Der Endpunkt existiert nur unter **genau einem** Pfad. Der Reihe nach prüfen:
+
+1. **Ist der Mount überhaupt an?** `CLIO_MCP=1` ist opt-in, Default **aus**. Ohne
+   ihn registriert cliostore die Route gar nicht — jede Methode liefert `404`.
+   Der Startlog zeigt keinen MCP-Eintrag; `curl -sS <base>/api/v1/ping` antwortet
+   dagegen normal. Das ist der häufigste Fall.
+2. **Zeigt die URL auf `/mcp`?** Nicht auf die Basis-URL, nicht auf `/sse` oder
+   `/api/v1/mcp` — diese Pfade gibt es nicht.
+3. **Reicht der Reverse Proxy `/mcp` durch?** Regelwerke, die nur `/api/` und
+   `/ui` routen, lassen genau diesen Pfad ins Leere laufen.
+
+### „401" bei jedem Tool außer `ping`
+
+Es erreicht kein API-Key den Server: Header fehlt, falscher kid, widerrufener
+Schlüssel — oder der Client bietet gar keine Möglichkeit, einen statischen Header
+zu setzen (siehe Connector-Hinweis oben). `ping` ist bewusst auth-frei und daher
+kein Beleg dafür, dass die Identität ankommt. Gegenprobe mit demselben Schlüssel
+direkt gegen die REST-Fläche:
+
+```bash
+curl -sS -H 'Authorization: Bearer kid_xxx.secret' https://clio.example.com/api/v1/info
+```
+
+Antwortet auch das mit `401`, liegt es am Schlüssel (Format `kid.secret`, Status
+`active`), nicht am MCP-Layer.

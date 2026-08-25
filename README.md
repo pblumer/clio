@@ -146,8 +146,16 @@ Zwei Modi mit identischer Tool-Fläche:
 - **Eingebettet in cliostore** unter `POST /mcp`, opt-in per `CLIO_MCP=1` (Default
   aus, damit bestehende Deployments unverändert bleiben).
 
-Client-Konfiguration (stdio) und die vollständige Tool-Referenz stehen in
-[`docs/mcp.md`](./docs/mcp.md).
+  Eine so erreichbare Instanz bindet Claude Code direkt ein — **mit** API-Key, sonst
+  beantwortet clio jedes Tool außer `ping` mit 401:
+
+  ```bash
+  claude mcp add --transport http clio https://clio.example.com/mcp \
+    --header "Authorization: Bearer kid_xxx.secret"
+  ```
+
+Client-Konfiguration (stdio + HTTP), Fehlersuche bei 404/401 und die vollständige
+Tool-Referenz stehen in [`docs/mcp.md`](./docs/mcp.md).
 
 ### Betriebs-Dashboard (`/ui`)
 
