@@ -99,7 +99,15 @@ func (s *Server) routes() {
 			mcp.NewClient("http://clio", "", mcp.HandlerTransport(s.mux)),
 			mcp.WithVersion(s.version),
 		)
-		s.mux.Handle("POST /mcp", mcpSrv)
+		// Bewusst ohne Methoden-Präfix registriert: der MCP-Handler beantwortet
+		// GET/DELETE selbst mit 405 + Allow: POST. Genau das erwartet ein
+		// Streamable-HTTP-Client, der optional einen SSE-Strom (GET) öffnen oder
+		// eine Session beenden (DELETE) will — bei 405 bleibt er bei POST, bei
+		// einem 404 meldet er die Verbindung als gescheitert.
+		s.mux.Handle("/mcp", mcpSrv)
+		// Dieselbe Fläche unter „/mcp/": ein konfigurierter Trailing Slash ist der
+		// häufigste Konfigurationsfehler und lief bisher in ein 404.
+		s.mux.Handle("/mcp/{$}", mcpSrv)
 	}
 
 	// API-Doku: OpenAPI-Spec + interaktive UI. Bewusst ohne Auth (nicht

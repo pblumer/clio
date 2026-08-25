@@ -149,7 +149,7 @@ Alle Routen nutzen **POST** (außer ggf. `ping`), weil Parameter im Request-Body
 | `GET /api/v1/event-stats` | Histogramm der Eventmengen über die Zeit (nach Event-Zeit, beim Start aus der Historie aufgebaut; Start, Bucket-Breite, Zähler) — fürs `/ui`-Dashboard, ohne die Historie zu streamen | 3 |
 | `GET /openapi.yaml` · `GET /docs` | OpenAPI-3-Spec bzw. interaktive Swagger UI (eingebettet, ohne Auth) | 3 |
 | `GET /metrics` | Prometheus-Metriken (ohne Auth) | 3 |
-| `POST /mcp` | MCP-Server (JSON-RPC 2.0) — clios Event-Store als native Agent-Tool-Fläche (ADR-042). Opt-in per `CLIO_MCP`; der Transport ist ungeschützt, die Autorisierung liegt im durchgereichten API-Key (dieselben Scopes wie die REST-Fläche). Zusätzlich als eigenständiges Binary `clio-mcp` (stdio/HTTP) | 3 |
+| `POST /mcp` | MCP-Server (JSON-RPC 2.0, Transport „Streamable HTTP") — clios Event-Store als native Agent-Tool-Fläche (ADR-042). Opt-in per `CLIO_MCP`; der Transport ist ungeschützt, die Autorisierung liegt im durchgereichten API-Key (dieselben Scopes wie die REST-Fläche). Notifications werden mit `202` quittiert; `GET`/`DELETE` (optionaler SSE-Strom bzw. Session-Ende) mit `405 + Allow: POST` — dem Spec-Signal „rein request/response". Zusätzlich als eigenständiges Binary `clio-mcp` (stdio/HTTP) | 3 |
 
 **Auth:** Header `Authorization: Bearer kid.secret` gegen den Schlüsselbund (benannte API-Keys mit Scopes `read`/`write`/`admin`, ADR-025). Fehlender/ungültiger Schlüssel → 401, gültiger Schlüssel ohne nötigen Scope → 403. *(Historisch: ein einzelnes `Bearer <API_TOKEN>`, ADR-008 — abgelöst durch ADR-025; `CLIO_API_TOKEN` lebt nur noch als deprecated Bootstrap-Pfad fort.)*
 

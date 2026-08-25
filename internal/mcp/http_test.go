@@ -8,24 +8,38 @@ import (
 	"testing"
 )
 
+// TestServeHTTPNurPost: GET (optionaler SSE-Strom) und DELETE (Session beenden)
+// beantwortet der Transport mit 405 + Allow — dem Spec-Signal „nur POST". Ein
+// 404 würde ein Streamable-HTTP-Client als gescheiterte Verbindung melden.
 func TestServeHTTPNurPost(t *testing.T) {
 	srv, closeFn := newTestServer(t, http.StatusOK, "", nil)
 	defer closeFn()
-	rec := httptest.NewRecorder()
-	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/mcp", nil))
-	if rec.Code != http.StatusMethodNotAllowed {
-		t.Errorf("GET /mcp = %d, erwartet 405", rec.Code)
+	for _, method := range []string{http.MethodGet, http.MethodDelete, http.MethodPut} {
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, httptest.NewRequest(method, "/mcp", nil))
+		if rec.Code != http.StatusMethodNotAllowed {
+			t.Errorf("%s /mcp = %d, erwartet 405", method, rec.Code)
+		}
+		if allow := rec.Header().Get("Allow"); allow != http.MethodPost {
+			t.Errorf("%s /mcp: Allow = %q, erwartet POST", method, allow)
+		}
 	}
 }
 
+// TestServeHTTPNotification: eine Notification wird ohne Body mit 202 Accepted
+// quittiert — der Code, auf den Streamable-HTTP-Clients verzweigen, bevor sie
+// den Body zu lesen versuchen.
 func TestServeHTTPNotification(t *testing.T) {
 	srv, closeFn := newTestServer(t, http.StatusOK, "", nil)
 	defer closeFn()
 	rec := httptest.NewRecorder()
 	body := strings.NewReader(`{"jsonrpc":"2.0","method":"notifications/initialized"}`)
 	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/mcp", body))
-	if rec.Code != http.StatusNoContent {
-		t.Errorf("Notification = %d, erwartet 204", rec.Code)
+	if rec.Code != http.StatusAccepted {
+		t.Errorf("Notification = %d, erwartet 202", rec.Code)
+	}
+	if rec.Body.Len() != 0 {
+		t.Errorf("Notification-Body = %q, erwartet leer", rec.Body.String())
 	}
 }
 
