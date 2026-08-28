@@ -24,7 +24,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           # BEWUSST an go.mod gebunden (nicht "stable"): golangci-lint (gepinnt auf
           # v2.5.0) bringt seine eigene go/types-Version mit und panict, wenn die
@@ -57,7 +57,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           # Neuester stabiler Go-Patch (Build/Tests gegen die aktuellste, gepatchte
           # Standardbibliothek); der Sprach-Floor in go.mod bleibt go 1.24.
@@ -96,7 +96,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           # Neuester stabiler Go-Patch, damit der Scan gegen die aktuellste
           # Standardbibliothek läuft (minimiert veraltete Stdlib-Funde).
@@ -124,7 +124,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           # Neuester stabiler Go-Patch (Build/Tests gegen die aktuellste, gepatchte
           # Standardbibliothek); der Sprach-Floor in go.mod bleibt go 1.24.
@@ -132,7 +132,7 @@ jobs:
           cache: true
 
       - name: Set up Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: "22"
 
