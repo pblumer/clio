@@ -1,13 +1,13 @@
 module github.com/pblumer/clio
 
-go 1.24
+go 1.25.0
 
 require (
 	github.com/google/cel-go v0.28.1
-	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
-	github.com/swaggest/swgui v1.8.8
-	go.etcd.io/bbolt v1.4.3
-	golang.org/x/sys v0.29.0
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
+	github.com/swaggest/swgui v1.8.9
+	go.etcd.io/bbolt v1.5.0
+	golang.org/x/sys v0.45.0
 )
 
 require (
